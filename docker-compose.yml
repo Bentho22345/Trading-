@@ -1,0 +1,32 @@
+services:
+  worker:
+    build: .
+    command: ["npm", "run", "start:worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_PATH: /app/data/pulse.db
+      PULSE_WORKER_PORT: "4000"
+    ports:
+      - "4000:4000" # the browser connects to the worker WebSocket directly
+    volumes:
+      - pulse-data:/app/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      args:
+        PULSE_WORKER_URL: http://worker:4000
+    command: ["npm", "run", "start:web"]
+    environment:
+      PULSE_WORKER_URL: http://worker:4000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - worker
+    restart: unless-stopped
+
+volumes:
+  pulse-data:

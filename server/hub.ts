@@ -62,6 +62,20 @@ export class Hub extends EventEmitter {
     this.emitStatus();
   }
 
+  /**
+   * An adapter hit an error. Never received data → "down"; otherwise keep the last data
+   * (staleness takes over after staleAfterMs) and just surface the message.
+   */
+  reportError(id: StreamId, message: string) {
+    const s = this.statuses.get(id);
+    if (!s) return;
+    if (s.lastUpdate === null) this.setState(id, 'down', message);
+    else if (s.message !== message) {
+      s.message = message;
+      this.emitStatus();
+    }
+  }
+
   touch(id: StreamId, latencyMs?: number | null) {
     const s = this.statuses.get(id);
     if (!s) return;

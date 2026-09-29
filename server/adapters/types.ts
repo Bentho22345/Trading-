@@ -66,7 +66,7 @@ export async function fetchJson<T>(url: string, init?: RequestInit & { timeoutMs
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal, headers: { 'User-Agent': 'PulseTerminal/0.1', ...(init?.headers ?? {}) } });
     if (res.status === 429) throw new RateLimitError(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${url.replace(/token=[^&]+/, 'token=***')}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${redact(url)}`);
     return (await res.json()) as T;
   } finally {
     clearTimeout(t);
@@ -77,6 +77,16 @@ export class RateLimitError extends Error {
   constructor(url: string) {
     super(`rate limited: ${new URL(url).host}`);
   }
+}
+
+/** Strip credentials from URLs before they reach logs or the browser-visible status message. */
+export function redact(url: string): string {
+  return url.replace(/([?&](?:token|apikey|api_key|apiKey|auth_token|key|secret)=)[^&]*/gi, '$1***');
+}
+
+/** Error text safe to show in the UI (no credentials, bounded length). */
+export function errText(e: unknown): string {
+  return redact(e instanceof Error ? e.message : String(e)).slice(0, 160);
 }
 
 /** setInterval that runs immediately, never overlaps, and survives errors. */

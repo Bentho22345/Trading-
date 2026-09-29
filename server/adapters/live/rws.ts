@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
 import type { StreamId } from '../../../shared/types';
 import type { AdapterContext } from '../types';
-import { backoff } from '../types';
+import { backoff, redact } from '../types';
 
 interface Opts {
   url: string | (() => string);
@@ -62,7 +62,7 @@ export class ReconnectingWS {
         this.o.ctx.log.warn(`[${this.o.name}] bad message`, e);
       }
     });
-    ws.on('error', (e) => this.o.ctx.log.warn(`[${this.o.name}] ws error: ${(e as Error).message}`));
+    ws.on('error', (e) => this.o.ctx.log.warn(`[${this.o.name}] ws error: ${redact((e as Error).message)}`));
     ws.on('close', (code) => {
       if (this.idleTimer) clearTimeout(this.idleTimer);
       if (this.stopped) return;

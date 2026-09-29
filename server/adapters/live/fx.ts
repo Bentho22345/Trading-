@@ -1,7 +1,7 @@
 import { MAJOR_PAIRS, SYMBOL_MAP, EM_FX } from '../../../shared/symbols';
 import type { Hub, QuoteInput } from '../../hub';
 import type { Adapter } from '../types';
-import { fetchJson, poller } from '../types';
+import { errText, fetchJson, poller } from '../types';
 import { config, keys } from '../../config';
 import { finnhubSocket } from './finnhub';
 
@@ -65,8 +65,8 @@ export function twelveDataAdapter(): Adapter {
         ctx.hub.pushQuotes(qs, 'fx');
         deriveCrosses(ctx.hub, 'Twelve Data', ageMin, ts);
       }, intervalSec * 1000, (e) => {
-        ctx.log.warn(`[twelvedata] ${(e as Error).message}`);
-        ctx.hub.setState('fx', 'stale', (e as Error).message);
+        ctx.log.warn(`[twelvedata] ${errText(e)}`);
+        ctx.hub.reportError('fx', errText(e));
       });
     },
     stop() {

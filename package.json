@@ -12,8 +12,7 @@
     "start:web": "next start -p 3000",
     "start:worker": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "next lint",
-    "test": "tsx --test server/**/*.test.ts shared/**/*.test.ts"
+    "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",

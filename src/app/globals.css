@@ -132,6 +132,8 @@ body {
   border-radius: 6px;
 }
 
+/* Component classes live in the components layer so Tailwind utilities (bg-*, border-*) can override them. */
+@layer components {
 /* ------------------------------------------------------------------ glass panels */
 .glass {
   background: var(--panel);
@@ -155,6 +157,8 @@ body {
 .d-equities, .d-options { --d: var(--eq); }
 .d-macro, .d-centralbanks { --d: var(--macro); }
 .d-regulation { --d: var(--reg); }
+
+}
 
 /* ------------------------------------------------------------------ odometer */
 .odo { display: inline-flex; overflow: hidden; line-height: 1.15; height: 1.15em; vertical-align: bottom; }

@@ -1,7 +1,7 @@
 import type { EconEvent, FundingRate, TermPoint } from '../../../shared/types';
 import { CCY_COUNTRY } from '../../../shared/symbols';
 import type { Adapter } from '../types';
-import { fetchJson, poller, sleep } from '../types';
+import { errText, fetchJson, poller, sleep } from '../types';
 import { structureOf } from '../mock/panels';
 import { config } from '../../config';
 
@@ -17,7 +17,10 @@ export function publicCryptoMarketAdapter(): Adapter {
   return {
     id: 'public-crypto-market', stream: 'cryptoMarket', provider: 'alternative.me · CoinGecko · OKX', mock: false, delayedMin: 0, staleAfterMs: 20 * 60_000,
     start(ctx) {
-      const warn = (tag: string) => (e: unknown) => ctx.log.warn(`[${tag}] ${(e as Error).message}`);
+      const warn = (tag: string) => (e: unknown) => {
+        ctx.log.warn(`[${tag}] ${errText(e)}`);
+        ctx.hub.reportError('cryptoMarket', `${tag}: ${errText(e)}`);
+      };
       stops.push(poller(async () => {
         const r = await fetchJson<{ data: { value: string; value_classification: string; timestamp: string }[] }>('https://api.alternative.me/fng/?limit=1');
         const d = r.data?.[0];
@@ -65,7 +68,7 @@ export function cboeVolAdapter(): Adapter {
               ctx.hub.pushQuotes([{ symbol: 'VIX', price: r.data.current_price, ref: r.data.prev_day_close, ts: r.data.last_trade_time ? Date.parse(r.data.last_trade_time) : Date.now(), source: 'Cboe', delayedMin: 15 }]);
             }
           } catch (e) {
-            ctx.log.warn(`[cboe] ${sym}: ${(e as Error).message}`);
+            ctx.log.warn(`[cboe] ${sym}: ${errText(e)}`);
           }
           await sleep(300);
         }
@@ -74,8 +77,8 @@ export function cboeVolAdapter(): Adapter {
         const rest = pts.filter((p) => p.label !== '9D');
         ctx.hub.setVol({ termStructure: pts, structure: structureOf(spot, rest.slice(0)), termSource: 'Cboe VIX index family', termDelayedMin: 15 });
       }, 5 * 60_000, (e) => {
-        ctx.log.warn(`[cboe] ${(e as Error).message}`);
-        ctx.hub.setState('vol', 'stale', (e as Error).message);
+        ctx.log.warn(`[cboe] ${errText(e)}`);
+        ctx.hub.reportError('vol', errText(e));
       });
     },
     stop() {
@@ -114,8 +117,8 @@ export function forexFactoryAdapter(): Adapter {
           }));
         ctx.hub.setCalendar(events);
       }, 30 * 60_000, (e) => {
-        ctx.log.warn(`[forexfactory] ${(e as Error).message}`);
-        ctx.hub.setState('calendar', 'stale', (e as Error).message);
+        ctx.log.warn(`[forexfactory] ${errText(e)}`);
+        ctx.hub.reportError('calendar', errText(e));
       });
     },
     stop() {

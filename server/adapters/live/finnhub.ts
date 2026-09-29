@@ -1,7 +1,7 @@
 import type { StreamId, EarningsItem } from '../../../shared/types';
 import { SYMBOLS, SYMBOL_MAP } from '../../../shared/symbols';
 import type { Adapter, AdapterContext } from '../types';
-import { fetchJson, poller, sleep } from '../types';
+import { errText, fetchJson, poller, sleep } from '../types';
 import { ReconnectingWS } from './rws';
 import { config, keys } from '../../config';
 
@@ -83,7 +83,10 @@ export function finnhubEquityAdapter(): Adapter {
           if (q.c) ctx.hub.pushQuotes([{ symbol: s.symbol, price: q.c, ref: q.pc, ts: q.t * 1000, source: 'Finnhub', delayedMin: config.equityDelayMin }], 'equities');
           await sleep(1100);
         }
-      }, 10 * 60_000, (e) => ctx.log.warn(`[finnhub] quote sweep: ${(e as Error).message}`));
+      }, 10 * 60_000, (e) => {
+        ctx.log.warn(`[finnhub] quote sweep: ${errText(e)}`);
+        ctx.hub.reportError('equities', errText(e));
+      });
     },
     stop() {
       unsub?.();
@@ -113,7 +116,10 @@ export function finnhubNewsAdapter(): Adapter {
           await sleep(500);
         }
         ctx.hub.touch('news');
-      }, config.finnhubNewsIntervalSec * 1000, (e) => ctx.log.warn(`[finnhub-news] ${(e as Error).message}`));
+      }, config.finnhubNewsIntervalSec * 1000, (e) => {
+        ctx.log.warn(`[finnhub-news] ${errText(e)}`);
+        ctx.hub.reportError('news', errText(e));
+      });
     },
     stop() {
       stop?.();
@@ -139,7 +145,10 @@ export function finnhubEarningsAdapter(): Adapter {
           session: (e.hour === 'amc' ? 'amc' : e.hour === 'bmo' ? 'bmo' : 'dmh') as EarningsItem['session'], epsEst: e.epsEstimate, impliedMovePct: null,
         })).sort((a, b) => a.date - b.date);
         ctx.hub.setVol({ earnings: items, earningsSource: 'Finnhub (implied move needs an options provider)' }, 'earnings');
-      }, 3 * 3600_000, (e) => ctx.log.warn(`[finnhub-earnings] ${(e as Error).message}`));
+      }, 3 * 3600_000, (e) => {
+        ctx.log.warn(`[finnhub-earnings] ${errText(e)}`);
+        ctx.hub.reportError('earnings', errText(e));
+      });
     },
     stop() {
       stop?.();

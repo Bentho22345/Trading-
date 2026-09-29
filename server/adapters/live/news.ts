@@ -1,6 +1,6 @@
 import Parser from 'rss-parser';
 import type { Adapter } from '../types';
-import { fetchJson, poller, sleep } from '../types';
+import { errText, fetchJson, poller, sleep } from '../types';
 import { config, keys } from '../../config';
 
 interface Feed { name: string; id: string; url: string }
@@ -61,7 +61,10 @@ export function rssAdapter(): Adapter {
           ctx.hub.touch('news');
         };
         // stagger feeds so we never burst
-        const t = setTimeout(() => stops.push(poller(run, config.rssIntervalSec * 1000, (e) => ctx.log.warn(`[rss] ${(e as Error).message}`))), i * 1500);
+        const t = setTimeout(() => stops.push(poller(run, config.rssIntervalSec * 1000, (e) => {
+        ctx.log.warn(`[rss] ${errText(e)}`);
+        ctx.hub.reportError('news', errText(e));
+      })), i * 1500);
         stops.push(() => clearTimeout(t));
       });
     },
@@ -90,7 +93,10 @@ export function cryptoPanicAdapter(): Adapter {
           await sleep(0);
         }
         ctx.hub.touch('news');
-      }, 120_000, (e) => ctx.log.warn(`[cryptopanic] ${(e as Error).message}`));
+      }, 120_000, (e) => {
+        ctx.log.warn(`[cryptopanic] ${errText(e)}`);
+        ctx.hub.reportError('news', errText(e));
+      });
     },
     stop() {
       stop?.();

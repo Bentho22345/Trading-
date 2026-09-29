@@ -195,7 +195,9 @@ export function tokens(text: string): Set<string> {
   for (let w of t.replace(/[^a-z0-9%$. ]/g, ' ').split(/\s+/)) {
     w = w.replace(/^\$|\.$/g, '');
     if (w.length < 3 || STOP.has(w)) continue;
-    if (w.length > 4) w = w.replace(/(ing|ed|es|s)$/, '');
+    // light stemming: raises→raise, rates→rate, jumped→jump, falling→fall
+    if (w.length > 5) w = w.replace(/(ing|ed)$/, '');
+    if (w.length > 3 && !w.endsWith('ss')) w = w.replace(/s$/, '');
     out.add(w);
   }
   return out;

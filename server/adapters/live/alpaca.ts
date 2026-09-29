@@ -1,6 +1,6 @@
 import { SYMBOLS } from '../../../shared/symbols';
 import type { Adapter } from '../types';
-import { fetchJson, poller } from '../types';
+import { errText, fetchJson, poller } from '../types';
 import { ReconnectingWS } from './rws';
 import { config, keys } from '../../config';
 
@@ -51,7 +51,10 @@ export function alpacaAdapter(): Adapter {
           if (snap.latestTrade?.p && !ctx.hub.quotes.get(symbol)) qs.push({ symbol, price: snap.latestTrade.p, ref: refs.get(symbol), ts: Date.parse(snap.latestTrade.t), source: label, delayedMin: config.equityDelayMin });
         }
         if (qs.length) ctx.hub.pushQuotes(qs, 'equities');
-      }, 60_000, (e) => ctx.log.warn(`[alpaca] snapshots: ${(e as Error).message}`));
+      }, 60_000, (e) => {
+        ctx.log.warn(`[alpaca] snapshots: ${errText(e)}`);
+        ctx.hub.reportError('equities', errText(e));
+      });
       const origStop = stopPoll;
       stopPoll = () => {
         origStop();
