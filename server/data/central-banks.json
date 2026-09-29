@@ -1,0 +1,20 @@
+{
+  "_note": "Reference data — there is no reliable free API for policy rates/meeting calendars. Verify against each bank's website and edit this file; the UI shows the asOf date. Latest statement headlines are filled live from the central-bank RSS feeds when PULSE_MODE=live.",
+  "asOf": "2026-09-29",
+  "banks": [
+    { "id": "FED", "name": "Federal Reserve", "short": "Fed", "currency": "USD", "country": "US", "rate": 3.625, "rateLabel": "3.50–3.75%", "lastChange": { "date": "2025-12-10", "bps": -25 },
+      "meetings": ["2026-10-28T18:00:00Z", "2026-12-09T19:00:00Z", "2027-01-27T19:00:00Z"] },
+    { "id": "ECB", "name": "European Central Bank", "short": "ECB", "currency": "EUR", "country": "EU", "rate": 2.0, "rateLabel": "2.00% (depo)", "lastChange": { "date": "2025-06-05", "bps": -25 },
+      "meetings": ["2026-10-29T12:15:00Z", "2026-12-17T13:15:00Z", "2027-02-04T13:15:00Z"] },
+    { "id": "BOE", "name": "Bank of England", "short": "BoE", "currency": "GBP", "country": "GB", "rate": 3.75, "rateLabel": "3.75%", "lastChange": { "date": "2026-02-05", "bps": -25 },
+      "meetings": ["2026-11-05T12:00:00Z", "2026-12-17T12:00:00Z", "2027-02-04T12:00:00Z"] },
+    { "id": "BOJ", "name": "Bank of Japan", "short": "BoJ", "currency": "JPY", "country": "JP", "rate": 0.75, "rateLabel": "0.75%", "lastChange": { "date": "2025-12-19", "bps": 25 },
+      "meetings": ["2026-10-30T03:00:00Z", "2026-12-18T03:00:00Z", "2027-01-22T03:00:00Z"] },
+    { "id": "SNB", "name": "Swiss National Bank", "short": "SNB", "currency": "CHF", "country": "CH", "rate": 0.0, "rateLabel": "0.00%", "lastChange": { "date": "2025-06-19", "bps": -25 },
+      "meetings": ["2026-12-10T08:30:00Z", "2027-03-18T08:30:00Z"] },
+    { "id": "RBA", "name": "Reserve Bank of Australia", "short": "RBA", "currency": "AUD", "country": "AU", "rate": 3.6, "rateLabel": "3.60%", "lastChange": { "date": "2025-08-12", "bps": -25 },
+      "meetings": ["2026-11-03T03:30:00Z", "2026-12-08T03:30:00Z", "2027-02-02T03:30:00Z"] },
+    { "id": "BOC", "name": "Bank of Canada", "short": "BoC", "currency": "CAD", "country": "CA", "rate": 2.25, "rateLabel": "2.25%", "lastChange": { "date": "2025-10-29", "bps": -25 },
+      "meetings": ["2026-10-28T13:45:00Z", "2026-12-09T14:45:00Z", "2027-01-27T14:45:00Z"] }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "name": "pulse-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n worker,web -c magenta,cyan \"npm:dev:worker\" \"npm:dev:web\"",
+    "dev:web": "next dev -p 3000",
+    "dev:worker": "tsx watch --clear-screen=false server/index.ts",
+    "build": "next build",
+    "start": "concurrently -k -n worker,web \"npm:start:worker\" \"npm:start:web\"",
+    "start:web": "next start -p 3000",
+    "start:worker": "tsx server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "next lint",
+    "test": "tsx --test server/**/*.test.ts shared/**/*.test.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.129.0",
+    "@tanstack/react-virtual": "^3.14.13",
+    "better-sqlite3": "^13.0.3",
+    "cmdk": "^1.1.1",
+    "concurrently": "^10.0.5",
+    "dotenv": "^18.0.4",
+    "drizzle-orm": "^0.45.3",
+    "framer-motion": "^13.4.6",
+    "geist": "^1.7.2",
+    "lightweight-charts": "^5.2.1",
+    "next": "^16.3.7",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "rss-parser": "^3.13.0",
+    "sanitize-html": "^2.17.7",
+    "tsx": "^4.23.15",
+    "ws": "^8.22.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/sanitize-html": "^2.16.2",
+    "@types/ws": "^8.18.2",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2"
+  }
+}
