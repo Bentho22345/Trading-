@@ -10,17 +10,18 @@ import { finnhubEquityAdapter, finnhubNewsAdapter, finnhubEarningsAdapter } from
 import { twelveDataAdapter, finnhubFxAdapter } from './live/fx';
 import { rssAdapter, cryptoPanicAdapter } from './live/news';
 import { publicCryptoMarketAdapter, cboeVolAdapter, forexFactoryAdapter } from './live/panels';
+import { stooqEquityAdapter, stooqFxAdapter, nasdaqEarningsAdapter, okxLiquidationsAdapter } from './live/keyless';
 
 type Factory = () => Adapter;
 
 /** provider name -> factory, per stream. Add a provider by implementing Adapter and registering it here. */
 const REGISTRY: Record<string, Record<string, Factory>> = {
   crypto: { mock: () => mockQuoteAdapter('crypto'), coinbase: coinbaseAdapter, binance: () => binanceAdapter(false), binanceus: () => binanceAdapter(true) },
-  equities: { mock: () => mockQuoteAdapter('equities'), alpaca: alpacaAdapter, finnhub: finnhubEquityAdapter },
-  fx: { mock: () => mockQuoteAdapter('fx'), twelvedata: twelveDataAdapter, finnhub: finnhubFxAdapter },
+  equities: { mock: () => mockQuoteAdapter('equities'), alpaca: alpacaAdapter, finnhub: finnhubEquityAdapter, stooq: stooqEquityAdapter },
+  fx: { mock: () => mockQuoteAdapter('fx'), twelvedata: twelveDataAdapter, finnhub: finnhubFxAdapter, stooq: stooqFxAdapter },
   news: { mock: mockNewsAdapter, rss: rssAdapter, finnhub: finnhubNewsAdapter, cryptopanic: cryptoPanicAdapter },
   calendar: { mock: mockCalendarAdapter, forexfactory: forexFactoryAdapter },
-  earnings: { mock: mockEarningsAdapter, finnhub: finnhubEarningsAdapter },
+  earnings: { mock: mockEarningsAdapter, finnhub: finnhubEarningsAdapter, nasdaq: nasdaqEarningsAdapter },
   cryptoMarket: { mock: mockCryptoMarketAdapter, public: publicCryptoMarketAdapter },
   vol: { mock: mockVolAdapter, cboe: cboeVolAdapter },
   options: { mock: mockOptionsAdapter },
@@ -55,6 +56,7 @@ export function buildAdapters(log: { warn: (m: string) => void }): Adapter[] {
   add('calendar', providers.calendar);
   add('earnings', providers.earnings);
   add('cryptoMarket', providers.cryptoMarket);
+  if (providers.cryptoMarket === 'public') out.push(okxLiquidationsAdapter());
   add('vol', providers.vol);
   add('options', providers.options);
   if (out.some((a) => a.id === 'cboe')) mockMarket.skip.add('VIX');

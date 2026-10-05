@@ -38,7 +38,7 @@ export function publicCryptoMarketAdapter(): Adapter {
           if (d) out.push({ symbol: s, rate: +d.fundingRate, nextFundingTime: d.fundingTime ? +d.fundingTime : d.nextFundingTime ? +d.nextFundingTime : null, venue: 'OKX' });
           await sleep(300);
         }
-        if (out.length) ctx.hub.setCrypto({ funding: out, liquidations: [] });
+        if (out.length) ctx.hub.setCrypto({ funding: out });
       }, 5 * 60_000, warn('okx')));
     },
     stop() {

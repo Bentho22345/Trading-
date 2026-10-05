@@ -31,8 +31,8 @@ function pick(name: string, auto: () => string): string {
 export const providers = {
   crypto: pick('CRYPTO_PROVIDER', () => (MODE === 'live' ? 'coinbase' : 'mock')),
   equities: pick('EQUITY_PROVIDER', () =>
-    keys.alpacaKey && keys.alpacaSecret ? 'alpaca' : keys.finnhub ? 'finnhub' : 'mock'),
-  fx: pick('FX_PROVIDER', () => (keys.twelvedata ? 'twelvedata' : keys.finnhub ? 'finnhub' : 'mock')),
+    keys.alpacaKey && keys.alpacaSecret ? 'alpaca' : keys.finnhub ? 'finnhub' : MODE === 'live' ? 'stooq' : 'mock'),
+  fx: pick('FX_PROVIDER', () => (keys.twelvedata ? 'twelvedata' : keys.finnhub ? 'finnhub' : MODE === 'live' ? 'stooq' : 'mock')),
   news: env('NEWS_PROVIDERS', 'auto').toLowerCase() === 'auto'
     ? [
         ...(MODE === 'live' ? ['rss'] : []),
@@ -41,7 +41,7 @@ export const providers = {
       ].concat(MODE === 'live' || keys.finnhub || keys.cryptopanic ? [] : ['mock'])
     : env('NEWS_PROVIDERS').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
   calendar: pick('CALENDAR_PROVIDER', () => (MODE === 'live' ? 'forexfactory' : 'mock')),
-  earnings: pick('EARNINGS_PROVIDER', () => (keys.finnhub ? 'finnhub' : 'mock')),
+  earnings: pick('EARNINGS_PROVIDER', () => (keys.finnhub ? 'finnhub' : MODE === 'live' ? 'nasdaq' : 'mock')),
   cryptoMarket: pick('CRYPTO_MARKET_PROVIDER', () => (MODE === 'live' ? 'public' : 'mock')),
   vol: pick('VOL_PROVIDER', () => (MODE === 'live' ? 'cboe' : 'mock')),
   options: pick('OPTIONS_PROVIDER', () => 'mock'),

@@ -6,7 +6,7 @@ A single-screen news and market-data terminal for FX, crypto and equities & opti
 npm install && npm run dev      # → http://localhost:3000  (worker on :4000)
 ```
 
-That's it: by default it runs in **live mode** with real news (central-bank, SEC, BLS, BBC, CNBC, MarketWatch, CoinDesk, Cointelegraph RSS), real crypto prices (Coinbase), VIX (Cboe, 15m delayed) and the ForexFactory calendar — no keys needed. Equities and FX need a free key (Alpaca / Twelve Data or Finnhub); until then those two streams use the demo engine and are labelled **DEMO**. Set `PULSE_MODE=mock` for a fully offline demo, with plausible streaming prices, a stream of realistic (clearly-labelled **DEMO**) headlines that cluster and trigger breaking banners, a live economic calendar whose "actuals" post on time, and so on. Add API keys to switch individual streams to live data without touching code.
+That's it: by default it runs in **live mode** with real news (central-bank, SEC, BLS, BBC, CNBC, MarketWatch, CoinDesk, Cointelegraph RSS), real crypto prices (Coinbase), VIX (Cboe, 15m delayed) and the ForexFactory calendar — no keys needed. Equities and FX come from Stooq's keyless quotes (delayed, with each quote's real age shown), earnings from Nasdaq's public calendar, and liquidations from OKX. Adding Alpaca / Finnhub / Twelve Data keys upgrades those streams to real-time automatically. Only options flow (put/call, unusual activity) stays demo, as no free source exists. Set `PULSE_MODE=mock` for a fully offline demo, with plausible streaming prices, a stream of realistic (clearly-labelled **DEMO**) headlines that cluster and trigger breaking banners, a live economic calendar whose "actuals" post on time, and so on. Add API keys to switch individual streams to live data without touching code.
 
 ---
 
@@ -89,16 +89,19 @@ Free-tier limits were checked in September 2026. **Re-verify before relying on t
 |---|---|---|---|---|
 | Crypto prices | **Coinbase Exchange WS** `coinbase` | no | ✅ real-time | Public `ticker` channel; 24h reference from `open_24h`; 5h of 1-min candles backfilled from public REST. |
 | | Binance / Binance.US `binance`, `binanceus` | no | ✅ | binance.com geo-blocks US users. Use `binanceus` there. |
-| Equities | **Alpaca** `alpaca` | yes (free) | ✅ but **IEX-only** | Free plan streams IEX trades only (a small share of volume). Prev close from snapshots. Alpaca's movers endpoint is SIP-based, so movers are computed from our own universe. |
+| Equities | **Stooq** `stooq` (default, keyless) | no | ❌ delayed (~15 min, age shown per quote) | Public CSV quotes polled every 60 s. |
+| | **Alpaca** `alpaca` | yes (free) | ✅ but **IEX-only** | Free plan streams IEX trades only (a small share of volume). Prev close from snapshots. Alpaca's movers endpoint is SIP-based, so movers are computed from our own universe. |
 | | Finnhub `finnhub` | yes (free) | ✅ WS trades* | 60 REST calls/min; free WebSocket capped at 50 symbols, shared with FX. *Free-tier real-time coverage has varied; set `EQUITY_DELAY_MINUTES` if your plan is delayed. |
-| FX | **Twelve Data** `twelvedata` | yes (free) | ❌ polled | 8 credits/min, 800/day ⇒ the 7 USD majors every ~14 min. The other 21 crosses are **derived** from the USD legs. Quotes carry an "Nm delayed" chip equal to their max age. |
+| FX | **Stooq** `stooq` (default, keyless) | no | polled 30 s (age shown) | USD legs + EM + gold; crosses derived. |
+| | **Twelve Data** `twelvedata` | yes (free) | ❌ polled | 8 credits/min, 800/day ⇒ the 7 USD majors every ~14 min. The other 21 crosses are **derived** from the USD legs. Quotes carry an "Nm delayed" chip equal to their max age. |
 | | Finnhub (OANDA) `finnhub` | yes | ✅ WS* | Forex over the shared Finnhub socket, if your plan includes it. |
 | News | **RSS** `rss` | no | seconds–minutes | Fed, ECB, BoE, BoJ, RBA, BoC, SEC, BLS press feeds (published for syndication), plus CoinDesk and Cointelegraph public RSS. Conditional GET (ETag / If-Modified-Since), staggered 60 s polling. |
 | | Finnhub market news `finnhub` | yes | ~1 min | general / forex / crypto / merger categories. |
 | | CryptoPanic `cryptopanic` | **paid** | ~2 min | The free developer tier was **discontinued in early 2026**. |
 | Economic calendar | ForexFactory export `forexfactory` | no | 30 min poll | Limited to 2 requests / 5 min. **No "actual" values** (forecast and previous only), so beat/miss colouring only works in mock mode or with a paid calendar API (e.g. Finnhub premium, Trading Economics). |
-| Earnings | Finnhub `finnhub` | yes | daily | Implied move needs an options provider (shows "n/a"). |
-| Crypto metrics | alternative.me, CoinGecko, OKX `public` | no | 5–30 min | Fear & Greed (attributed), BTC dominance and total mcap, perp funding. **Liquidations** need a paid aggregator, so the panel shows "connect a provider". |
+| Earnings | **Nasdaq** `nasdaq` (default, keyless) | no | 6 h poll | Our universe + mega caps. |
+| | Finnhub `finnhub` | yes | daily | Implied move needs an options provider (shows "n/a"). |
+| Crypto metrics | alternative.me, CoinGecko, OKX `public` | no | 5–30 min | Fear & Greed (attributed), BTC dominance and total mcap, perp funding. **Liquidations:** OKX public liquidation orders (≥ $50k) for BTC/ETH/SOL/XRP/DOGE perps. |
 | Volatility | **Cboe delayed quotes** `cboe` | no | **15 min delayed** | VIX plus a term structure built from Cboe's VIX9D / VIX / VIX3M / VIX6M / VIX1Y (VIX *futures* data needs a CFE licence). Contango/backwardation is flagged. |
 | Put/call, unusual options | mock only | — | — | No free provider exists. The UI shows "demo · connect a provider". |
 | Central banks | `server/data/central-banks.json` | — | — | Rates and meeting dates are an editable reference file (no reliable free API; **verify the values**). Latest statement headlines come live from the news feed. |

@@ -24,6 +24,13 @@ export const DEFAULT_FEEDS: Feed[] = [
   { name: 'BBC Business', id: 'bbc', url: 'https://feeds.bbci.co.uk/news/business/rss.xml' },
   { name: 'CNBC Markets', id: 'cnbc', url: 'https://www.cnbc.com/id/15839069/device/rss/rss.html' },
   { name: 'MarketWatch', id: 'marketwatch', url: 'https://feeds.content.dowjones.io/public/rss/mw_topstories' },
+  { name: 'Yahoo Finance', id: 'yahoo', url: 'https://finance.yahoo.com/news/rssindex' },
+  { name: 'FXStreet', id: 'fxstreet', url: 'https://www.fxstreet.com/rss/news' },
+  { name: 'Investing.com', id: 'investing', url: 'https://www.investing.com/rss/news.rss' },
+  { name: 'Decrypt', id: 'decrypt', url: 'https://decrypt.co/feed' },
+  { name: 'The Block', id: 'the block', url: 'https://www.theblock.co/rss.xml' },
+  { name: 'Federal Reserve speeches', id: 'fed', url: 'https://www.federalreserve.gov/feeds/speeches.xml' },
+  { name: 'CFTC', id: 'cftc', url: 'https://www.cftc.gov/RSS/RSSGP/rssgp.xml' },
 ];
 
 function feeds(): Feed[] {
