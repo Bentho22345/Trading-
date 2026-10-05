@@ -7,17 +7,15 @@ import { useNow } from '@/lib/hooks';
 import { DOMAIN_LABEL, primaryDomain, timeAgo, pairLabel } from '@/lib/format';
 import { Chip, DemoChip, Icon } from './ui';
 
+/** CSS-only (transform) so cards re-rendering every second don't touch the animation library. */
 export function ImpactMeter({ value, animate }: { value: number; animate: boolean }) {
   const color = value >= 75 ? 'var(--down)' : value >= 55 ? 'var(--warn)' : 'var(--text-faint)';
   return (
     <div className="flex items-center gap-1.5" title={`Impact score ${value}/100`}>
       <div className="h-1 w-12 overflow-hidden rounded-full bg-line">
-        <motion.div
-          className="h-full rounded-full"
-          style={{ background: color }}
-          initial={animate ? { width: 0 } : false}
-          animate={{ width: `${value}%` }}
-          transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
+        <div
+          className={`impact-fill h-full w-full origin-left rounded-full ${animate ? 'impact-in' : ''}`}
+          style={{ background: color, transform: `scaleX(${value / 100})` }}
         />
       </div>
       <span className="num text-[10px] text-faint">{value}</span>

@@ -27,8 +27,10 @@ function FeedSkeleton() {
   );
 }
 
-export function NewsFeed() {
-  const clusters = useStore((s) => s.clusters);
+export function NewsFeed({ initial }: { initial?: NewsCluster[] }) {
+  const live = useStore((s) => s.clusters);
+  // server-rendered first screen until the WebSocket snapshot arrives
+  const clusters = live.length || !initial ? live : initial;
   const hydrated = useStore((s) => s.hydrated);
   const filter = useStore((s) => s.filter);
   const search = useStore((s) => s.search);
@@ -76,6 +78,7 @@ export function NewsFeed() {
     estimateSize: () => 132,
     overscan: 6,
     gap: 8,
+    initialRect: { width: 720, height: 1000 }, // lets the first screen server-render
     getItemKey: (i) => display[i]?.id ?? i,
   });
 
@@ -140,8 +143,8 @@ export function NewsFeed() {
             </motion.button>
           )}
         </AnimatePresence>
-        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto overscroll-contain px-1 pb-6" role="feed" aria-busy={!hydrated} aria-label="Live news feed">
-          {!hydrated ? (
+        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto overscroll-contain px-1 pb-6" role="feed" aria-busy={!hydrated && !clusters.length} aria-label="Live news feed">
+          {!hydrated && !clusters.length ? (
             <FeedSkeleton />
           ) : !display.length ? (
             <div className="p-4">

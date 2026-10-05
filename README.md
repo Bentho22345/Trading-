@@ -181,7 +181,17 @@ Motion uses transforms and opacity only. `prefers-reduced-motion` is honoured ev
 - The news list is virtualized. The client keeps at most 600 clusters and the worker 36 h in memory. SQLite is pruned hourly (`NEWS_RETENTION_DAYS`).
 - Hidden tabs get 2 s batches, and the client catches up in one frame on focus.
 - Every timer, listener, socket and chart is cleaned up on unmount or stop.
-- Measured on a production build in software-rendered headless Chromium with about 150 quote updates/s across 80 symbols: about 55 fps, no long tasks, and a JS heap around 20 MB.
+- First paint is server-rendered. The page server-renders the first screen of headlines, the WebSocket snapshot carries only the newest 60 clusters (compressed with permessage-deflate), and older items backfill over REST when idle. Overlays, cmdk and chart code are split out of the main bundle, and the side rails mount on idle.
+- No layout thrash in hot paths:
+  - the ticker caches its width with a ResizeObserver
+  - flash colours are resolved once
+  - impact meters use CSS transforms
+- Measured on a production build in headless Chromium (software rendering, no GPU), with about 150 quote updates/s across 80 symbols:
+  - steady-state 30–55 fps on desktop and about 60 fps on mobile layout
+  - JS heap flat at about 15 MB over a 4-minute run
+  - Lighthouse (mobile preset): **FCP 0.2 s / LCP 0.4 s observed**, CLS ≈ 0, Best practices 100, Accessibility 91, **Performance ≈ 70**
+
+  The performance score misses the 90 target. Lighthouse's *simulated* slow-4G LCP (~4 s) counts the JS bundle, and its TBT counts the live updates that start immediately. The desktop preset doesn't complete because the page never goes network/CPU-idle (it streams by design). Further gains would come from trimming the client bundle (e.g. replacing framer-motion in the always-mounted shell with CSS).
 
 ### Security and compliance
 

@@ -1,5 +1,5 @@
 'use client';
-import type { ComponentType } from 'react';
+import { useEffect, useState, type ComponentType } from 'react';
 import { motion, Reorder, useDragControls } from 'framer-motion';
 import { useSettings, PANEL_LABELS, type PanelId } from '@/lib/settings';
 import { useStore } from '@/lib/store';
@@ -17,6 +17,21 @@ export const PANELS: Record<PanelId, ComponentType> = {
   sessions: SessionsPanel, calendar: CalendarPanel, banks: BanksPanel, strength: StrengthPanel, heatmap: HeatmapPanel,
   crypto: CryptoPanel, vol: VolPanel, watchlist: WatchlistPanel, alerts: AlertsPanel,
 };
+
+/** Mount the side rails once the main thread is idle, so the feed paints first. */
+function useIdleReady() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
+    if (w.requestIdleCallback) {
+      const id = w.requestIdleCallback(() => setReady(true), { timeout: 1200 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const t = setTimeout(() => setReady(true), 300);
+    return () => clearTimeout(t);
+  }, []);
+  return ready;
+}
 
 function EditableItem({ id, side }: { id: PanelId; side: 'left' | 'right' }) {
   const controls = useDragControls();
@@ -45,6 +60,7 @@ export function Rail({ panels, side, className = '' }: { panels: PanelId[]; side
   const layout = useSettings((s) => s.layout);
   const set = useSettings((s) => s.set);
   const calm = useCalm();
+  const ready = useIdleReady();
 
   if (editing) {
     return (
@@ -58,6 +74,13 @@ export function Rail({ panels, side, className = '' }: { panels: PanelId[]; side
   }
 
   const visible = panels.filter((p) => !layout.hidden.includes(p));
+  if (!ready) {
+    return (
+      <div className={`space-y-3 ${className}`} aria-busy>
+        {visible.slice(0, 3).map((id) => <div key={id} className="glass h-64 rounded-xl p-3"><div className="skeleton mb-3 h-3 w-32" /><div className="skeleton h-40 w-full" /></div>)}
+      </div>
+    );
+  }
   return (
     <motion.div
       className={`space-y-3 ${className}`}

@@ -44,6 +44,31 @@ export function connect(): () => void {
     raf = document.hidden ? (setTimeout(flush, 1000) as unknown as number) : requestAnimationFrame(flush);
   };
 
+  // The snapshot carries only the newest clusters; fetch older ones once the page is idle.
+  let backfilled = false;
+  const backfill = () => {
+    if (backfilled) return;
+    backfilled = true;
+    const run = async () => {
+      const list = st().clusters;
+      const oldest = list[list.length - 1];
+      if (!oldest) return;
+      try {
+        const res = await fetch(`/api/news?before=${oldest.receivedAt}&limit=240`);
+        if (!res.ok) return;
+        const older = (await res.json()) as import('@shared/types').NewsCluster[];
+        const cur = st().clusters;
+        const have = new Set(cur.map((c) => c.id));
+        st().set({ clusters: [...cur, ...older.filter((c) => !have.has(c.id))].sort((a, b) => b.receivedAt - a.receivedAt).slice(0, 600) });
+      } catch {
+        /* the feed still works; older items load via "Load older stories" */
+      }
+    };
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
+    if (w.requestIdleCallback) w.requestIdleCallback(() => void run(), { timeout: 4000 });
+    else setTimeout(() => void run(), 1500);
+  };
+
   const onMessage = (ev: MessageEvent) => {
     let m: ServerMsg;
     try {
@@ -54,7 +79,10 @@ export function connect(): () => void {
     const s = st();
     s.set({ lastMsgAt: Date.now() });
     switch (m.t) {
-      case 'snapshot': s.applySnapshot(m.d); break;
+      case 'snapshot':
+        s.applySnapshot(m.d);
+        backfill();
+        break;
       case 'q': for (const q of m.d) pendingQuotes.set(q.symbol, q); schedule(); break;
       case 'status': s.set({ statuses: m.d }); break;
       case 'cluster':

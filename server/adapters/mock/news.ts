@@ -133,8 +133,8 @@ const GENERATORS: (() => Story)[] = [
     const b = pick(BANKS);
     return {
       symbol: b.pair, move: (b.inv ? -1 : 1) * +r(0.1, 0.3, 2), weight: 1.1,
-      variants: [`${b.name}'s ${b.who} says policy must stay ${pick(['restrictive', 'data dependent', 'flexible'])}; ${b.ccy} edges higher`,
-                 `${b.who} (${b.name}) signals patience on rates in speech, ${b.ccy} firms`],
+      variants: [`${b.who.startsWith('the ') ? `${b.name} board` : `${b.name}'s ${b.who}`} says policy must stay ${pick(['restrictive', 'data dependent', 'flexible'])}; ${b.ccy} edges higher`,
+                 `${b.who.startsWith('the ') ? `${b.name} officials signal` : `${b.who} (${b.name}) signals`} patience on rates in speech, ${b.ccy} firms`],
       summary: `Speaking at a conference, ${b.who} said the ${b.full} will ${pick(['keep policy restrictive for some time', 'move carefully', 'respond to incoming data'])}. Markets trimmed bets on near-term easing.`,
     };
   },

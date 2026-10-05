@@ -74,7 +74,7 @@ export const SEVERITY: [RegExp, number, string][] = [
   [/\bliquidat(ion|ed)s?\b/i, 18, 'Liquidations'],
   [/\b(CPI|payrolls|NFP|PCE|GDP)\b/, 18, 'Data release'],
   [/\b(plunges?|crash(es)?|tumbles?|soars?|surges?|spikes?)\b/i, 16, 'Big move'],
-  [/\b(statement|minutes|press conference|speech|testimony)\b/i, 14, 'Central bank'],
+  [/\b(policy statement|meeting minutes|minutes of|press conference|testimony)\b/i, 14, 'Central bank'],
   [/\b(earnings|beats?|miss(es)?|guidance|outlook)\b/i, 14, 'Earnings'],
   [/\b(acquire[sd]?|acquisition|merger|takeover|buyout)\b/i, 16, 'M&A'],
   [/\brecord high|all-time high|ATH\b/i, 12, 'Record'],

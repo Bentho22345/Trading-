@@ -5,7 +5,10 @@ import { useStore } from '@/lib/store';
 import { useFlash, useQuote, useNow, useCalm } from '@/lib/hooks';
 import { fmtCompact, fmtPct, fmtPrice, timeAgo } from '@/lib/format';
 import { Odometer } from '../Odometer';
-import { Sparkline } from '../charts';
+import dynamic from 'next/dynamic';
+
+// lightweight-charts loads after first paint
+const Sparkline = dynamic(() => import('../charts').then((m) => m.Sparkline), { ssr: false, loading: () => <div className="skeleton h-6 w-full" /> });
 import { Panel, SkeletonRows, StreamBadge, SourceStamp, EmptyState } from '../ui';
 
 const MAJORS = ['BTC', 'ETH', 'SOL', 'XRP'];

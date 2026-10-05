@@ -110,20 +110,27 @@ export function TickerStrip() {
   const effectiveSpeed = calm ? speed * 0.5 : speed;
   useEffect(() => {
     if (reduced) return;
+    // Width comes from a ResizeObserver: reading offsetWidth in the frame loop would force a
+    // synchronous layout every frame while prices are updating.
+    let width = copyRef.current?.offsetWidth ?? 0;
+    const ro = new ResizeObserver(([e]) => (width = e.borderBoxSize?.[0]?.inlineSize ?? (e.target as HTMLElement).offsetWidth));
+    if (copyRef.current) ro.observe(copyRef.current);
     let raf = 0, last = performance.now(), offset = 0;
     const loop = (t: number) => {
       const dt = Math.min(64, t - last);
       last = t;
-      const w = copyRef.current?.offsetWidth ?? 0;
-      if (!paused.current && w > 0 && !document.hidden) {
-        offset = (offset + (effectiveSpeed * dt) / 1000) % w;
+      if (!paused.current && width > 0 && !document.hidden) {
+        offset = (offset + (effectiveSpeed * dt) / 1000) % width;
         if (trackRef.current) trackRef.current.style.transform = `translate3d(${-offset}px,0,0)`;
       }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [effectiveSpeed, reduced]);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [effectiveSpeed, reduced, items.length > 0]);
 
   const content = useMemo(() => <Row items={items} />, [items]);
 

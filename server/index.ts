@@ -38,6 +38,8 @@ const savedIds = () => db.select().from(schema.saved).all().map((r) => r.cluster
 function snapshot(): Snapshot {
   const sparks: Record<string, number[]> = {};
   for (const s of SYMBOLS) sparks[s.symbol] = hub.spark(s.symbol, 240, 48);
+  // Keep the first payload small for a fast first paint; the client backfills older items over REST.
+  const clusters = pipeline.recent(60);
   const recentIds = new Set(pipeline.recent(300).map((c) => c.id));
   return {
     serverTime: Date.now(),
@@ -45,7 +47,7 @@ function snapshot(): Snapshot {
     quotes: [...hub.quotes.values()],
     sparks,
     statuses: [...hub.statuses.values()],
-    clusters: pipeline.recent(300),
+    clusters,
     calendar: hub.calendar,
     banks: hub.banks,
     crypto: hub.crypto,

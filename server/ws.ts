@@ -22,7 +22,8 @@ export class Fanout {
   private timers: NodeJS.Timeout[] = [];
 
   constructor(server: Server, private snapshot: () => Snapshot) {
-    this.wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
+    // Compress only large frames (snapshot, bursts); small quote batches stay uncompressed to save CPU.
+    this.wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024, perMessageDeflate: { threshold: 4096 } });
     this.wss.on('connection', (ws, req) => {
       const origin = req.headers.origin;
       if (config.corsOrigin !== '*' && origin && !config.corsOrigin.split(',').includes(origin)) {

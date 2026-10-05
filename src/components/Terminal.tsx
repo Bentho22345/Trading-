@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useSyncExternalStore } from 'react';
+import dynamic from 'next/dynamic';
 import { MotionConfig } from 'framer-motion';
+import type { NewsCluster } from '@shared/types';
 import { connect } from '@/lib/socket';
 import { useStore } from '@/lib/store';
 import { useSettings, type PanelId } from '@/lib/settings';
@@ -12,13 +14,17 @@ import { BreakingBanner } from './BreakingBanner';
 import { Rail, LayoutEditBar } from './Rails';
 import { Ambient } from './Ambient';
 import { Toasts } from './Toasts';
-import { TickerDrawer } from './Drawer';
-import { StoryTimeline } from './Timeline';
-import { CommandPalette } from './CommandPalette';
-import { KeyboardShortcuts, ShortcutSheet } from './Shortcuts';
-import { AwayTracker, DigestModal } from './Digest';
-import { SettingsModal } from './SettingsModal';
+import { KeyboardShortcuts } from './Shortcuts';
+import { AwayTracker } from './Digest';
 import { Segmented } from './ui';
+
+// Overlays aren't needed for first paint: split them (and cmdk / chart code) out of the main bundle.
+const TickerDrawer = dynamic(() => import('./Drawer').then((m) => m.TickerDrawer), { ssr: false });
+const StoryTimeline = dynamic(() => import('./Timeline').then((m) => m.StoryTimeline), { ssr: false });
+const CommandPalette = dynamic(() => import('./CommandPalette').then((m) => m.CommandPalette), { ssr: false });
+const ShortcutSheet = dynamic(() => import('./Shortcuts').then((m) => m.ShortcutSheet), { ssr: false });
+const SettingsModal = dynamic(() => import('./SettingsModal').then((m) => m.SettingsModal), { ssr: false });
+const DigestModal = dynamic(() => import('./Digest').then((m) => m.DigestModal), { ssr: false });
 
 type BP = 'sm' | 'md' | 'lg';
 function useBreakpoint(): BP {
@@ -45,7 +51,7 @@ function ThemeSync() {
   return null;
 }
 
-export function Terminal() {
+export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] }) {
   const hydrateSettings = useSettings((s) => s.hydrate);
   const layout = useSettings((s) => s.layout);
   const focus = useSettings((s) => s.focus);
@@ -62,7 +68,7 @@ export function Terminal() {
 
   const feed = (
     <main className="relative flex min-h-0 flex-col" aria-label="News">
-      <NewsFeed />
+      <NewsFeed initial={initialClusters} />
     </main>
   );
 

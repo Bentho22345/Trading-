@@ -38,14 +38,17 @@ export function useNow(ms = 1000): number {
 export const useQuote = (symbol: string) => useStore((s) => s.quotes[symbol]);
 
 // ------------------------------------------------------------------ motion preferences
+let reducedMq: MediaQueryList | null = null;
+const reducedQuery = () => (reducedMq ??= window.matchMedia('(prefers-reduced-motion: reduce)'));
+
 export function usePrefersReducedMotion() {
   return useSyncExternalStore(
     (cb) => {
-      const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+      const mq = reducedQuery();
       mq.addEventListener('change', cb);
       return () => mq.removeEventListener('change', cb);
     },
-    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    () => reducedQuery().matches,
     () => false,
   );
 }
@@ -58,6 +61,22 @@ export function useCalm() {
 }
 
 // ------------------------------------------------------------------ price flash
+// Reading CSS variables forces a style recalc, so resolve the flash colours once and only
+// re-read them when the theme / palette attributes on <html> change.
+let flashColors: { up: string; down: string } | null = null;
+let flashObserver: MutationObserver | null = null;
+function getFlashColors() {
+  if (!flashObserver) {
+    flashObserver = new MutationObserver(() => (flashColors = null));
+    flashObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-cb'] });
+  }
+  if (!flashColors) {
+    const cs = getComputedStyle(document.documentElement);
+    flashColors = { up: cs.getPropertyValue('--up-bg').trim(), down: cs.getPropertyValue('--down-bg').trim() };
+  }
+  return flashColors;
+}
+
 /**
  * Flashes the element's background green/red for 400ms when `value` changes. Uses WAAPI on the
  * element directly so a tick never triggers a React re-render of its own.
@@ -72,7 +91,7 @@ export function useFlash<T extends HTMLElement>(value: number | undefined, inten
     const el = ref.current;
     if (!el || p === undefined || value === undefined || p === value) return;
     const up = value > p;
-    const color = getComputedStyle(document.documentElement).getPropertyValue(up ? '--up-bg' : '--down-bg').trim();
+    const color = getFlashColors()[up ? 'up' : 'down'];
     if (!color) return;
     el.animate([{ backgroundColor: color, opacity: 1 }, { backgroundColor: 'transparent' }], {
       duration: calm ? 250 : 400 * intensity,

@@ -1,7 +1,25 @@
 import type { Metadata, Viewport } from 'next';
-import { GeistSans } from 'geist/font/sans';
-import { GeistMono } from 'geist/font/mono';
+import localFont from 'next/font/local';
 import './globals.css';
+
+// Geist from the npm package, self-hosted. Not preloaded and display:swap so the first headlines
+// paint immediately in the fallback face instead of waiting ~140KB of font files.
+const GeistSans = localFont({
+  src: '../../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2',
+  variable: '--font-geist-sans',
+  weight: '100 900',
+  display: 'swap',
+  preload: false,
+  adjustFontFallback: 'Arial',
+});
+const GeistMono = localFont({
+  src: '../../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2',
+  variable: '--font-geist-mono',
+  weight: '100 900',
+  display: 'swap',
+  preload: false,
+  adjustFontFallback: false,
+});
 
 export const metadata: Metadata = {
   title: 'PULSE — Markets Intelligence Terminal',

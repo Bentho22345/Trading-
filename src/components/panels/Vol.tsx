@@ -4,7 +4,10 @@ import { useStore } from '@/lib/store';
 import { useFlash, useQuote, useNow } from '@/lib/hooks';
 import { fmtChange, fmtCompact, fmtPct, timeAgo } from '@/lib/format';
 import { Odometer } from '../Odometer';
-import { TermChart } from '../charts';
+import dynamic from 'next/dynamic';
+
+// lightweight-charts loads after first paint
+const TermChart = dynamic(() => import('../charts').then((m) => m.TermChart), { ssr: false, loading: () => <div className="skeleton h-6 w-full" /> });
 import { Panel, SkeletonRows, StreamBadge, SourceStamp, Chip, DelayChip } from '../ui';
 
 export function VolPanel() {
