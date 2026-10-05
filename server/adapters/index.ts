@@ -1,5 +1,5 @@
 import type { Adapter } from './types';
-import { providers, keys } from '../config';
+import { providers, keys, MODE } from '../config';
 import { mockQuoteAdapter, mockMarket } from './mock/market';
 import { mockCalendarAdapter, mockCryptoMarketAdapter, mockVolAdapter, mockOptionsAdapter, mockEarningsAdapter } from './mock/panels';
 import { banksAdapter } from './banks';
@@ -9,6 +9,7 @@ import { finnhubEquityAdapter, finnhubNewsAdapter, finnhubEarningsAdapter } from
 import { twelveDataAdapter, finnhubFxAdapter } from './live/fx';
 import { rssAdapter, cryptoPanicAdapter } from './live/news';
 import { publicCryptoMarketAdapter, cboeVolAdapter, forexFactoryAdapter } from './live/panels';
+import { cboeOptionsAdapter } from './live/options';
 import { stooqEquityAdapter, stooqFxAdapter, nasdaqEarningsAdapter, okxLiquidationsAdapter } from './live/keyless';
 
 type Factory = () => Adapter;
@@ -23,8 +24,12 @@ const REGISTRY: Record<string, Record<string, Factory>> = {
   earnings: { mock: mockEarningsAdapter, finnhub: finnhubEarningsAdapter, nasdaq: nasdaqEarningsAdapter },
   cryptoMarket: { mock: mockCryptoMarketAdapter, public: publicCryptoMarketAdapter },
   vol: { mock: mockVolAdapter, cboe: cboeVolAdapter },
-  options: { mock: mockOptionsAdapter },
+  options: { mock: mockOptionsAdapter, cboe: cboeOptionsAdapter },
 };
+
+/** In live mode a missing key or unknown provider falls back to the keyless real source, never to demo data. */
+const KEYLESS: Record<string, string> = { crypto: 'coinbase', equities: 'stooq', fx: 'stooq', news: 'rss', calendar: 'forexfactory', earnings: 'nasdaq', cryptoMarket: 'public', vol: 'cboe', options: 'cboe' };
+const fallbackFor = (stream: string) => (MODE === 'live' || stream === 'news' ? KEYLESS[stream] : 'mock');
 
 const NEEDS_KEY: Record<string, () => boolean> = {
   alpaca: () => !!(keys.alpacaKey && keys.alpacaSecret),
@@ -38,13 +43,12 @@ export function buildAdapters(log: { warn: (m: string) => void }): Adapter[] {
   const add = (stream: string, name: string) => {
     let factory = REGISTRY[stream]?.[name];
     if (factory && NEEDS_KEY[name] && !NEEDS_KEY[name]()) {
-      const fallback = stream === 'news' ? 'rss' : 'mock';
+      const fallback = fallbackFor(stream);
       log.warn(`[config] ${stream}: provider "${name}" needs an API key — falling back to ${fallback}`);
       factory = REGISTRY[stream][fallback];
     }
     if (!factory) {
-      // news has no demo adapter: an unknown news provider falls back to real RSS
-      const fallback = stream === 'news' ? 'rss' : 'mock';
+      const fallback = fallbackFor(stream);
       log.warn(`[config] ${stream}: unknown provider "${name}" — using ${fallback}`);
       factory = REGISTRY[stream][fallback];
     }

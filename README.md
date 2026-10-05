@@ -7,7 +7,7 @@ npm install && npm run dev      # → http://localhost:3000  (worker on :4000)
 npm run setup                   # optional: paste free API keys (real-time stocks/FX) into .env
 ```
 
-That's it: by default it runs in **live mode** with real news (central-bank, SEC, BLS, BBC, CNBC, MarketWatch, CoinDesk, Cointelegraph RSS), real crypto prices (Coinbase), VIX (Cboe, 15m delayed) and the ForexFactory calendar — no keys needed. Equities and FX come from Stooq's keyless quotes (delayed, with each quote's real age shown), earnings from Nasdaq's public calendar, and liquidations from OKX. Adding Alpaca / Finnhub / Twelve Data keys upgrades those streams to real-time automatically. Only options flow (put/call, unusual activity) stays demo, as no free source exists. Set `PULSE_MODE=mock` for a fully offline demo, with plausible streaming prices, a stream of realistic (clearly-labelled **DEMO**) headlines that cluster and trigger breaking banners, a live economic calendar whose "actuals" post on time, and so on. Add API keys to switch individual streams to live data without touching code.
+That's it: by default it runs in **live mode** with real news (central-bank, SEC, BLS, BBC, CNBC, MarketWatch, CoinDesk, Cointelegraph RSS), real crypto prices (Coinbase), VIX (Cboe, 15m delayed) and the ForexFactory calendar — no keys needed. Equities and FX come from Stooq's keyless quotes (delayed, with each quote's real age shown), earnings from Nasdaq's public calendar, and liquidations from OKX. Adding Alpaca / Finnhub / Twelve Data keys upgrades those streams to real-time automatically. Options analytics (put/call ratios, unusual activity, earnings implied moves) are computed from Cboe's public delayed option chains. **Nothing in the default setup is simulated.** Set `PULSE_MODE=mock` for a fully offline demo, with plausible streaming prices, a stream of realistic (clearly-labelled **DEMO**) headlines that cluster and trigger breaking banners, a live economic calendar whose "actuals" post on time, and so on. Add API keys to switch individual streams to live data without touching code.
 
 ---
 
@@ -104,7 +104,7 @@ Free-tier limits were checked in September 2026. **Re-verify before relying on t
 | | Finnhub `finnhub` | yes | daily | Implied move needs an options provider (shows "n/a"). |
 | Crypto metrics | alternative.me, CoinGecko, OKX `public` | no | 5–30 min | Fear & Greed (attributed), BTC dominance and total mcap, perp funding. **Liquidations:** OKX public liquidation orders (≥ $50k) for BTC/ETH/SOL/XRP/DOGE perps. |
 | Volatility | **Cboe delayed quotes** `cboe` | no | **15 min delayed** | VIX plus a term structure built from Cboe's VIX9D / VIX / VIX3M / VIX6M / VIX1Y (VIX *futures* data needs a CFE licence). Contango/backwardation is flagged. |
-| Put/call, unusual options | mock only | — | — | No free provider exists. The UI shows "demo · connect a provider". |
+| Put/call, unusual options, implied move | **Cboe option chains** `cboe` (default, keyless) | no | 15 min delayed, 15 min poll | P/C from SPY/QQQ/IWM and a 12-stock basket; unusual = volume > 2× OI and premium ≥ $0.5M; implied move = ATM straddle ÷ spot on the first expiry after earnings. |
 | Central banks | `server/data/central-banks.json` | — | — | Rates and meeting dates are an editable reference file (no reliable free API; **verify the values**). Latest statement headlines come live from the news feed. |
 
 Every price, panel and headline shows its source and freshness. Delayed data carries an amber "Nm delayed" chip, and mock data a "DEMO" chip.

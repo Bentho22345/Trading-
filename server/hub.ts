@@ -221,6 +221,11 @@ export class Hub extends EventEmitter {
       termStructure: [], structure: null, termSource: '—', termDelayedMin: 0, putCall: null, putCallConnected: false,
       earnings: [], earningsSource: '—', unusual: [], unusualConnected: false, unusualSource: '—', ts: 0,
     };
+    // keep options-derived implied moves when an earnings adapter refreshes the list
+    if (v.earnings && base.earnings.length) {
+      const prev = new Map(base.earnings.map((e) => [e.symbol, e.impliedMovePct]));
+      v = { ...v, earnings: v.earnings.map((e) => (e.impliedMovePct === null && prev.get(e.symbol) != null ? { ...e, impliedMovePct: prev.get(e.symbol)! } : e)) };
+    }
     this.vol = { ...base, ...v, ts: Date.now() };
     this.touch(stream);
     this.emit('vol', this.vol);

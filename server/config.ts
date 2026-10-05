@@ -40,7 +40,7 @@ export const providers = {
   earnings: pick('EARNINGS_PROVIDER', () => (keys.finnhub ? 'finnhub' : MODE === 'live' ? 'nasdaq' : 'mock')),
   cryptoMarket: pick('CRYPTO_MARKET_PROVIDER', () => (MODE === 'live' ? 'public' : 'mock')),
   vol: pick('VOL_PROVIDER', () => (MODE === 'live' ? 'cboe' : 'mock')),
-  options: pick('OPTIONS_PROVIDER', () => 'mock'),
+  options: pick('OPTIONS_PROVIDER', () => (MODE === 'live' ? 'cboe' : 'mock')),
 };
 
 export const config = {
