@@ -69,7 +69,7 @@ Node 20+ (tested on 22). SQLite lives at `./data/pulse.db` (created automaticall
 
 ### Mock mode
 
-With `PULSE_MODE=mock`, every stream uses its demo adapter unless a provider is set explicitly or the key for a keyed provider is present. Mock data is always marked with a **DEMO** chip, and demo headlines come from fictional "Demo …" wires and link to `example.com`. `MOCK_NEWS_RATE=3` speeds up the headline stream.
+With `PULSE_MODE=mock`, every stream uses its demo adapter unless a provider is set explicitly or the key for a keyed provider is present. Mock data is always marked with a **DEMO** chip. **News is never simulated:** the feed only ever shows real articles from RSS (plus Finnhub/CryptoPanic with keys), in every mode, and any demo articles stored by older versions are purged at startup.
 
 ### Switching to live data
 

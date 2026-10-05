@@ -34,12 +34,8 @@ export const providers = {
     keys.alpacaKey && keys.alpacaSecret ? 'alpaca' : keys.finnhub ? 'finnhub' : MODE === 'live' ? 'stooq' : 'mock'),
   fx: pick('FX_PROVIDER', () => (keys.twelvedata ? 'twelvedata' : keys.finnhub ? 'finnhub' : MODE === 'live' ? 'stooq' : 'mock')),
   news: env('NEWS_PROVIDERS', 'auto').toLowerCase() === 'auto'
-    ? [
-        ...(MODE === 'live' ? ['rss'] : []),
-        ...(keys.finnhub ? ['finnhub'] : []),
-        ...(keys.cryptopanic ? ['cryptopanic'] : []),
-      ].concat(MODE === 'live' || keys.finnhub || keys.cryptopanic ? [] : ['mock'])
-    : env('NEWS_PROVIDERS').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
+    ? ['rss', ...(keys.finnhub ? ['finnhub'] : []), ...(keys.cryptopanic ? ['cryptopanic'] : [])]
+    : env('NEWS_PROVIDERS').toLowerCase().split(',').map((s) => s.trim()).filter((s) => s && s !== 'mock'), // news is always real
   calendar: pick('CALENDAR_PROVIDER', () => (MODE === 'live' ? 'forexfactory' : 'mock')),
   earnings: pick('EARNINGS_PROVIDER', () => (keys.finnhub ? 'finnhub' : MODE === 'live' ? 'nasdaq' : 'mock')),
   cryptoMarket: pick('CRYPTO_MARKET_PROVIDER', () => (MODE === 'live' ? 'public' : 'mock')),
@@ -64,5 +60,4 @@ export const config = {
   aiModel: env('ANTHROPIC_MODEL', 'claude-opus-5-5'),
   aiMinImpact: num('AI_MIN_IMPACT', 50),
   aiMaxPerHour: num('AI_MAX_PER_HOUR', 40),
-  mockNewsRate: num('MOCK_NEWS_RATE', 1),
 };

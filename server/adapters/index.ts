@@ -1,7 +1,6 @@
 import type { Adapter } from './types';
 import { providers, keys } from '../config';
 import { mockQuoteAdapter, mockMarket } from './mock/market';
-import { mockNewsAdapter } from './mock/news';
 import { mockCalendarAdapter, mockCryptoMarketAdapter, mockVolAdapter, mockOptionsAdapter, mockEarningsAdapter } from './mock/panels';
 import { banksAdapter } from './banks';
 import { coinbaseAdapter, binanceAdapter } from './live/crypto';
@@ -19,7 +18,7 @@ const REGISTRY: Record<string, Record<string, Factory>> = {
   crypto: { mock: () => mockQuoteAdapter('crypto'), coinbase: coinbaseAdapter, binance: () => binanceAdapter(false), binanceus: () => binanceAdapter(true) },
   equities: { mock: () => mockQuoteAdapter('equities'), alpaca: alpacaAdapter, finnhub: finnhubEquityAdapter, stooq: stooqEquityAdapter },
   fx: { mock: () => mockQuoteAdapter('fx'), twelvedata: twelveDataAdapter, finnhub: finnhubFxAdapter, stooq: stooqFxAdapter },
-  news: { mock: mockNewsAdapter, rss: rssAdapter, finnhub: finnhubNewsAdapter, cryptopanic: cryptoPanicAdapter },
+  news: { rss: rssAdapter, finnhub: finnhubNewsAdapter, cryptopanic: cryptoPanicAdapter },
   calendar: { mock: mockCalendarAdapter, forexfactory: forexFactoryAdapter },
   earnings: { mock: mockEarningsAdapter, finnhub: finnhubEarningsAdapter, nasdaq: nasdaqEarningsAdapter },
   cryptoMarket: { mock: mockCryptoMarketAdapter, public: publicCryptoMarketAdapter },
@@ -39,19 +38,22 @@ export function buildAdapters(log: { warn: (m: string) => void }): Adapter[] {
   const add = (stream: string, name: string) => {
     let factory = REGISTRY[stream]?.[name];
     if (factory && NEEDS_KEY[name] && !NEEDS_KEY[name]()) {
-      log.warn(`[config] ${stream}: provider "${name}" needs an API key — falling back to mock`);
-      factory = REGISTRY[stream].mock;
+      const fallback = stream === 'news' ? 'rss' : 'mock';
+      log.warn(`[config] ${stream}: provider "${name}" needs an API key — falling back to ${fallback}`);
+      factory = REGISTRY[stream][fallback];
     }
     if (!factory) {
-      log.warn(`[config] ${stream}: unknown provider "${name}" — using mock`);
-      factory = REGISTRY[stream].mock;
+      // news has no demo adapter: an unknown news provider falls back to real RSS
+      const fallback = stream === 'news' ? 'rss' : 'mock';
+      log.warn(`[config] ${stream}: unknown provider "${name}" — using ${fallback}`);
+      factory = REGISTRY[stream][fallback];
     }
     out.push(factory());
   };
   add('crypto', providers.crypto);
   add('equities', providers.equities);
   add('fx', providers.fx);
-  const news = providers.news.length ? providers.news : ['mock'];
+  const news = providers.news.length ? providers.news : ['rss'];
   for (const n of news) add('news', n);
   add('calendar', providers.calendar);
   add('earnings', providers.earnings);

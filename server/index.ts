@@ -27,6 +27,8 @@ if (!watchlist.length && !db.select().from(schema.alerts).all().length) {
   watchlist = defaults.map((w) => ({ ...w, id: crypto.randomUUID() }));
   for (const w of watchlist) db.insert(schema.watchlist).values({ ...w, createdAt: Date.now() }).run();
 }
+// News is always real: purge any simulated articles left over from older demo runs.
+sqlite.exec(`DELETE FROM clusters WHERE id IN (SELECT DISTINCT cluster_id FROM articles WHERE demo = 1); DELETE FROM articles WHERE demo = 1;`);
 pipeline.load(watchlist);
 const alerts = new AlertEngine(hub);
 alerts.load();

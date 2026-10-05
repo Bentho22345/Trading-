@@ -85,15 +85,6 @@ export function mockCalendarAdapter(): Adapter {
             const tpl = TEMPLATES.find((t) => t.title === e.title && t.country === e.country)!;
             e.actual = round((e.consensus ?? tpl.base) + (Math.random() - 0.5) * tpl.spread * 1.5, tpl.d);
             changed = true;
-            const diff = (e.actual - (e.consensus ?? e.actual)) * (e.lowerIsBetter ? -1 : 1);
-            const beat = diff > 0 ? 'beats' : diff < 0 ? 'misses' : 'matches';
-            if (e.importance >= 2)
-              ctx.emitNews({
-                sourceId: 'demo-wire', source: 'Demo Wire', demo: true, publishedAt: now,
-                headline: `${e.country} ${e.title} ${e.actual}${e.unit} vs ${e.consensus}${e.unit} expected — data ${beat} consensus`,
-                summary: `Previous: ${e.previous}${e.unit}. ${e.currency} traders reacted to the release.`,
-                url: `https://example.com/pulse-demo/calendar-${e.id}`,
-              });
           }
         }
         // keep a rolling near-term high-importance event in demo mode
