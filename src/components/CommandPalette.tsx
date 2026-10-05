@@ -6,10 +6,13 @@ import { pairLabel } from '@/lib/format';
 import { Overlay } from './Overlay';
 import { Icon, Kbd } from './ui';
 
+const EMPTY = {} as Record<string, import('@shared/types').Quote>;
+
 export function CommandPalette() {
   const open = useStore((s) => s.paletteOpen);
   const symbols = useStore((s) => s.symbols);
-  const quotes = useStore((s) => s.quotes);
+  // only follow live quotes while the palette is open
+  const quotes = useStore((s) => (s.paletteOpen ? s.quotes : EMPTY));
   const set = useStore((s) => s.set);
   const settings = useSettings();
   const close = () => set({ paletteOpen: false });

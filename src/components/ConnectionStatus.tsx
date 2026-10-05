@@ -1,6 +1,5 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import { useStore } from '@/lib/store';
 import { useNow } from '@/lib/hooks';
 import { timeAgo } from '@/lib/format';
@@ -36,14 +35,9 @@ export function ConnectionStatus() {
         <span className="hidden font-medium text-text md:inline">{label}</span>
         <span className="num">{rtt !== null ? `${rtt}ms` : '—'}</span>
       </button>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -6, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.98 }}
-            transition={{ duration: 0.15 }}
-            className="glass absolute right-0 top-9 z-50 w-[360px] rounded-xl bg-panel-solid/95 p-3 text-xs"
+      {open && (
+          <div
+            className="fade-in glass absolute right-0 top-9 z-50 w-[360px] rounded-xl bg-panel-solid/95 p-3 text-xs"
           >
             <div className="mb-2 flex items-center justify-between">
               <span className="font-semibold text-text">Data streams</span>
@@ -70,9 +64,8 @@ export function ConnectionStatus() {
                 </li>
               ))}
             </ul>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </div>
+      )}
     </div>
   );
 }

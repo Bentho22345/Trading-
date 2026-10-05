@@ -4,7 +4,8 @@ import type { Digest as DigestT } from '@shared/types';
 import { useStore } from '@/lib/store';
 import { fmtPct, pairLabel, timeAgo } from '@/lib/format';
 import { Overlay } from './Overlay';
-import { Icon, IconButton, MagneticButton } from './ui';
+import { Icon, IconButton } from './ui';
+import { MagneticButton } from './Magnetic';
 
 const AWAY_MS = 10 * 60_000;
 

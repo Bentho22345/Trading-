@@ -21,6 +21,9 @@ export const DEFAULT_FEEDS: Feed[] = [
   { name: 'BLS', id: 'bls', url: 'https://www.bls.gov/feed/bls_latest.rss' },
   { name: 'CoinDesk', id: 'coindesk', url: 'https://www.coindesk.com/arc/outboundfeeds/rss/' },
   { name: 'Cointelegraph', id: 'cointelegraph', url: 'https://cointelegraph.com/rss' },
+  { name: 'BBC Business', id: 'bbc', url: 'https://feeds.bbci.co.uk/news/business/rss.xml' },
+  { name: 'CNBC Markets', id: 'cnbc', url: 'https://www.cnbc.com/id/15839069/device/rss/rss.html' },
+  { name: 'MarketWatch', id: 'marketwatch', url: 'https://feeds.content.dowjones.io/public/rss/mw_topstories' },
 ];
 
 function feeds(): Feed[] {

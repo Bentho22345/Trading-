@@ -1,6 +1,5 @@
 'use client';
 import { useEffect } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import { useStore, type Toast } from '@/lib/store';
 import { useCalm } from '@/lib/hooks';
 import { Icon } from './ui';
@@ -14,13 +13,10 @@ function Burst() {
       {Array.from({ length: 10 }, (_, i) => {
         const a = (i / 10) * Math.PI * 2;
         return (
-          <motion.span
+          <span
             key={i}
-            className="absolute h-1 w-1 rounded-full"
-            style={{ background: i % 2 ? 'var(--warn)' : 'var(--accent)' }}
-            initial={{ x: 0, y: 0, opacity: 1, scale: 1 }}
-            animate={{ x: Math.cos(a) * 26, y: Math.sin(a) * 26, opacity: 0, scale: 0.4 }}
-            transition={{ duration: 0.7, ease: 'easeOut' }}
+            className="burst-dot absolute h-1 w-1 rounded-full"
+            style={{ background: i % 2 ? 'var(--warn)' : 'var(--accent)', ['--bx' as string]: `${Math.cos(a) * 26}px`, ['--by' as string]: `${Math.sin(a) * 26}px` }}
           />
         );
       })}
@@ -36,13 +32,8 @@ function ToastItem({ t }: { t: Toast }) {
   }, [t, dismiss]);
   const color = t.kind === 'alert' ? 'var(--warn)' : t.kind === 'error' ? 'var(--down)' : 'var(--accent)';
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 16, scale: 0.96 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, x: 40 }}
-      transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-      className="glass pointer-events-auto relative flex w-80 items-start gap-2.5 overflow-visible rounded-xl bg-panel-solid/95 px-3 py-2.5"
+    <div
+      className="toast-in glass pointer-events-auto relative flex w-80 items-start gap-2.5 overflow-visible rounded-xl bg-panel-solid/95 px-3 py-2.5"
       role="status"
     >
       {t.kind === 'alert' ? <Burst /> : null}
@@ -54,7 +45,7 @@ function ToastItem({ t }: { t: Toast }) {
         {t.body ? <div className="mt-0.5 text-[11px] leading-snug text-dim">{t.body}</div> : null}
       </div>
       <button onClick={() => dismiss(t.id)} className="text-faint hover:text-text" aria-label="Dismiss"><Icon name="x" size={12} /></button>
-    </motion.div>
+    </div>
   );
 }
 
@@ -62,9 +53,7 @@ export function Toasts() {
   const toasts = useStore((s) => s.toasts);
   return (
     <div className="pointer-events-none fixed bottom-10 right-4 z-[70] flex flex-col items-end gap-2" aria-live="polite">
-      <AnimatePresence initial={false}>
-        {toasts.map((t) => <ToastItem key={t.id} t={t} />)}
-      </AnimatePresence>
+      {toasts.map((t) => <ToastItem key={t.id} t={t} />)}
     </div>
   );
 }

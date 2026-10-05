@@ -170,6 +170,19 @@ body {
 .odo-down { animation: odo-down 380ms cubic-bezier(0.22, 1, 0.36, 1); }
 
 /* ------------------------------------------------------------------ animations */
+@keyframes fade-in { from { opacity: 0; } }
+.fade-in { animation: fade-in 160ms ease-out; }
+@keyframes pill-in { from { opacity: 0; transform: translateY(-12px); } }
+.pill-in { animation: pill-in 320ms cubic-bezier(0.2, 0.9, 0.25, 1.2); }
+@keyframes banner-in { from { opacity: 0; transform: translateY(-70px); } 70% { transform: translateY(4px); } }
+.banner-in { animation: banner-in 520ms cubic-bezier(0.2, 0.9, 0.25, 1); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(16px) scale(0.96); } }
+.toast-in { animation: toast-in 360ms cubic-bezier(0.2, 0.9, 0.25, 1.15); }
+@keyframes burst { to { transform: translate(var(--bx), var(--by)) scale(0.4); opacity: 0; } }
+.burst-dot { animation: burst 700ms ease-out forwards; }
+.calm .pill-in, .calm .banner-in, .calm .toast-in { animation: fade-in 150ms ease-out; }
+.calm .burst-dot { display: none; }
+
 .impact-fill { transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1); }
 @keyframes impact-in { from { transform: scaleX(0); } }
 .impact-in { animation: impact-in 900ms cubic-bezier(0.22, 1, 0.36, 1); }

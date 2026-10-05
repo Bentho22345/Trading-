@@ -1,14 +1,13 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { AnimatePresence, motion } from 'framer-motion';
 import type { NewsCluster } from '@shared/types';
 import { useStore } from '@/lib/store';
 import { useCalm } from '@/lib/hooks';
 import { matchesFilter, feedOrder } from '@/lib/filter';
 import { NewsCard } from './NewsCard';
 import { FilterBar } from './FilterBar';
-import { NextEventCard } from './panels/Calendar';
+import { NextEventCard } from './NextEvent';
 import { EmptyState, Skeleton, Icon } from './ui';
 import { useSettings } from '@/lib/settings';
 
@@ -129,20 +128,14 @@ export function NewsFeed({ initial }: { initial?: NewsCluster[] }) {
       <FilterBar counts={{ shown: display.length, total: clusters.length }} />
       {focus ? <div className="px-1 pb-2"><NextEventCard compact /></div> : null}
       <div className="relative min-h-0 flex-1">
-        <AnimatePresence>
-          {pending > 0 && (
-            <motion.button
-              initial={{ y: -16, opacity: 0, x: '-50%' }}
-              animate={{ y: 0, opacity: 1, x: '-50%' }}
-              exit={{ y: -16, opacity: 0, x: '-50%' }}
-              transition={{ type: 'spring', stiffness: 420, damping: 30 }}
-              onClick={jumpToTop}
-              className="absolute left-1/2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-accent/40 bg-panel-solid/95 px-3 py-1 text-xs font-semibold text-text shadow-lg backdrop-blur"
-            >
-              <span aria-hidden>↑</span> {pending} new {pending === 1 ? 'story' : 'stories'}
-            </motion.button>
-          )}
-        </AnimatePresence>
+        {pending > 0 && (
+          <button
+            onClick={jumpToTop}
+            className="pill-in absolute left-1/2 top-2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/40 bg-panel-solid/95 px-3 py-1 text-xs font-semibold text-text shadow-lg backdrop-blur"
+          >
+            <span aria-hidden>↑</span> {pending} new {pending === 1 ? 'story' : 'stories'}
+          </button>
+        )}
         <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto overscroll-contain px-1 pb-6" role="feed" aria-busy={!hydrated && !clusters.length} aria-label="Live news feed">
           {!hydrated && !clusters.length ? (
             <FeedSkeleton />

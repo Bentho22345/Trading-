@@ -1,6 +1,5 @@
 'use client';
 import { memo, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import type { NewsCluster } from '@shared/types';
 import { useStore } from '@/lib/store';
 import { useNow } from '@/lib/hooks';
@@ -139,9 +138,8 @@ export const NewsCard = memo(function NewsCard({ c, fresh, selected, read, saved
         </div>
       ) : null}
 
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.ul initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="mt-2 overflow-hidden border-t border-line pt-2">
+      {expanded && (
+          <ul className="fade-in mt-2 overflow-hidden border-t border-line pt-2">
             {c.articles.map((a) => (
               <li key={a.id} className="flex items-baseline gap-2 py-0.5 text-[11px]">
                 <span className="num w-8 shrink-0 text-faint">{timeAgo(a.publishedAt, now)}</span>
@@ -149,9 +147,8 @@ export const NewsCard = memo(function NewsCard({ c, fresh, selected, read, saved
                 <a href={a.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="truncate text-faint hover:text-text hover:underline">{a.headline}</a>
               </li>
             ))}
-          </motion.ul>
-        )}
-      </AnimatePresence>
+          </ul>
+      )}
     </article>
   );
 });

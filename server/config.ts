@@ -8,11 +8,11 @@ const num = (k: string, d: number) => {
 
 /**
  * PULSE_MODE:
- *   mock (default) – every stream uses the demo adapters unless a provider is set explicitly
+ *   live (default) – keyless real sources (Coinbase, RSS, Cboe…) plus any keyed providers.
+ *   mock – every stream uses the demo adapters unless a provider is set explicitly
  *                    or an API key for a keyed provider is present ("auto").
- *   live           – "auto" streams also pick keyless live providers (Coinbase, RSS, Cboe…).
  */
-export const MODE = env('PULSE_MODE', 'mock') === 'live' ? 'live' : 'mock';
+export const MODE = env('PULSE_MODE', 'live') === 'mock' ? 'mock' : 'live';
 
 export const keys = {
   finnhub: env('FINNHUB_API_KEY'),

@@ -11,7 +11,8 @@ import { StrengthPanel, HeatmapPanel } from './panels/Fx';
 import { CryptoPanel } from './panels/Crypto';
 import { VolPanel } from './panels/Vol';
 import { WatchlistPanel, AlertsPanel } from './panels/Watch';
-import { Icon, MagneticButton } from './ui';
+import { Icon } from './ui';
+import { MagneticButton } from './Magnetic';
 
 export const PANELS: Record<PanelId, ComponentType> = {
   sessions: SessionsPanel, calendar: CalendarPanel, banks: BanksPanel, strength: StrengthPanel, heatmap: HeatmapPanel,

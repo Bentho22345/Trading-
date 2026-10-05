@@ -1,6 +1,5 @@
 'use client';
 import { useEffect } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import { useStore } from '@/lib/store';
 import { useCalm, useNow } from '@/lib/hooks';
 import { timeAgo } from '@/lib/format';
@@ -20,17 +19,13 @@ export function BreakingBanner() {
   }, [b, set]);
 
   return (
-    <AnimatePresence>
+    <>
       {b && (
-        <motion.div
+        <div
           key={b.id}
           role="alert"
           aria-live="assertive"
-          initial={calm ? { opacity: 0 } : { y: -80, opacity: 0 }}
-          animate={calm ? { opacity: 1 } : { y: 0, opacity: 1 }}
-          exit={calm ? { opacity: 0 } : { y: -80, opacity: 0 }}
-          transition={calm ? { duration: 0.15 } : { type: 'spring', stiffness: 380, damping: 32 }}
-          className="pointer-events-auto absolute left-1/2 top-2 z-50 w-[min(760px,calc(100%-1.5rem))] -translate-x-1/2"
+          className={`${calm ? 'fade-in' : 'banner-in'} pointer-events-auto absolute left-1/2 top-2 z-50 w-[min(760px,calc(100%-1.5rem))] -translate-x-1/2`}
         >
           <div className="glass relative overflow-hidden rounded-xl border-down/40 bg-panel-solid/90 shadow-2xl">
             <div className="pulse-line absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-[var(--down)] to-transparent" />
@@ -58,8 +53,8 @@ export function BreakingBanner() {
               </button>
             </div>
           </div>
-        </motion.div>
+        </div>
       )}
-    </AnimatePresence>
+    </>
   );
 }

@@ -1,17 +1,14 @@
 'use client';
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import dynamic from 'next/dynamic';
-import { MotionConfig } from 'framer-motion';
 import type { NewsCluster } from '@shared/types';
 import { connect } from '@/lib/socket';
 import { useStore } from '@/lib/store';
 import { useSettings, type PanelId } from '@/lib/settings';
-import { usePrefersReducedMotion } from '@/lib/hooks';
 import { Header, Footer } from './Header';
 import { TickerStrip } from './TickerStrip';
 import { NewsFeed } from './NewsFeed';
 import { BreakingBanner } from './BreakingBanner';
-import { Rail, LayoutEditBar } from './Rails';
 import { Ambient } from './Ambient';
 import { Toasts } from './Toasts';
 import { KeyboardShortcuts } from './Shortcuts';
@@ -19,6 +16,10 @@ import { AwayTracker } from './Digest';
 import { Segmented } from './ui';
 
 // Overlays aren't needed for first paint: split them (and cmdk / chart code) out of the main bundle.
+// Side rails mount on idle anyway; loading them (and the animation library they use) lazily keeps
+// the first-paint bundle small.
+const Rail = dynamic(() => import('./Rails').then((m) => m.Rail), { ssr: false, loading: () => <div className="space-y-3"><div className="glass h-64 rounded-xl" /><div className="glass h-64 rounded-xl" /></div> });
+const LayoutEditBar = dynamic(() => import('./Rails').then((m) => m.LayoutEditBar), { ssr: false });
 const TickerDrawer = dynamic(() => import('./Drawer').then((m) => m.TickerDrawer), { ssr: false });
 const StoryTimeline = dynamic(() => import('./Timeline').then((m) => m.StoryTimeline), { ssr: false });
 const CommandPalette = dynamic(() => import('./CommandPalette').then((m) => m.CommandPalette), { ssr: false });
@@ -38,6 +39,20 @@ function useBreakpoint(): BP {
   );
 }
 
+/** Sticky "has ever been opened" flags, so each overlay chunk loads only when first needed. */
+function useOpenedOverlays() {
+  const drawer = useStore((s) => !!s.drawerSymbol);
+  const timeline = useStore((s) => !!s.timelineId);
+  const palette = useStore((s) => s.paletteOpen);
+  const shortcuts = useStore((s) => s.shortcutsOpen);
+  const settings = useStore((s) => s.settingsOpen);
+  const digest = useStore((s) => !!s.digestSince);
+  const seen = useRef({ drawer: false, timeline: false, palette: false, shortcuts: false, settings: false, digest: false });
+  const now = { drawer, timeline, palette, shortcuts, settings, digest };
+  for (const k of Object.keys(now) as (keyof typeof now)[]) if (now[k]) seen.current[k] = true;
+  return seen.current;
+}
+
 function ThemeSync() {
   const theme = useSettings((s) => s.theme);
   const cb = useSettings((s) => s.colorblind);
@@ -55,9 +70,8 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
   const hydrateSettings = useSettings((s) => s.hydrate);
   const layout = useSettings((s) => s.layout);
   const focus = useSettings((s) => s.focus);
-  const calm = useSettings((s) => s.calm);
-  const reduced = usePrefersReducedMotion();
   const editing = useStore((s) => s.layoutEditing);
+  const overlays = useOpenedOverlays();
   const mobileTab = useStore((s) => s.mobileTab);
   const bp = useBreakpoint();
 
@@ -107,7 +121,7 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
   }
 
   return (
-    <MotionConfig reducedMotion={calm || reduced ? 'always' : 'user'}>
+    <>
       <ThemeSync />
       <Ambient />
       <div className="flex h-dvh flex-col">
@@ -120,14 +134,15 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
         <Footer />
       </div>
       <Toasts />
-      <TickerDrawer />
-      <StoryTimeline />
-      <CommandPalette />
-      <ShortcutSheet />
-      <SettingsModal />
-      <DigestModal />
+      {/* overlays (and the animation library) load on first open, then stay mounted for exit animations */}
+      {overlays.drawer && <TickerDrawer />}
+      {overlays.timeline && <StoryTimeline />}
+      {overlays.palette && <CommandPalette />}
+      {overlays.shortcuts && <ShortcutSheet />}
+      {overlays.settings && <SettingsModal />}
+      {overlays.digest && <DigestModal />}
       <KeyboardShortcuts />
       <AwayTracker />
-    </MotionConfig>
+    </>
   );
 }

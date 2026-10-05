@@ -6,7 +6,8 @@ import { useStore } from '@/lib/store';
 import { useFlash, useQuote, useNow } from '@/lib/hooks';
 import { fmtPct, fmtPrice, pairLabel, timeAgo } from '@/lib/format';
 import { useSettings } from '@/lib/settings';
-import { Panel, Icon, MagneticButton, Chip, EmptyState } from '../ui';
+import { Panel, Icon, Chip, EmptyState } from '../ui';
+import { MagneticButton } from '../Magnetic';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { 'Content-Type': 'application/json' } });

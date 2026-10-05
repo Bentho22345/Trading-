@@ -6,7 +6,7 @@ A single-screen news and market-data terminal for FX, crypto and equities & opti
 npm install && npm run dev      # → http://localhost:3000  (worker on :4000)
 ```
 
-That's it: with no `.env` everything runs in **mock mode**, with plausible streaming prices, a stream of realistic (clearly-labelled **DEMO**) headlines that cluster and trigger breaking banners, a live economic calendar whose "actuals" post on time, and so on. Add API keys to switch individual streams to live data without touching code.
+That's it: by default it runs in **live mode** with real news (central-bank, SEC, BLS, BBC, CNBC, MarketWatch, CoinDesk, Cointelegraph RSS), real crypto prices (Coinbase), VIX (Cboe, 15m delayed) and the ForexFactory calendar — no keys needed. Equities and FX need a free key (Alpaca / Twelve Data or Finnhub); until then those two streams use the demo engine and are labelled **DEMO**. Set `PULSE_MODE=mock` for a fully offline demo, with plausible streaming prices, a stream of realistic (clearly-labelled **DEMO**) headlines that cluster and trigger breaking banners, a live economic calendar whose "actuals" post on time, and so on. Add API keys to switch individual streams to live data without touching code.
 
 ---
 
@@ -68,13 +68,13 @@ Node 20+ (tested on 22). SQLite lives at `./data/pulse.db` (created automaticall
 
 ### Mock mode
 
-`PULSE_MODE=mock` is the default. Every stream uses its demo adapter unless a provider is set explicitly or the key for a keyed provider is present. Mock data is always marked with a **DEMO** chip, and demo headlines come from fictional "Demo …" wires and link to `example.com`. `MOCK_NEWS_RATE=3` speeds up the headline stream.
+With `PULSE_MODE=mock`, every stream uses its demo adapter unless a provider is set explicitly or the key for a keyed provider is present. Mock data is always marked with a **DEMO** chip, and demo headlines come from fictional "Demo …" wires and link to `example.com`. `MOCK_NEWS_RATE=3` speeds up the headline stream.
 
 ### Switching to live data
 
 1. `cp .env.example .env`
 2. Add any keys. Each one switches its stream on its own (e.g. only `ALPACA_*` → live equities, everything else mock).
-3. Set `PULSE_MODE=live` to also enable the **keyless** live sources: Coinbase WS, RSS, Cboe, ForexFactory and public crypto metrics.
+3. The **keyless** live sources (Coinbase WS, RSS, Cboe, ForexFactory, public crypto metrics) are on by default.
 4. Or pin providers per stream: `CRYPTO_PROVIDER=binanceus`, `NEWS_PROVIDERS=rss,finnhub`, etc.
 
 A keyed provider without its key falls back to mock with a warning. A live stream that goes down **never** falls back to mock silently. It keeps the last data, turns amber ("stale", with time since the last update) or red ("down", with the reason), and reconnects with exponential backoff and jitter.
