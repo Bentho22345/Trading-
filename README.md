@@ -4,6 +4,7 @@ A single-screen news and market-data terminal for FX, crypto and equities & opti
 
 ```bash
 npm install && npm run dev      # → http://localhost:3000  (worker on :4000)
+npm run setup                   # optional: paste free API keys (real-time stocks/FX) into .env
 ```
 
 That's it: by default it runs in **live mode** with real news (central-bank, SEC, BLS, BBC, CNBC, MarketWatch, CoinDesk, Cointelegraph RSS), real crypto prices (Coinbase), VIX (Cboe, 15m delayed) and the ForexFactory calendar — no keys needed. Equities and FX come from Stooq's keyless quotes (delayed, with each quote's real age shown), earnings from Nasdaq's public calendar, and liquidations from OKX. Adding Alpaca / Finnhub / Twelve Data keys upgrades those streams to real-time automatically. Only options flow (put/call, unusual activity) stays demo, as no free source exists. Set `PULSE_MODE=mock` for a fully offline demo, with plausible streaming prices, a stream of realistic (clearly-labelled **DEMO**) headlines that cluster and trigger breaking banners, a live economic calendar whose "actuals" post on time, and so on. Add API keys to switch individual streams to live data without touching code.
