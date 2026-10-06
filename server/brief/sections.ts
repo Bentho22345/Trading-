@@ -3,6 +3,7 @@ import type {
   BriefCall, BriefSection, BriefSectionConfig, BriefStory, LevelHit, RatePath, ScoreRow, ThemeItem, SocialRow, Auction,
 } from '../../shared/v2';
 import { zonedParts } from '../../shared/sessions';
+import { touchesHeld } from '../../shared/relevance';
 import type { BriefContext } from './context';
 
 const DAY = 86400_000;
@@ -44,16 +45,7 @@ export function scoreRow(ctx: BriefContext, symbol: string, group: string, since
 const positionSymbols = (ctx: BriefContext) => new Set(ctx.positions.map((p) => p.symbol.toUpperCase()));
 
 export function touchesBook(ctx: BriefContext, c: Pick<NewsCluster, 'tickers' | 'currencies'>): boolean {
-  if (!ctx.positions.length) return false;
-  const held = positionSymbols(ctx);
-  if (c.tickers.some((t) => held.has(t))) return true;
-  for (const p of held) {
-    if (p.length === 6 && ctx.symbols[p]?.assetClass === 'fx' && (c.currencies.includes(p) || (c.currencies.includes(p.slice(0, 3)) && c.currencies.includes(p.slice(3))))) return true;
-  }
-  // correlated proxies: gold miners → GOLD, crypto equities → BTC
-  if (held.has('BTC') && c.tickers.some((t) => ['COIN', 'MSTR'].includes(t))) return true;
-  if ((held.has('GOLD') || held.has('XAUUSD')) && c.currencies.includes('XAU')) return true;
-  return false;
+  return touchesHeld(c, positionSymbols(ctx));
 }
 
 export function relevance(ctx: BriefContext, c: NewsCluster, assetClasses: string[]): number {

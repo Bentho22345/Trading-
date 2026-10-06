@@ -33,7 +33,7 @@ export const DEFAULT_FEEDS: Feed[] = [
   { name: 'CFTC', id: 'cftc', url: 'https://www.cftc.gov/RSS/RSSGP/rssgp.xml' },
 ];
 
-function feeds(): Feed[] {
+function envFeeds(): Feed[] {
   if (!config.rssFeeds) return DEFAULT_FEEDS;
   return config.rssFeeds.split(',').map((s) => {
     const [name, id, url] = s.split('|').map((x) => x.trim());
@@ -41,45 +41,95 @@ function feeds(): Feed[] {
   }).filter((f) => f.url?.startsWith('http'));
 }
 
-export function rssAdapter(): Adapter {
-  const stops: (() => void)[] = [];
+export interface FeedStat { lastOk: number | null; lastError: string | null; latencyMs: number | null; items: number[] }
+
+/**
+ * Runtime-editable RSS registry: built-in feeds plus feeds added in Settings → Sources. Muted feeds
+ * are not polled at all. Per-feed health (latency, last success, errors, items/hour) feeds the
+ * Source manager and /admin.
+ */
+export const rssRegistry = {
+  custom: [] as Feed[],
+  muted: new Set<string>(),
+  stats: new Map<string, FeedStat>(),
+  reload: () => {},
+  list(): Feed[] {
+    return [...envFeeds(), ...this.custom];
+  },
+  stat(url: string): FeedStat {
+    let s = this.stats.get(url);
+    if (!s) this.stats.set(url, (s = { lastOk: null, lastError: null, latencyMs: null, items: [] }));
+    return s;
+  },
+};
+
+const UA = () => process.env.SEC_USER_AGENT || 'PulseTerminal/0.1 (contact: set SEC_USER_AGENT)';
+
+/** Fetch + parse one feed (also used to validate a URL before adding it). */
+export async function fetchFeed(url: string, cache: { etag?: string; modified?: string } = {}) {
   const parser = new Parser({ timeout: 10_000 });
+  const t0 = Date.now();
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA(), Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml', ...(cache.etag ? { 'If-None-Match': cache.etag } : {}), ...(cache.modified ? { 'If-Modified-Since': cache.modified } : {}) },
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (res.status === 304) return { notModified: true as const, latencyMs: Date.now() - t0 };
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  cache.etag = res.headers.get('etag') ?? undefined;
+  cache.modified = res.headers.get('last-modified') ?? undefined;
+  const text = await res.text();
+  if (text.length > 5_000_000) throw new Error('feed too large');
+  const feed = await parser.parseString(text);
+  return { notModified: false as const, feed, latencyMs: Date.now() - t0 };
+}
+
+export function rssAdapter(): Adapter {
+  let stops: (() => void)[] = [];
   return {
-    id: 'rss', stream: 'news', provider: 'RSS (central banks, SEC, BLS, crypto outlets)', mock: false, delayedMin: 0, staleAfterMs: 15 * 60_000,
+    id: 'rss', stream: 'news', provider: 'RSS (central banks, SEC, BLS, publishers)', mock: false, delayedMin: 0, staleAfterMs: 15 * 60_000,
     start(ctx) {
-      // SEC asks automated clients to identify themselves with a contact address.
-      const ua = process.env.SEC_USER_AGENT || 'PulseTerminal/0.1 (contact: set SEC_USER_AGENT)';
-      feeds().forEach((f, i) => {
-        const cache: { etag?: string; modified?: string } = {};
-        const run = async () => {
-          const res = await fetch(f.url, {
-            headers: { 'User-Agent': ua, Accept: 'application/rss+xml, application/xml, text/xml', ...(cache.etag ? { 'If-None-Match': cache.etag } : {}), ...(cache.modified ? { 'If-Modified-Since': cache.modified } : {}) },
-            signal: AbortSignal.timeout(12_000),
-          });
-          if (res.status === 304) return void ctx.hub.touch('news');
-          if (!res.ok) throw new Error(`${f.name}: HTTP ${res.status}`);
-          cache.etag = res.headers.get('etag') ?? undefined;
-          cache.modified = res.headers.get('last-modified') ?? undefined;
-          const feed = await parser.parseString(await res.text());
-          for (const it of feed.items.slice(0, 25).reverse()) {
-            if (!it.title || !it.link) continue;
-            ctx.emitNews({
-              sourceId: f.id, source: f.name, headline: it.title, summary: it.contentSnippet ?? it.summary ?? '', url: it.link,
-              publishedAt: it.isoDate ? Date.parse(it.isoDate) : Date.now(),
-            });
-          }
-          ctx.hub.touch('news');
-        };
-        // stagger feeds so we never burst
-        const t = setTimeout(() => stops.push(poller(run, config.rssIntervalSec * 1000, (e) => {
-        ctx.log.warn(`[rss] ${errText(e)}`);
-        ctx.hub.reportError('news', errText(e));
-      })), i * 1500);
-        stops.push(() => clearTimeout(t));
-      });
+      const startAll = () => {
+        stops.forEach((s) => s());
+        stops = [];
+        rssRegistry.list().filter((f) => !rssRegistry.muted.has(f.id) && !rssRegistry.muted.has(f.url)).forEach((f, i) => {
+          const cache: { etag?: string; modified?: string } = {};
+          const stat = rssRegistry.stat(f.url);
+          const run = async () => {
+            try {
+              const r = await fetchFeed(f.url, cache);
+              stat.latencyMs = r.latencyMs;
+              stat.lastOk = Date.now();
+              stat.lastError = null;
+              if (r.notModified) return void ctx.hub.touch('news');
+              for (const it of r.feed.items.slice(0, 25).reverse()) {
+                if (!it.title || !it.link) continue;
+                ctx.emitNews({
+                  sourceId: f.id, source: f.name, headline: it.title, summary: it.contentSnippet ?? it.summary ?? '', url: it.link,
+                  publishedAt: it.isoDate ? Date.parse(it.isoDate) : Date.now(),
+                });
+                stat.items.push(Date.now());
+              }
+              stat.items = stat.items.filter((t) => Date.now() - t < 3600_000);
+              ctx.hub.touch('news');
+            } catch (e) {
+              stat.lastError = errText(e);
+              throw new Error(`${f.name}: ${errText(e)}`);
+            }
+          };
+          // stagger feeds so we never burst
+          const t = setTimeout(() => stops.push(poller(run, config.rssIntervalSec * 1000, (e) => {
+            ctx.log.warn(`[rss] ${errText(e)}`);
+            ctx.hub.reportError('news', errText(e));
+          })), i * 1500);
+          stops.push(() => clearTimeout(t));
+        });
+      };
+      rssRegistry.reload = startAll;
+      startAll();
     },
     stop() {
       stops.forEach((s) => s());
+      rssRegistry.reload = () => {};
     },
   };
 }

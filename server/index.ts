@@ -16,6 +16,7 @@ import type { AdapterContext } from './adapters/types';
 import { Fanout } from './ws';
 import { createApi } from './http';
 import { createV2 } from './v2';
+import { tuningFeature } from './tuning';
 
 const log = {
   info: (m: string, ...a: unknown[]) => console.log(m, ...a),
@@ -97,6 +98,7 @@ const server = createServer((req, res) => {
 });
 const fanout = new Fanout(snapshot);
 const v2 = createV2({ hub, pipeline, alerts, watchlist: () => watchlist, broadcast: (m) => fanout.broadcast(m) });
+v2.use(tuningFeature(pipeline));
 server.on('upgrade', (req, socket, head) => {
   if (req.url?.split('?')[0] === '/ws') fanout.handleUpgrade(req, socket, head);
   else if (web) void web.upgrade(req, socket, head);

@@ -7,8 +7,9 @@ import { db, schema } from '../db/client';
 import { config } from '../config';
 import { cleanText, cleanUrl } from './sanitize';
 import { jaccard, tagText, tokens } from './tagger';
-import { credibility } from './sources';
-import { impactScore, watchMatches } from './score';
+import { credibility, isMuted } from './sources';
+import { impactScore, watchMatches, type ScoreInput } from './score';
+import type { ScoreWeights } from '../../shared/v2';
 
 interface ClusterState {
   id: string;
@@ -20,6 +21,8 @@ interface ClusterState {
   impact: number;
   breaking: boolean;
   watchHit: boolean;
+  inBook?: boolean;
+  input?: ScoreInput;
   tldr?: string;
   why?: string;
   aiModel?: string;
@@ -40,6 +43,9 @@ export class NewsPipeline extends EventEmitter {
   private clusters = new Map<string, ClusterState>();
   private seen = new Map<string, number>(); // article id / headline hash -> ts
   private watch: WatchItem[] = [];
+  /** set by the portfolio module: does a cluster touch the user's positions? */
+  inBookFn: (c: { tickers: string[]; currencies: string[] }) => boolean = () => false;
+  stats = { ingested: 0, deduped: 0, clustered: 0, muted: 0 };
 
   constructor() {
     super();
@@ -87,6 +93,22 @@ export class NewsPipeline extends EventEmitter {
     }
   }
 
+  /** Re-score every cluster (weights, keywords, sources or positions changed) and push changes. */
+  rescoreAll() {
+    for (const c of this.clusters.values()) {
+      const before = c.impact;
+      this.rescore(c);
+      if (c.impact !== before) this.emit('cluster', this.toClient(c), false);
+    }
+  }
+
+  /** How the current feed would re-rank under candidate weights (Settings → Score tuning preview). */
+  previewRank(w: ScoreWeights, limit = 25) {
+    const rows = [...this.clusters.values()].filter((c) => c.input).map((c) => ({ id: c.id, headline: c.articles[0].headline, source: c.articles[0].source, before: c.impact, after: impactScore(c.input!, w) }));
+    const beforeRank = new Map([...rows].sort((a, b) => b.before - a.before).map((r, i) => [r.id, i + 1]));
+    return rows.sort((a, b) => b.after - a.after).slice(0, limit).map((r, i) => ({ ...r, rankBefore: beforeRank.get(r.id)!, rankAfter: i + 1 }));
+  }
+
   ingest(raw: RawArticle) {
     try {
       this.ingestUnsafe(raw);
@@ -102,7 +124,15 @@ export class NewsPipeline extends EventEmitter {
     const url = cleanUrl(raw.url);
     const id = hash(url !== '#' ? url : `${raw.sourceId}|${headline}`);
     const hh = hash(normHeadline(headline));
-    if (this.seen.has(id) || this.seen.has(hh)) return;
+    this.stats.ingested++;
+    if (isMuted(raw.source, raw.sourceId)) {
+      this.stats.muted++;
+      return;
+    }
+    if (this.seen.has(id) || this.seen.has(hh)) {
+      this.stats.deduped++;
+      return;
+    }
     this.seen.set(id, now);
     this.seen.set(hh, now);
     const summary = cleanText(raw.summary, 500);
@@ -135,6 +165,7 @@ export class NewsPipeline extends EventEmitter {
     let cluster: ClusterState;
     if (best && bestSim >= 0.46) {
       cluster = best;
+      this.stats.clustered++;
     } else {
       cluster = {
         id: `c_${id}`, articles: [], tokens: new Set(), entities: new Set(), firstSeen: now, updatedAt: now,
@@ -170,13 +201,16 @@ export class NewsPipeline extends EventEmitter {
     const sources = new Set(c.articles.map((a) => a.source));
     const union = this.unions(c);
     c.watchHit = watchMatches(this.watch, { headline: c.articles.map((a) => a.headline).join(' '), summary: lead.summary, tickers: union.tickers, currencies: union.currencies });
-    c.impact = impactScore({
-      credibility: Math.max(...c.articles.map((a) => a.cred)),
+    c.inBook = this.inBookFn(union);
+    c.input = {
+      credibility: Math.max(...c.articles.map((a) => credibility(a.source, a.sourceId))),
       severity: Math.max(...c.articles.map((a) => a.severity)),
       clusterSize: sources.size,
       watchHit: c.watchHit,
       centralBank: c.articles.some((a) => a.banks.length > 0),
-    });
+      exposure: c.inBook,
+    };
+    c.impact = impactScore(c.input);
   }
 
   private unions(c: ClusterState) {

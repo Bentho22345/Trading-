@@ -15,6 +15,7 @@ import { Toasts } from './Toasts';
 import { KeyboardShortcuts } from './Shortcuts';
 import { AwayTracker } from './Digest';
 import { Segmented } from './ui';
+import { ThemeSync } from './layout/ThemeSync';
 import { useV2 } from '@/lib/v2';
 
 // Overlays aren't needed for first paint: split them (and cmdk / chart code) out of the main bundle.
@@ -59,19 +60,6 @@ function useOpenedOverlays() {
   const now = { drawer, timeline, palette, shortcuts, settings, digest, brief };
   for (const k of Object.keys(now) as (keyof typeof now)[]) if (now[k]) seen.current[k] = true;
   return seen.current;
-}
-
-function ThemeSync() {
-  const theme = useSettings((s) => s.theme);
-  const cb = useSettings((s) => s.colorblind);
-  const calm = useSettings((s) => s.calm);
-  useEffect(() => {
-    const el = document.documentElement;
-    el.dataset.theme = theme;
-    el.dataset.cb = String(cb);
-    el.classList.toggle('calm', calm);
-  }, [theme, cb, calm]);
-  return null;
 }
 
 export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] }) {

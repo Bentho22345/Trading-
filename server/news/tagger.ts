@@ -55,6 +55,25 @@ const DOMAIN_RULES: [Domain, RegExp][] = [
   ['fx', /\b(forex|FX|currenc(y|ies)|exchange rate|intervention|carry trade|pips?)\b/],
 ];
 
+// ------------------------------------------------------------------ user keyword dictionary
+/** Overrides for built-in severity labels (weight 0 disables one) and custom terms with optional tags. */
+const keywordOverrides = new Map<string, number>();
+let customKeywords: { re: RegExp; weight: number; tag?: string }[] = [];
+
+export function setKeywordDictionary(entries: { term: string; weight: number; tag?: string }[]) {
+  keywordOverrides.clear();
+  const builtin = new Set(SEVERITY.map(([, , l]) => l.toLowerCase()));
+  const custom: typeof customKeywords = [];
+  for (const e of entries) {
+    const term = String(e.term ?? '').trim();
+    if (!term) continue;
+    const weight = Math.max(0, Math.min(40, Number(e.weight) || 0));
+    if (builtin.has(term.toLowerCase())) keywordOverrides.set(term.toLowerCase(), weight);
+    else custom.push({ re: new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i'), weight, tag: e.tag?.trim() || undefined });
+  }
+  customKeywords = custom.slice(0, 300);
+}
+
 // ------------------------------------------------------------------ severity + tags
 export const SEVERITY: [RegExp, number, string][] = [
   [/\bemergency\b/i, 35, 'Emergency'],
@@ -149,10 +168,17 @@ export function tagText(text: string, hints: { tickers?: string[]; category?: st
   if (!domains.size) domains.add('macro');
 
   let severity = 0;
-  for (const [re, w, label] of SEVERITY) {
-    if (re.test(text)) {
+  for (const [re, w0, label] of SEVERITY) {
+    const w = keywordOverrides.get(label.toLowerCase()) ?? w0;
+    if (w > 0 && re.test(text)) {
       severity = Math.max(severity, w);
       tags.add(label);
+    }
+  }
+  for (const k of customKeywords) {
+    if (k.re.test(text)) {
+      if (k.weight > 0) severity = Math.max(severity, k.weight);
+      if (k.tag) tags.add(k.tag);
     }
   }
   if (banks.length) tags.add(banks[0]);

@@ -43,7 +43,7 @@ interface V2Actions {
   setIntel: (b: IntelBlock) => void;
   applyDoc: (c: string, op: 'put' | 'del', d: Doc) => void;
   loadDocs: () => Promise<void>;
-  putDoc: <T extends { id?: string }>(c: DocCollection, d: T) => Promise<T & { id: string }>;
+  putDoc: <T extends object>(c: DocCollection, d: T & { id?: string }) => Promise<T & { id: string }>;
   delDoc: (c: DocCollection, id: string) => Promise<void>;
   openBrief: (id?: string | null, view?: BriefView) => void;
 }

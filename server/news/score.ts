@@ -1,4 +1,8 @@
 import type { WatchItem } from '../../shared/types';
+import { DEFAULT_WEIGHTS, type ScoreWeights } from '../../shared/v2';
+
+/** Live weights (Settings → Score tuning). */
+export const scoring: { weights: ScoreWeights } = { weights: { ...DEFAULT_WEIGHTS } };
 
 export interface ScoreInput {
   credibility: number; // 0..1 (best source in the cluster)
@@ -6,6 +10,8 @@ export interface ScoreInput {
   clusterSize: number;
   watchHit: boolean;
   centralBank: boolean;
+  /** touches a position in the user's book */
+  exposure?: boolean;
 }
 
 /**
@@ -17,8 +23,9 @@ export interface ScoreInput {
  * + 12 when the story touches the user's watchlist
  * + 4 for central-bank stories (they move every asset class)
  */
-export function impactScore(i: ScoreInput): number {
-  const s = 10 + i.credibility * 25 + i.severity + Math.min(18, Math.max(0, i.clusterSize - 1) * 6) + (i.watchHit ? 12 : 0) + (i.centralBank ? 4 : 0);
+export function impactScore(i: ScoreInput, w: ScoreWeights = scoring.weights): number {
+  const s = w.base + i.credibility * w.credibility + i.severity * w.severity + Math.min(w.maxCorroboration, Math.max(0, i.clusterSize - 1) * w.perSource)
+    + (i.watchHit ? w.watchlist : 0) + (i.centralBank ? w.centralBank : 0) + (i.exposure ? w.exposure : 0);
   return Math.max(0, Math.min(100, Math.round(s)));
 }
 
