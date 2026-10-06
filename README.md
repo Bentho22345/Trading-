@@ -3,7 +3,7 @@
 A single-screen news and market-data terminal for FX, crypto and equities & options. It's dense but calm, and built to stay open all day on a second monitor.
 
 ```bash
-npm install && npm run dev      # → http://localhost:3000  (worker on :4000)
+npm install && npm run dev      # → http://localhost:3000  (page, API and live socket on one port)
 npm run setup                   # optional: paste free API keys (real-time stocks/FX) into .env
 ```
 
@@ -59,11 +59,12 @@ tests/             node:test suites (tagger, clustering, scoring, sessions, stre
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | worker (tsx watch, :4000) + Next dev (:3000) |
-| `npm run build && npm start` | production build of the web app + worker |
+| `npm run dev` | one process on :3000: worker + API + WebSocket + Next.js (hot reload) |
+| `npm run doctor` | checks which data sources this machine/network can reach |
+| `npm run build && npm start` | production build, still one process on :3000 (`PORT` honoured) |
 | `npm test` | unit tests |
 | `npm run typecheck` | TypeScript across web + worker |
-| `docker compose up --build` | both services in containers, SQLite in a named volume |
+| `docker compose up --build` | one container on :3000, SQLite in a named volume |
 
 Node 20+ (tested on 22). SQLite lives at `./data/pulse.db` (created automatically; delete it to reset).
 
@@ -219,7 +220,8 @@ Serverless functions can't hold upstream WebSockets, so split it:
 - **Web → Vercel:**
   - set `PULSE_WORKER_URL=https://your-worker.fly.dev` (used for the `/api/*` rewrite at build time)
   - set `NEXT_PUBLIC_WS_URL=wss://your-worker.fly.dev/ws`
-- **Single box:** `docker compose up --build -d`, then open `http://<host>:3000`. The browser connects to `ws://<host>:4000/ws`.
+- **Single box / any Node host (Railway, Render, Fly, a VPS):** run `npm run build && npm start` (or `docker compose up --build -d`). Everything — page, API and live WebSocket — is served on one port (`PORT`), same origin, so it works behind https and preview proxies.
+- **Split (Vercel + worker):** run the worker with `npm run start:worker` (API/WebSocket only) and set `PULSE_WORKER_URL` + `NEXT_PUBLIC_WS_URL` on the Vercel side.
 
 ---
 

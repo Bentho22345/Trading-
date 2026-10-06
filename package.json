@@ -4,16 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n worker,web -c magenta,cyan \"npm:dev:worker\" \"npm:dev:web\"",
-    "dev:web": "next dev -p 3000",
-    "dev:worker": "tsx watch --clear-screen=false server/index.ts",
+    "dev": "tsx watch --clear-screen=false --exclude \"src/**\" --exclude \".next/**\" server/index.ts",
     "build": "next build",
-    "start": "concurrently -k -n worker,web \"npm:start:worker\" \"npm:start:web\"",
+    "start": "tsx server/index.ts --prod",
     "start:web": "next start -p 3000",
-    "start:worker": "tsx server/index.ts",
+    "start:worker": "tsx server/index.ts --prod --api-only",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "setup": "node scripts/setup.mjs"
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "dev:split": "concurrently -k -n worker,web -c magenta,cyan \"tsx watch --clear-screen=false server/index.ts --api-only\" \"next dev -p 3000\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",

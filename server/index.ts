@@ -1,4 +1,7 @@
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { Duplex } from 'node:stream';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import type { Snapshot, StreamId, WatchItem } from '../shared/types';
 import { SYMBOLS, toMeta } from '../shared/symbols';
 import { config, MODE, providers } from './config';
@@ -76,8 +79,21 @@ const api = createApi({
   onReadSaved: () => {},
   clients: () => fanout.size,
 });
-const server = createServer((req, res) => void api(req, res));
-const fanout = new Fanout(server, snapshot);
+// One server, one port: REST at /api, the live socket at /ws, and (unless PULSE_WEB=0) the Next.js
+// web app for everything else. Same origin means it works behind any host, proxy or https preview.
+const embedWeb = process.env.PULSE_WEB !== '0' && !process.argv.includes('--api-only');
+type NextHandlers = { handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>; upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => Promise<void> };
+let web: NextHandlers | null = null;
+const server = createServer((req, res) => {
+  if (req.url?.startsWith('/api/') || !web) return void api(req, res);
+  void web.handle(req, res);
+});
+const fanout = new Fanout(snapshot);
+server.on('upgrade', (req, socket, head) => {
+  if (req.url?.split('?')[0] === '/ws') fanout.handleUpgrade(req, socket, head);
+  else if (web) void web.upgrade(req, socket, head);
+  else socket.destroy();
+});
 
 hub.on('quotes', (qs) => {
   fanout.quotes(qs);
@@ -116,8 +132,18 @@ for (const [id, list] of byStream) {
   });
 }
 
+async function startWeb() {
+  if (!embedWeb) return;
+  const { default: next } = await import('next');
+  const dev = process.env.NODE_ENV !== 'production' && !process.argv.includes('--prod');
+  const app = next({ dev, dir: join(dirname(fileURLToPath(import.meta.url)), '..'), hostname: 'localhost', port: config.port });
+  await app.prepare();
+  web = { handle: app.getRequestHandler() as NextHandlers['handle'], upgrade: app.getUpgradeHandler() as NextHandlers['upgrade'] };
+}
+
+await startWeb();
 server.listen(config.port, config.host, async () => {
-  log.info(`\n  PULSE worker  http://localhost:${config.port}  (mode: ${MODE})`);
+  log.info(`\n  PULSE  http://localhost:${config.port}  (mode: ${MODE}${embedWeb ? '' : ', API/WebSocket only'})`);
   log.info(`  providers: ${Object.entries(providers).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join('+') : v}`).join('  ')}`);
   log.info(`  AI summaries: ${ai.enabled ? `on (${config.aiModel})` : 'off (set ANTHROPIC_API_KEY)'}\n`);
   for (const a of adapters) {

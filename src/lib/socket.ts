@@ -14,8 +14,9 @@ import { playChime } from './sound';
 export function wsUrl() {
   const env = process.env.NEXT_PUBLIC_WS_URL;
   if (env) return env;
-  const { protocol, hostname } = window.location;
-  return `${protocol === 'https:' ? 'wss' : 'ws'}://${hostname}:${process.env.NEXT_PUBLIC_WORKER_PORT ?? '4000'}/ws`;
+  // same origin as the page (wss:// on https), served by the same process
+  const { protocol, host } = window.location;
+  return `${protocol === 'https:' ? 'wss' : 'ws'}://${host}/ws`;
 }
 
 export function connect(): () => void {

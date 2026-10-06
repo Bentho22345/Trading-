@@ -26,7 +26,10 @@ export function ConnectionStatus() {
   const worst = statuses.some((s) => s.state === 'down') ? 'down' : statuses.some((s) => s.state !== 'live') ? 'stale' : 'live';
   const overall = conn !== 'open' ? (conn === 'connecting' ? 'connecting' : 'down') : worst;
   const color = STATE_COLOR[overall];
-  const label = conn === 'closed' ? 'Offline — reconnecting' : conn === 'connecting' ? 'Connecting' : overall === 'live' ? 'Live' : overall === 'down' ? 'Degraded' : 'Partially stale';
+  // every external source failing at once almost always means the network blocks outbound requests
+  const external = statuses.filter((s) => s.id !== 'banks');
+  const allBlocked = conn === 'open' && external.length > 0 && external.every((s) => s.state === 'down');
+  const label = conn === 'closed' ? 'Offline — reconnecting' : conn === 'connecting' ? 'Connecting' : allBlocked ? 'Sources unreachable' : overall === 'live' ? 'Live' : overall === 'down' ? 'Degraded' : 'Partially stale';
 
   return (
     <div ref={ref} className="relative">
@@ -43,6 +46,11 @@ export function ConnectionStatus() {
               <span className="font-semibold text-text">Data streams</span>
               <span className="num text-[10px] text-faint">browser ⇄ worker {rtt ?? '—'}ms · last msg {lastMsgAt ? timeAgo(lastMsgAt, now) : '—'}</span>
             </div>
+            {allBlocked ? (
+              <div className="mb-2 rounded-md border border-down/30 bg-down/10 px-2 py-1.5 text-[11px] text-down">
+                No data source is reachable from the machine running PULSE. Its network (office/school Wi-Fi, VPN, firewall or a hosted preview) is blocking outbound requests. Run <span className="num">npm run doctor</span> there to see which sites are blocked.
+              </div>
+            ) : null}
             <ul className="divide-y divide-line">
               {statuses.map((s) => (
                 <li key={s.id} className="flex items-start gap-2 py-1.5">

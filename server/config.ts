@@ -44,7 +44,7 @@ export const providers = {
 };
 
 export const config = {
-  port: num('PORT', num('PULSE_WORKER_PORT', 4000)),
+  port: num('PORT', num('PULSE_WORKER_PORT', process.env.PULSE_WEB === '0' || process.argv.includes('--api-only') ? 4000 : 3000)),
   host: env('PULSE_WORKER_HOST', '0.0.0.0'),
   dbPath: env('DATABASE_PATH', './data/pulse.db'),
   corsOrigin: env('CORS_ORIGIN', '*'),

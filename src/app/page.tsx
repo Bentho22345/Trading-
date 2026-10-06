@@ -6,7 +6,7 @@ import { Terminal } from '@/components/Terminal';
 export const dynamic = 'force-dynamic';
 
 async function initialNews(): Promise<NewsCluster[]> {
-  const worker = process.env.PULSE_WORKER_URL || 'http://127.0.0.1:4000';
+  const worker = process.env.PULSE_WORKER_URL || `http://127.0.0.1:${process.env.PORT || 3000}`;
   try {
     const res = await fetch(`${worker}/api/news?limit=12`, { cache: 'no-store', signal: AbortSignal.timeout(600) });
     return res.ok ? ((await res.json()) as NewsCluster[]) : [];

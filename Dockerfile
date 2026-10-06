@@ -10,9 +10,7 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ARG PULSE_WORKER_URL=http://worker:4000
-ARG NEXT_PUBLIC_WS_URL=
-ENV PULSE_WORKER_URL=$PULSE_WORKER_URL NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM node:22-bookworm-slim AS run
@@ -21,5 +19,5 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 COPY --from=build /app ./
 RUN mkdir -p /app/data && chown -R node:node /app/data
 USER node
-EXPOSE 3000 4000
-CMD ["npm", "run", "start:web"]
+EXPOSE 3000
+CMD ["npm", "start"]

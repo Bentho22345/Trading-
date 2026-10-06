@@ -1,4 +1,5 @@
-import type { Server } from 'node:http';
+import type { IncomingMessage } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { ClientMsg, Quote, ServerMsg, Snapshot } from '../shared/types';
 import { config } from './config';
@@ -21,9 +22,10 @@ export class Fanout {
   private clients = new Set<Client>();
   private timers: NodeJS.Timeout[] = [];
 
-  constructor(server: Server, private snapshot: () => Snapshot) {
+  constructor(private snapshot: () => Snapshot) {
+    // noServer: the HTTP server routes /ws upgrades here and everything else (e.g. Next.js HMR) elsewhere.
     // Compress only large frames (snapshot, bursts); small quote batches stay uncompressed to save CPU.
-    this.wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024, perMessageDeflate: { threshold: 4096 } });
+    this.wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: { threshold: 4096 } });
     this.wss.on('connection', (ws, req) => {
       const origin = req.headers.origin;
       if (config.corsOrigin !== '*' && origin && !config.corsOrigin.split(',').includes(origin)) {
@@ -65,6 +67,10 @@ export class Fanout {
         c.ws.ping();
       }
     }, 20_000));
+  }
+
+  handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.wss.emit('connection', ws, req));
   }
 
   get size() {
