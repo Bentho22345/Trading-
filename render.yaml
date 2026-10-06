@@ -18,3 +18,11 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY    # optional: AI summaries
         sync: false
+      - key: FRED_API_KEY         # optional: real yields & breakevens (daily)
+        sync: false
+      - key: SEC_USER_AGENT       # required by SEC EDGAR: "Your Name you@example.com"
+        sync: false
+      - key: PULSE_SECRET         # encrypts integration credentials at rest
+        generateValue: true
+      - key: PULSE_TZ             # home time zone for brief schedules
+        value: America/New_York

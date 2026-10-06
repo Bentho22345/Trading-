@@ -4,9 +4,7 @@ import type { NewsCluster } from '@shared/types';
 import { useStore } from '@/lib/store';
 import { useNow } from '@/lib/hooks';
 import { DOMAIN_LABEL, primaryDomain, timeAgo, pairLabel } from '@/lib/format';
-import { copyText, shareCard, storyForChat } from '@/lib/share';
 import { useV2 } from '@/lib/v2';
-import { addNote } from './personal/Journal';
 import { Chip, DemoChip, Icon } from './ui';
 
 /** CSS-only (transform) so cards re-rendering every second don't touch the animation library. */
@@ -63,10 +61,10 @@ function CardMenu({ c }: { c: NewsCluster }) {
       <button onClick={(e) => { e.stopPropagation(); setOpen(!open); }} className="rounded-md px-1 text-faint opacity-0 transition-opacity hover:text-text group-hover:opacity-100 focus:opacity-100" aria-label="More actions">⋯</button>
       {open ? (
         <span className="absolute right-0 top-5 z-30 block w-44 rounded-lg border border-line bg-panel-solid p-1 shadow-xl" onMouseLeave={() => setOpen(false)}>
-          <button className={item} onClick={run(async () => { await copyText(storyForChat(c)); useStore.getState().pushToast({ kind: 'info', title: 'Copied for chat' }); })}>Copy for chat</button>
-          <button className={item} onClick={run(() => shareCard({ kicker: `${DOMAIN_LABEL[primaryDomain(c.domains)]} · impact ${c.impact}`, title: c.headline, body: c.tldr ?? c.summary.slice(0, 240), meta: `${c.source}${c.articles.length > 1 ? ` +${c.articles.length - 1} sources` : ''} · ${new Date(c.publishedAt).toLocaleString()}`, filename: `pulse-story-${c.id}.png` }))}>Export PNG card</button>
+          <button className={item} onClick={run(async () => { const { copyText, storyForChat } = await import('@/lib/share'); await copyText(storyForChat(c)); useStore.getState().pushToast({ kind: 'info', title: 'Copied for chat' }); })}>Copy for chat</button>
+          <button className={item} onClick={run(async () => (await import('@/lib/share')).shareCard({ kicker: `${DOMAIN_LABEL[primaryDomain(c.domains)]} · impact ${c.impact}`, title: c.headline, body: c.tldr ?? c.summary.slice(0, 240), meta: `${c.source}${c.articles.length > 1 ? ` +${c.articles.length - 1} sources` : ''} · ${new Date(c.publishedAt).toLocaleString()}`, filename: `pulse-story-${c.id}.png` }))}>Export PNG card</button>
           <button className={item} onClick={run(() => useV2.getState().set({ explain: { kind: 'story', ref: c.id, label: c.headline }, copilotOpen: true }))}>Explain this (E)</button>
-          <button className={item} onClick={run(async () => { await addNote({ kind: 'story', ref: c.id, label: c.headline, ts: c.publishedAt }, c.headline.slice(0, 80), `[${c.headline}](${c.url})\n\n`); useV2.getState().set({ journalOpen: true }); })}>Add note</button>
+          <button className={item} onClick={run(async () => { const { addNote } = await import('./personal/Journal'); await addNote({ kind: 'story', ref: c.id, label: c.headline, ts: c.publishedAt }, c.headline.slice(0, 80), `[${c.headline}](${c.url})\n\n`); useV2.getState().set({ journalOpen: true }); })}>Add note</button>
         </span>
       ) : null}
     </span>

@@ -11,6 +11,88 @@ That's it: by default it runs in **live mode** with real news (central-bank, SEC
 
 ---
 
+## PULSE 2.0 — your morning-to-close trading desk
+
+PULSE 2.0 adds briefings, a fully editable workspace, ten new intelligence panels, an AI copilot, replay and outbound integrations on top of v1. Still one process and one port: `npm install && npm run dev`, open http://localhost:3000. It runs with **zero keys**: keyless live sources where they exist, and clearly labelled demo data with a "connect a provider" state everywhere else. Architecture, folders and provider choices are in [`docs/PULSE-2.md`](docs/PULSE-2.md).
+
+### What's new
+
+| Area | Highlights |
+| --- | --- |
+| **Briefings** | **Morning Brief** (press **M**) opens automatically on the first visit of the day. Sections: take, overnight scoreboard, top stories × your relevance, calendar with average surprise and meeting clashes, your book, key levels, rates path, sentiment, week ahead, yesterday's scorecard and market structure. **Handoff cards** (Asia→London, London→NY), **End-of-Day Wrap**, **Weekly Review**. **Listen mode** (chaptered TTS), **archive** with "what changed" diff, export (Markdown, HTML email, JSON, PDF via print), and **Regenerate now**. AI narrative when a key is set, otherwise a deterministic template. |
+| **Brief Editor** | Drag to reorder, toggle, resize and configure sections. Tone (terse / analyst / ELI5) and length (50 / 150 / 300 words). Multiple profiles, each with its own per-weekday schedule, time zone and destinations. Live preview from current data. Import/export templates as JSON. |
+| **Workspaces** | 12-column snap grid: drag to move, drag corners to resize, animated reflow, undo/redo (⌘Z / ⇧⌘Z), reset. Named workspaces (switch with **1–9**) with time-of-day and earnings-day auto-switching. A widget library supports multiple instances (e.g. an FX-only and a crypto-only feed). **Pop-out** panels and **wall/kiosk mode** (`/wall?w=news,heatmap&s=20`) all share **one** upstream WebSocket (Web Locks leader election + BroadcastChannel, with failover). |
+| **Settings Center** (`,`) | Searchable: theme editor (4 presets, domain/up/down colours with a WCAG contrast checker, blur, radius, density, fonts), score tuning with a live re-rank preview, keyword dictionary, source manager (add any RSS/Atom feed, server-validated, with per-source health, latency, items/hour, credibility and mute), ticker composer, shortcut remapping with conflict detection, time zones/clocks/quiet hours/custom sessions, portfolio, levels, alert routing, audio, integrations, AI budget, backup/import/sync across devices. |
+| **Playbooks** (**Y**) | Scenarios per release ("if actual − consensus > 50k → USDJPY up, gold down"). Evaluated automatically when the number posts, highlighted with a ring pulse, and graded at +5m / +30m / +2h. Includes a template library (NFP, CPI, FOMC, ECB) and a test-print sandbox. |
+| **Smart feeds** | A visual query builder ⇄ text query: `(asset_class = FX AND currency IN [JPY, CHF]) OR (tag = "Central Banks" AND impact > 60) NOT source = X`. Feeds become tabs with a matches/hour sparkline, can carry alerts, and can be used as brief sections. |
+| **Intelligence** | Rates & yields (curve vs prior close, 2s10s/5s30s, global 10Ys, BTP–Bund, real yields, auctions), rate-path probabilities + speaker tracker, portfolio & exposure (treemap, live P&L in the header, privacy blur **P**, stress tiles), historical reaction analyzer (scatter, base rates, surprise index), theme radar + theme pages, commodities/DXY, correlation matrix with break flags, risk regime (also tints the ambient background), positioning & flows (COT, stablecoins, Form 4), EDGAR filings + central-bank statement diffs, social mention velocity, prediction markets, market structure (holidays, half-days, opex, quad witching, rebalances, rolls, month/quarter-end, DST) on the session clock. |
+| **Copilot** (**⌘J**) | Ask Pulse answers only from PULSE's own articles, quotes, calendar and intel via server-side tool use, with numbered citations. **Explain this**: press **E** over a card or use the ⋯ menu. Daily token budget, caching, and a small model for classification. |
+| **Journal** (**N**) | A daily journal pre-filled with top stories, alerts, playbook outcomes and P&L. Notes can be pinned to stories, tickers, chart points or events. Levels drawn on charts feed alerts and the brief. Search, Markdown export and Notion export. |
+| **Replay** (**R**) | Replay any archived day at 1–60× with a scrubber. Ticker, feed and banners behave live, and alert rules re-run ("would this have fired?"). A `REPLAY · 14:32:05 · 10×` banner and film grain make it unmistakable. |
+| **Alerts 2.0** | Per-alert routes (toast, push, email, Slack, Telegram, Discord, SMS, webhook), severity, quiet hours, digest batching, escalation ("not acked in 2m → SMS"), history with ack/snooze and hit stats, and a plain-English builder ("tell me if BTC drops 5% while funding is positive"). |
+| **More** | Audio squawk with earcons and push-to-mute (⇧M). PNG share cards with attribution and disclaimer. Copy for chat. CSV/JSON/Markdown/PDF exports. Installable **PWA** (`/m`) with web push and an offline brief. `/admin` data-source health: latency p50/p95, error rates, quota meters, runtime mock/live switching per stream, pipeline stats, AI cost, dead letters. |
+
+### Data cadence (always labelled in the UI)
+
+| Data | Source | Cadence |
+| --- | --- | --- |
+| Crypto | Coinbase WebSocket | live |
+| US equities | Stooq (keyless) · Finnhub/Alpaca (keyed) | ~15m delayed · live |
+| FX | Stooq · Twelve Data/Finnhub | delayed (per-quote age) · polled |
+| Indices, commodities, yields, DXY | Stooq | delayed |
+| Real yields & breakevens | FRED (free key) | **daily** |
+| Treasury auctions | Treasury Fiscal Data | as announced / daily |
+| Commitments of Traders | CFTC | **weekly, as of Tuesday** |
+| Filings | SEC EDGAR | live as filed |
+| Prediction markets | Polymarket, Kalshi | live market odds (not forecasts) |
+| Stablecoin supply | DefiLlama | daily |
+| Fed rate path | estimate from 2Y vs policy rate | **estimate** |
+| ECB/BoE/BoJ rate paths, ETF flows, exchange netflows, token unlocks, short interest, FX option expiries | no free source | **demo only** ("connect a provider") |
+
+### Keys & OAuth: how to get each one
+
+All keys go in `.env` (`npm run setup` writes the common ones). Integration credentials are entered in **Settings → Integrations**, stored **encrypted at rest** (AES-256-GCM, key from `PULSE_SECRET` or an auto-generated `data/secret.key`), and never sent back to the browser.
+
+- **Anthropic**: console.anthropic.com → API keys → `ANTHROPIC_API_KEY`. Cap spend with `AI_DAILY_TOKEN_BUDGET` or in Settings → AI.
+- **FRED**: fred.stlouisfed.org → My Account → API Keys → `FRED_API_KEY`.
+- **SEC EDGAR**: no key, but set `SEC_USER_AGENT="Your Name you@example.com"` (required by SEC fair access; PULSE stays far below 10 req/s).
+- **Alpaca** (read-only positions): alpaca.markets → API keys. Paper by default; set `ALPACA_LIVE=1` for live. PULSE only calls `GET /v2/positions` and never places orders.
+- **Email**: any SMTP. Gmail: enable 2-Step Verification, create an App Password, then use `smtp.gmail.com:465`. Outlook/365: `smtp.office365.com:587`.
+- **Slack**: create an app → Incoming Webhooks → paste the URL. **Discord**: channel → Integrations → Webhooks.
+- **Telegram**: @BotFather → `/newbot` for a token; message the bot, then read your `chat.id` from `https://api.telegram.org/bot<TOKEN>/getUpdates`.
+- **Twilio SMS** (critical escalation only): Account SID, Auth token, From and To numbers.
+- **Notion**: notion.so/my-integrations → New integration → share a database with it → paste the token and database id.
+- **Google/Outlook Calendar (out)**: add the *Calendar (subscribe)* integration and subscribe to the private ICS link it shows.
+- **Your calendar (in)**: paste your calendar's secret iCal address. The brief then warns "you're in a meeting during CPI".
+- **Google Sheets**: File → Share → Publish to web → CSV, then paste the link to import positions.
+- **Web push**: Settings → Integrations → *Enable on this device* (VAPID keys are generated automatically).
+
+### Scheduling briefs (the always-on worker runs the jobs)
+
+Briefs, handoffs, the EOD wrap, the weekly review, closing snapshots, playbook grading, intel refreshes, theme clustering, correlations, tick downsampling and the outbound queue all run **inside the server process** on a minute scheduler. There is no external cron.
+
+- Edit times per weekday and time zone in the **Brief Editor** (press **M**, then **Edit**). Defaults: Morning Brief 06:30 (home TZ), handoffs 07:00 London / 08:00 New York, EOD 17:05 NY, Weekly Fri 17:15 NY.
+- If the server was down at the scheduled time, it builds today's brief on start-up (catch-up). **Regenerate now** rebuilds it on demand.
+- To deliver by email, Slack or Telegram, tick destinations in the Brief Editor. Failed sends retry with exponential backoff and land in the dead-letter list on `/admin`.
+- **Deployment note:** use an always-on host (a Render/Railway/Fly instance, Docker or a VM). Serverless hosts such as Netlify and Vercel functions can't run the scheduler or hold WebSockets. On Render's free plan the service sleeps, so scheduled briefs only run while it's awake. Use a paid instance for reliable schedules.
+
+### Using Replay
+
+PULSE archives every tick it receives: raw for one day, then 1-second, then 1-minute bars, with a retention cap of `REPLAY_RETENTION_DAYS` (default 30). Press **R** (or use the header button), pick a day and an optional start time, then play at 1–60×. Drag the scrubber, which keeps momentum when released. Your current alert rules are re-evaluated against the archived ticks and headlines, and alerts that fired at the time are replayed too. **Exit to live** restores the live terminal.
+
+### Backup & restore
+
+**Settings → Backup & sync → Export JSON** saves one file with your theme, layout, workspaces, brief profiles, playbooks, smart feeds, positions, journal, levels, alert routes, sources, score weights, watchlist and alerts. Integration secrets are deliberately excluded. **Import** restores it on any PULSE server. With sync on, other browsers pointed at the same server adopt the newest settings automatically. To back up everything, including history, stop the server and copy `data/` (`pulse.db*` plus `secret.key`).
+
+### Tests
+
+`npm test` runs 29 unit tests, covering:
+- the original news pipeline
+- the rules-engine parser and evaluator, the playbook evaluator, the surprise index, correlation maths and the regime score
+- the market-structure calendar, the brief section builders, the narrative and the brief diff
+- the grid layout maths, smart-alert parsing, CSV and ICS parsing, credential encryption
+- payload formatting for the email, Slack, Telegram and Markdown destinations
+
 ## Architecture
 
 ```
