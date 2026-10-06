@@ -30,7 +30,13 @@ const TickerDrawer = dynamic(() => import('./Drawer').then((m) => m.TickerDrawer
 const StoryTimeline = dynamic(() => import('./Timeline').then((m) => m.StoryTimeline), { ssr: false });
 const CommandPalette = dynamic(() => import('./CommandPalette').then((m) => m.CommandPalette), { ssr: false });
 const ShortcutSheet = dynamic(() => import('./Shortcuts').then((m) => m.ShortcutSheet), { ssr: false });
-const SettingsModal = dynamic(() => import('./SettingsModal').then((m) => m.SettingsModal), { ssr: false });
+const SettingsCenter = dynamic(() => import('./settings/SettingsCenter').then((m) => m.SettingsCenter), { ssr: false });
+const CopilotPanel = dynamic(() => import('./power/Copilot').then((m) => m.CopilotPanel), { ssr: false });
+const JournalOverlay = dynamic(() => import('./personal/Journal').then((m) => m.JournalOverlay), { ssr: false });
+const PlaybooksManager = dynamic(() => import('./personal/Playbooks').then((m) => m.PlaybooksManager), { ssr: false });
+const FeedBuilder = dynamic(() => import('./power/FeedBuilder').then((m) => m.FeedBuilder), { ssr: false });
+const Replay = dynamic(() => import('./power/Replay').then((m) => m.Replay), { ssr: false });
+const Squawk = dynamic(() => import('./power/Squawk').then((m) => m.Squawk), { ssr: false });
 const DigestModal = dynamic(() => import('./Digest').then((m) => m.DigestModal), { ssr: false });
 const MorningBrief = dynamic(() => import('./brief/MorningBrief').then((m) => m.MorningBrief), { ssr: false });
 const BriefAutoOpen = dynamic(() => import('./brief/MorningBrief').then((m) => m.BriefAutoOpen), { ssr: false });
@@ -66,6 +72,11 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
   const hydrateSettings = useSettings((s) => s.hydrate);
   const ws = useActiveWorkspace();
   const libraryOpen = useV2((s) => s.libraryOpen);
+  const settingsCenter = useV2((s) => !!s.settingsCenter);
+  const copilotOpen = useV2((s) => s.copilotOpen);
+  const journalOpen = useV2((s) => s.journalOpen);
+  const playbooksOpen = useV2((s) => s.playbooksOpen);
+  const feedBuilder = useV2((s) => !!s.feedBuilder);
   const focus = useSettings((s) => s.focus);
   const editing = useStore((s) => s.layoutEditing);
   const overlays = useOpenedOverlays();
@@ -74,7 +85,11 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
 
   useEffect(() => {
     hydrateSettings();
-    return connect();
+    if (new URLSearchParams(location.search).get('brief')) useV2.getState().openBrief(null);
+    // legacy settings button / palette entry opens the new Settings Center
+    const unsub = useStore.subscribe((st) => { if (st.settingsOpen) { useStore.getState().set({ settingsOpen: false }); useV2.getState().set({ settingsCenter: 'appearance' }); } });
+    const stop = connect();
+    return () => { unsub(); stop(); };
   }, [hydrateSettings]);
 
   const feed = (
@@ -125,10 +140,16 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
       {overlays.timeline && <StoryTimeline />}
       {overlays.palette && <CommandPalette />}
       {overlays.shortcuts && <ShortcutSheet />}
-      {overlays.settings && <SettingsModal />}
       {overlays.digest && <DigestModal />}
       {overlays.brief && <MorningBrief />}
       <BriefAutoOpen />
+      {settingsCenter ? <SettingsCenter /> : null}
+      {copilotOpen ? <CopilotPanel /> : null}
+      {journalOpen ? <JournalOverlay /> : null}
+      {playbooksOpen ? <PlaybooksManager /> : null}
+      {feedBuilder ? <FeedBuilder /> : null}
+      <Replay />
+      <Squawk />
       <KeyboardShortcuts />
       <WorkspaceAutoSwitch />
       {libraryOpen ? <WidgetLibrary /> : null}

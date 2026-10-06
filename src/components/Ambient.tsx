@@ -1,6 +1,7 @@
 'use client';
 import { useStore } from '@/lib/store';
 import { useCalm } from '@/lib/hooks';
+import { useV2 } from '@/lib/v2';
 
 /**
  * Near-subliminal gradient mesh. The drift animates in coarse steps (~1 per second): the
@@ -10,8 +11,10 @@ import { useCalm } from '@/lib/hooks';
  */
 export function Ambient() {
   const breadth = useStore((s) => s.analytics?.breadth ?? 0);
+  // the cross-asset regime (risk-on/off) drives the tint when available, breadth otherwise
+  const regime = useV2((s) => (s.intel.regime?.data as { score?: number } | null | undefined)?.score);
   const calm = useCalm();
-  const b = Math.max(-1, Math.min(1, breadth));
+  const b = Math.max(-1, Math.min(1, regime !== undefined ? regime / 100 : breadth));
   // 250 (violet) neutral → 150 (green) when broad rally, → 355 (red) when broad sell-off
   const hue = b >= 0 ? 250 - b * 100 : 250 + -b * 105;
   const anim = calm ? 'none' : undefined;

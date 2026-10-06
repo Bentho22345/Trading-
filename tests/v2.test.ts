@@ -169,3 +169,97 @@ test('brief diff: detects new/dropped stories and changed take', () => {
   assert.deepEqual(d.storiesDropped.map((s) => s.headline), ['A story']);
   assert.equal(d.storiesKept[0].rankFrom, 2);
 });
+
+// ------------------------------------------------------------------ playbooks, quant, grid, parsers, destinations
+const PB = await import('../shared/playbook');
+const Q = await import('../shared/quant');
+const G = await import('../shared/grid');
+const { parseAlertText, describeRule, inQuietHours } = await import('../server/alerts2');
+const { parseCsv } = await import('../server/portfolio');
+const { parseIcs } = await import('../server/integrations');
+const { encrypt, decrypt } = await import('../server/integrations/crypto');
+const R = await import('../server/brief/render');
+
+test('playbook: event matching, scenario selection and grading', () => {
+  const nfp = { ...PB.PLAYBOOK_TEMPLATES[0], id: 'p', createdAt: 0 };
+  assert.ok(PB.matchesEvent(nfp, { title: 'Nonfarm Payrolls', currency: 'USD' }));
+  assert.ok(!PB.matchesEvent(nfp, { title: 'Nonfarm Payrolls', currency: 'EUR' }));
+  assert.equal(PB.selectScenario(nfp, 250, 150)?.id, 'beat');
+  assert.equal(PB.selectScenario(nfp, 60, 150)?.id, 'miss');
+  assert.equal(PB.selectScenario(nfp, 160, 150)?.id, 'inline');
+  const g = PB.gradeCheck({ symbol: 'USDJPY', direction: 'up', base: 150 }, { m5: 150.2, m30: 149.9, h2: null });
+  assert.equal(g.hits.m5, true);
+  assert.equal(g.hits.m30, false);
+  assert.equal(g.hits.h2, undefined);
+  assert.deepEqual(PB.hitRate([{ checks: [g] }], 'm5'), { hits: 1, total: 1, rate: 1 });
+});
+
+test('quant: correlation, breaks, regime and surprise index', () => {
+  const a = [100, 101, 102, 101, 103, 104, 103, 105];
+  const b = a.map((x) => x * 2);
+  const c = a.map((x) => 300 - x);
+  const m = Q.correlationMatrix([a, b, c]);
+  assert.ok(m[0][1] > 0.99);
+  assert.ok(m[0][2] < -0.99);
+  assert.equal(Q.correlationBreaks(['A', 'B'], [[1, -0.2], [-0.2, 1]], [[1, 0.6], [0.6, 1]], 0.5).length, 1);
+  const on = Q.regimeScore({ spxPct: 1.2, vixPct: -8, vixLevel: 13, hygPct: 1, usdjpyPct: 0.5, goldPct: -0.8, btcPct: 4 });
+  const off = Q.regimeScore({ spxPct: -2, vixPct: 20, vixLevel: 32, hygPct: -2, usdjpyPct: -1, goldPct: 2, btcPct: -6 });
+  assert.equal(on.label, 'risk-on');
+  assert.equal(off.label, 'risk-off');
+  assert.ok(on.score <= 100 && off.score >= -100);
+  const t0 = Date.parse('2026-09-01');
+  const s = Q.surpriseIndex([{ series: 'cpi', time: t0, actual: 0.4, consensus: 0.3 }, { series: 'cpi', time: t0 + 86400_000, actual: 0.5, consensus: 0.3 }, { series: 'jobless', time: t0 + 2 * 86400_000, actual: 250, consensus: 220, lowerIsBetter: true }], 30, t0 + 3 * 86400_000);
+  assert.ok(s.series.length === 3);
+  assert.ok(s.series[1].v > s.series[0].v, 'positive surprises push the index up');
+  assert.deepEqual(Q.baseRate([{ surprise: 100, move: 0.2 }, { surprise: 80, move: -0.1 }, { surprise: 10, move: 0.5 }], 50, 'beat'), { n: 2, up: 1, down: 1 });
+});
+
+test('grid: move pushes collisions down, compaction, placement', () => {
+  const items = [{ id: 'a', x: 0, y: 0, w: 4, h: 4 }, { id: 'b', x: 0, y: 4, w: 4, h: 4 }, { id: 'c', x: 4, y: 0, w: 4, h: 4 }];
+  const moved = G.moveItem(items, 'c', 0, 0);
+  const c = moved.find((i) => i.id === 'c')!;
+  assert.deepEqual([c.x, c.y], [0, 0]);
+  for (const i of moved) for (const j of moved) assert.ok(!G.collides(i, j), `${i.id} overlaps ${j.id}`);
+  const r = G.resizeItem(items, 'a', 8, 6);
+  assert.equal(r.find((i) => i.id === 'a')!.w, 8);
+  assert.deepEqual(G.placeNew(items, 4, 4), { x: 8, y: 0 });
+  assert.equal(G.clampItem({ id: 'x', x: 11, y: -3, w: 4, h: 1 }).x, 8);
+});
+
+test('smart alerts: plain-English parsing and description', () => {
+  const r = parseAlertText('tell me if BTC drops 5% in 1h while funding is positive')!;
+  assert.deepEqual([r.kind, r.symbol, r.pct, r.windowMin, r.moveDir], ['pct_move', 'BTC', 5, 60, 'down']);
+  assert.deepEqual(r.conditions, [{ metric: 'funding', op: '>', value: 0 }]);
+  const lvl = parseAlertText('EURUSD above 1.18')!;
+  assert.deepEqual([lvl.kind, lvl.symbol, lvl.level, lvl.direction], ['price_cross', 'EURUSD', 1.18, 'above']);
+  assert.equal(parseAlertText('headlines mentioning intervention')?.keyword, 'intervention');
+  assert.match(describeRule(r), /BTC moves down 5% within 1h while funding > 0/);
+  assert.equal(inQuietHours(Date.parse('2026-10-06T03:00:00Z'), 'UTC', { enabled: true, start: '22:00', end: '06:30' }), true);
+  assert.equal(inQuietHours(Date.parse('2026-10-06T12:00:00Z'), 'UTC', { enabled: true, start: '22:00', end: '06:30' }), false);
+});
+
+test('portfolio CSV, ICS parsing and credential encryption', () => {
+  const rows = parseCsv('Symbol,Quantity,Avg Price,Sector\nnvda,50,120.5,Semis\nEURUSD,-100000,1.15,\n,,\n');
+  assert.deepEqual(rows.map((r) => [r.symbol, r.qty, r.avgPrice]), [['NVDA', 50, 120.5], ['EURUSD', -100000, 1.15]]);
+  const start = new Date(Date.now() + 3600_000).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const ev = parseIcs(`BEGIN:VCALENDAR\nBEGIN:VEVENT\nDTSTART:${start}\nDTEND:${start}\nSUMMARY:Team sync\nEND:VEVENT\nEND:VCALENDAR`);
+  assert.equal(ev[0].title, 'Team sync');
+  const enc = encrypt({ token: 'secret-value' });
+  assert.ok(!enc.includes('secret-value'));
+  assert.deepEqual(decrypt(enc), { token: 'secret-value' });
+  assert.equal(decrypt('v1:bad:data:here'), null);
+});
+
+test('destinations: payload formatting for email, Slack, Telegram, Markdown', () => {
+  const brief = {
+    id: 'b', profileId: 'morning', profileName: 'Morning Brief', kind: 'morning', date: '2026-10-06', createdAt: 0, headline: 'Yen slides <script>', tz: 'UTC', hash: '', calls: [],
+    take: { text: 'Overnight, the yen slid & gold rose.', ai: false },
+    sections: [{ id: 's', type: 'stories', title: 'Top stories', size: 'full', data: { stories: [{ id: '1', headline: 'BoJ hints', tldr: 'Hike coming.', why: 'Rates matter.', impact: 70, relevance: 1, score: 70, inBook: true, domains: [], sources: [{ source: 'Reuters', url: 'https://x.test/a' }], publishedAt: 0 }] } }],
+  } as never;
+  const html = R.toHtmlEmail(brief, 'https://pulse.test');
+  assert.ok(html.includes('&lt;script&gt;') && !html.includes('<script>'), 'HTML is escaped');
+  assert.ok(html.includes('not investment advice'));
+  assert.match(R.toSlack(brief), /<https:\/\/x\.test\/a\|Reuters>/);
+  assert.match(R.toTelegram(brief), /<b>Yen slides &lt;script&gt;<\/b>/);
+  assert.match(R.toMarkdown(brief), /\*\*BoJ hints\*\* 📌/);
+});

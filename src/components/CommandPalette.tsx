@@ -1,7 +1,11 @@
 'use client';
 import { Command } from 'cmdk';
 import { useStore, type FeedFilter } from '@/lib/store';
-import { useSettings, PANEL_LABELS, type PanelId } from '@/lib/settings';
+import { useSettings } from '@/lib/settings';
+import { WIDGETS, useWorkspaces } from '@/lib/workspaces';
+import { useDocs } from '@/lib/v2';
+import type { SmartFeed } from '@shared/v2';
+import { SETTINGS_SECTIONS } from './settings/SettingsCenter';
 import { pairLabel } from '@/lib/format';
 import { Overlay } from './Overlay';
 import { Icon, Kbd } from './ui';
@@ -16,6 +20,8 @@ export function CommandPalette() {
   const quotes = useStore((s) => (s.paletteOpen ? s.quotes : EMPTY));
   const set = useStore((s) => s.set);
   const settings = useSettings();
+  const workspaces = useWorkspaces();
+  const feeds = useDocs<SmartFeed>('smart_feeds');
   const close = () => set({ paletteOpen: false });
   const run = (fn: () => void) => () => {
     close();
@@ -55,15 +61,27 @@ export function CommandPalette() {
             <Command.Item value="toggle high impact only" onSelect={run(() => set({ highImpactOnly: !useStore.getState().highImpactOnly }))} className={item}><Icon name="sparkle" size={13} />Toggle high impact only</Command.Item>
             <Command.Item value="toggle breaking only" onSelect={run(() => set({ breakingOnly: !useStore.getState().breakingOnly }))} className={item}><Icon name="sparkle" size={13} />Toggle breaking only <span className="ml-auto"><Kbd>B</Kbd></span></Command.Item>
           </Command.Group>
+          <Command.Group heading="Workspaces" className={group}>
+            {workspaces.map((w, i) => <Command.Item key={w.id} value={`workspace ${w.name}`} onSelect={run(() => settings.set({ activeWorkspace: w.id, focus: false }))} className={item}><Icon name="layout" size={13} />Switch to {w.name}{i < 9 ? <span className="ml-auto"><Kbd>{i + 1}</Kbd></span> : null}</Command.Item>)}
+            <Command.Item value="edit layout workspace" onSelect={run(() => set({ layoutEditing: true }))} className={item}><Icon name="layout" size={13} />Edit layout</Command.Item>
+            <Command.Item value="widget library add panel" onSelect={run(() => useV2.getState().set({ libraryOpen: true }))} className={item}><Icon name="plus" size={13} />Add a panel (widget library)</Command.Item>
+            <Command.Item value="wall kiosk mode tv" onSelect={run(() => window.open('/wall', 'pulse-wall'))} className={item}><Icon name="external" size={13} />Open wall / kiosk mode</Command.Item>
+          </Command.Group>
           <Command.Group heading="Panels" className={group}>
-            {(Object.keys(PANEL_LABELS) as PanelId[]).map((p) => (
-              <Command.Item key={p} value={`panel ${PANEL_LABELS[p]}`} onSelect={run(() => {
-                const hidden = settings.layout.hidden.filter((x) => x !== p);
-                settings.set({ focus: false, layout: { ...settings.layout, hidden } });
-                setTimeout(() => document.getElementById(`panel-${p}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
-                set({ mobileTab: p === 'calendar' || p === 'sessions' || p === 'banks' ? 'calendar' : p === 'watchlist' || p === 'alerts' ? 'watch' : 'markets' });
-              })} className={item}><Icon name="layout" size={13} />Go to {PANEL_LABELS[p]}</Command.Item>
-            ))}
+            {(Object.keys(WIDGETS) as (keyof typeof WIDGETS)[]).map((t) => <Command.Item key={t} value={`panel ${WIDGETS[t].label}`} onSelect={run(() => { const el = document.getElementById(`panel-${t}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); else useV2.getState().set({ libraryOpen: true }); })} className={item}><span className="h-2 w-[3px] rounded-full" style={{ background: WIDGETS[t].accent }} />Go to {WIDGETS[t].label}</Command.Item>)}
+          </Command.Group>
+          <Command.Group heading="Smart feeds" className={group}>
+            {feeds.map((f) => <Command.Item key={f.id} value={`feed ${f.name}`} onSelect={run(() => useV2.getState().set({ activeFeed: f.id }))} className={item}><span className="h-2 w-2 rounded-full" style={{ background: f.color }} />Show feed: {f.name}</Command.Item>)}
+            <Command.Item value="new smart feed builder query" onSelect={run(() => useV2.getState().set({ feedBuilder: 'new' }))} className={item}><Icon name="plus" size={13} />New smart feed…</Command.Item>
+          </Command.Group>
+          <Command.Group heading="Power tools" className={group}>
+            <Command.Item value="ask pulse copilot ai chat" onSelect={run(() => useV2.getState().set({ copilotOpen: true }))} className={item}><Icon name="sparkle" size={13} />Ask Pulse <span className="ml-auto"><Kbd>⌘J</Kbd></span></Command.Item>
+            <Command.Item value="journal notes" onSelect={run(() => useV2.getState().set({ journalOpen: true }))} className={item}><Icon name="bookmark" size={13} />Journal <span className="ml-auto"><Kbd>N</Kbd></span></Command.Item>
+            <Command.Item value="playbooks event" onSelect={run(() => useV2.getState().set({ playbooksOpen: true }))} className={item}><Icon name="timeline" size={13} />Event playbooks <span className="ml-auto"><Kbd>Y</Kbd></span></Command.Item>
+            <Command.Item value="market replay past day" onSelect={run(() => window.dispatchEvent(new CustomEvent('pulse:replay')))} className={item}><Icon name="timeline" size={13} />Market replay <span className="ml-auto"><Kbd>R</Kbd></span></Command.Item>
+            <Command.Item value="privacy blur pnl" onSelect={run(() => useV2.getState().set({ privacy: !useV2.getState().privacy }))} className={item}><Icon name="eyeOff" size={13} />Toggle privacy blur <span className="ml-auto"><Kbd>P</Kbd></span></Command.Item>
+            <Command.Item value="admin data source health" onSelect={run(() => window.open('/admin', '_blank'))} className={item}><Icon name="external" size={13} />Data source health &amp; admin</Command.Item>
+            {SETTINGS_SECTIONS.map((x) => <Command.Item key={x.id} value={`settings ${x.label} ${x.keywords}`} onSelect={run(() => useV2.getState().set({ settingsCenter: x.id }))} className={item}><Icon name="settings" size={13} />Settings: {x.label}</Command.Item>)}
           </Command.Group>
           <Command.Group heading="Briefings" className={group}>
             <Command.Item value="morning brief open today" onSelect={run(() => useV2.getState().openBrief(null))} className={item}><Icon name="sparkle" size={13} />Open the Morning Brief <span className="ml-auto"><Kbd>M</Kbd></span></Command.Item>

@@ -29,7 +29,7 @@ export function instrumentFetch() {
     let host = '';
     try { host = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).host; } catch { /* ignore */ }
     const now = Date.now();
-    if (host) calls.set(host, [...(calls.get(host) ?? []).filter((t) => now - t < 3600_000), now].slice(-4000));
+    if (host && !/^(127\.|localhost|telemetry\.nextjs)/.test(host)) calls.set(host, [...(calls.get(host) ?? []).filter((t) => now - t < 3600_000), now].slice(-4000));
     try {
       const res = await orig(input, init);
       if (host && res.status >= 400) errors.set(host, [...(errors.get(host) ?? []).filter((t) => now - t < 3600_000), now]);

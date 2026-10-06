@@ -16,6 +16,10 @@ const GROUP_COLOR: Record<TickerGroup, string> = { EQ: 'var(--eq)', FX: 'var(--f
 /** Membership is recomputed once a minute (not on every tick) so the strip doesn't reshuffle under the reader. */
 function computeItems(groups: TickerGroup[]): Item[] {
   const { quotes, symbols } = useStore.getState();
+  const t = useSettings.getState().ticker;
+  if (t.mode === 'custom' && t.symbols.length) {
+    return t.symbols.filter((s) => quotes[s]).map((s) => ({ kind: 'sym' as const, symbol: s, group: (symbols[s]?.group ?? 'EQ') as TickerGroup }));
+  }
   const qs = Object.values(quotes);
   const out: Item[] = [];
   for (const g of groups) {
@@ -44,6 +48,8 @@ function computeItems(groups: TickerGroup[]): Item[] {
 }
 
 const TickerItem = memo(function TickerItem({ symbol }: { symbol: string }) {
+  const fields = useSettings((s) => s.ticker.fields);
+  const compact = useSettings((s) => s.ticker.density === 'compact');
   const q = useQuote(symbol);
   const meta = useStore((s) => s.symbols[symbol]);
   const ref = useFlash<HTMLButtonElement>(q?.price);
@@ -54,7 +60,7 @@ const TickerItem = memo(function TickerItem({ symbol }: { symbol: string }) {
     <button
       ref={ref}
       onClick={() => useStore.getState().set({ drawerSymbol: symbol })}
-      className="group flex shrink-0 items-center gap-2 rounded-md px-2.5 py-1 text-xs transition-colors hover:bg-panel-hover"
+      className={`group flex shrink-0 items-center rounded-md transition-colors hover:bg-panel-hover ${compact ? 'gap-1.5 px-1.5 py-0.5 text-[11px]' : 'gap-2 px-2.5 py-1 text-xs'}`}
       title={`${meta.name} · ${q.source}${q.delayedMin ? ` · ${q.delayedMin}m delayed` : ''}`}
     >
       <span className="font-semibold tracking-wide text-text">{pairLabel(symbol, meta.assetClass)}</span>
@@ -62,11 +68,11 @@ const TickerItem = memo(function TickerItem({ symbol }: { symbol: string }) {
       <span className={`flex items-center gap-0.5 num ${up ? 'text-up' : 'text-down'}`}>
         <Icon name={up ? 'up' : 'down'} size={10} />
         {meta.bp ? <span>{fmtBp(q.change)}</span> : <>
-          <span className="hidden sm:inline">{fmtChange(q.change, d)}</span>
-          <span className="opacity-90">({fmtPct(q.changePct)})</span>
+          {fields.change ? <span className="hidden sm:inline">{fmtChange(q.change, d)}</span> : null}
+          {fields.pct ? <span className="opacity-90">{fields.change ? `(${fmtPct(q.changePct)})` : fmtPct(q.changePct)}</span> : null}
         </>}
       </span>
-      {q.delayedMin ? <span className="rounded bg-warn/15 px-1 text-[9px] font-semibold text-warn">{q.delayedMin}m</span> : null}
+      {q.delayedMin && fields.delay ? <span className="rounded bg-warn/15 px-1 text-[9px] font-semibold text-warn">{q.delayedMin}m</span> : null}
     </button>
   );
 });
@@ -105,7 +111,8 @@ export function TickerStrip() {
   const copyRef = useRef<HTMLDivElement>(null);
   const paused = useRef(false);
 
-  const groupsKey = groups.join(',');
+  const tickerCfg = useSettings((s) => s.ticker);
+  const groupsKey = groups.join(',') + JSON.stringify(tickerCfg.mode === 'custom' ? tickerCfg.symbols : []) + tickerCfg.mode;
   useEffect(() => {
     if (hydrated) setItems(computeItems(groups));
     // eslint-disable-next-line react-hooks/exhaustive-deps

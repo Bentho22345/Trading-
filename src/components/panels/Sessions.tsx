@@ -1,6 +1,8 @@
 'use client';
 import { useMemo } from 'react';
-import { sessionStates, intersect, isFxWeekend } from '@shared/sessions';
+import { sessionStates, intersect, isFxWeekend, zonedToUtc } from '@shared/sessions';
+import { structureEvents } from '@shared/market';
+import { useSettings } from '@/lib/settings';
 import { useNow } from '@/lib/hooks';
 import { countdown } from '@/lib/format';
 import { Panel } from '../ui';
@@ -91,6 +93,41 @@ export function SessionsPanel() {
           </div>
         </div>
       </div>
+      <SessionExtras now={now} pos={pos} dayStart={dayStart} />
     </Panel>
+  );
+}
+
+const KIND_COLOR: Record<string, string> = { holiday: 'var(--down)', halfday: 'var(--warn)', opex: 'var(--eq)', quad: 'var(--eq)', rebalance: 'var(--accent)', roll: 'var(--cmdty)', monthend: 'var(--macro)', quarterend: 'var(--macro)', dst: 'var(--rates)' };
+
+/** Custom sessions (Settings → Time zones) and structural markers: holidays, half-days, expiries, rolls, DST. */
+function SessionExtras({ now, pos, dayStart }: { now: number; pos: (t: number) => string; dayStart: number }) {
+  const custom = useSettings((s) => s.customSessions);
+  const events = useMemo(() => structureEvents(dayStart - 86400_000, dayStart + 3 * 86400_000).filter((e) => e.ts >= dayStart - 3600_000), [dayStart]);
+  const today = events.filter((e) => e.ts < dayStart + 86400_000);
+  return (
+    <div className="mt-2 space-y-1.5">
+      {custom.map((c) => {
+        const d = new Date(dayStart);
+        const start = zonedToUtc(d.getFullYear(), d.getMonth() + 1, d.getDate(), c.openH, 0, c.tz), end = zonedToUtc(d.getFullYear(), d.getMonth() + 1, d.getDate(), c.closeH % 24, 0, c.tz) + (c.closeH >= 24 ? 86400_000 : 0);
+        const open = now >= start && now < end;
+        return (
+          <div key={c.id} className="flex items-center gap-2 text-[11px]">
+            <span className={`w-[68px] truncate ${open ? 'text-text' : 'text-faint'}`}>{c.label}</span>
+            <div className="relative h-2.5 flex-1 rounded bg-bg-2"><div className="absolute inset-y-0 rounded bg-accent/40" style={{ left: pos(start), width: `calc(${pos(end)} - ${pos(start)})` }} /></div>
+          </div>
+        );
+      })}
+      {today.length ? (
+        <div className="relative ml-[76px] h-3" aria-label="Structural markers today">
+          {today.map((e) => <span key={e.id} title={e.label} className="absolute top-0 h-3 w-1 rounded-sm" style={{ left: pos(e.ts), background: KIND_COLOR[e.kind] }} />)}
+        </div>
+      ) : null}
+      {events.length ? (
+        <ul className="space-y-0.5 border-t border-line pt-1.5 text-[10px]">
+          {events.slice(0, 4).map((e) => <li key={e.id} className="flex items-center gap-1.5 text-faint"><span className="h-1.5 w-1.5 rounded-full" style={{ background: KIND_COLOR[e.kind] }} /><span className="num">{new Date(e.ts).toLocaleDateString([], { weekday: 'short' })}</span><span className="truncate text-dim">{e.label}</span></li>)}
+        </ul>
+      ) : null}
+    </div>
   );
 }

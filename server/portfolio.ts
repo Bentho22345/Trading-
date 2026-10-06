@@ -92,9 +92,9 @@ export function computeExposure(positions: Position[], hub: Hub): Exposure {
 export function parseCsv(text: string): Omit<Position, 'id'>[] {
   const lines = text.trim().split(/\r?\n/).filter(Boolean);
   if (!lines.length) return [];
-  const head = lines[0].toLowerCase().split(/[,;\t]/).map((h) => h.trim());
+  const head = lines[0].toLowerCase().split(/[,;\t]/).map((h) => h.trim().replace(/[\s_"]/g, ''));
   const hasHeader = head.some((h) => /symbol|ticker|qty|quantity|price/.test(h));
-  const idx = (names: string[], d: number) => { const i = head.findIndex((h) => names.includes(h)); return hasHeader ? i : d; };
+  const idx = (names: string[], d: number) => { const i = head.findIndex((h) => names.map((n) => n.replace(/[\s_]/g, '')).includes(h)); return hasHeader ? i : d; };
   const iS = idx(['symbol', 'ticker', 'instrument'], 0), iQ = idx(['qty', 'quantity', 'shares', 'units', 'amount'], 1), iP = idx(['avg_price', 'avgprice', 'price', 'cost', 'avg cost', 'average price'], 2), iSec = idx(['sector'], 3);
   const out: Omit<Position, 'id'>[] = [];
   for (const l of lines.slice(hasHeader ? 1 : 0)) {

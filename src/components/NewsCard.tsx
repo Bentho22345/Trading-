@@ -4,6 +4,9 @@ import type { NewsCluster } from '@shared/types';
 import { useStore } from '@/lib/store';
 import { useNow } from '@/lib/hooks';
 import { DOMAIN_LABEL, primaryDomain, timeAgo, pairLabel } from '@/lib/format';
+import { copyText, shareCard, storyForChat } from '@/lib/share';
+import { useV2 } from '@/lib/v2';
+import { addNote } from './personal/Journal';
 import { Chip, DemoChip, Icon } from './ui';
 
 /** CSS-only (transform) so cards re-rendering every second don't touch the animation library. */
@@ -51,6 +54,25 @@ interface Props {
   inBook?: boolean;
 }
 
+function CardMenu({ c }: { c: NewsCluster }) {
+  const [open, setOpen] = useState(false);
+  const item = 'block w-full rounded px-2 py-1 text-left text-[11px] text-dim hover:bg-panel-hover hover:text-text';
+  const run = (fn: () => void | Promise<void>) => (e: React.MouseEvent) => { e.stopPropagation(); setOpen(false); void fn(); };
+  return (
+    <span className="relative">
+      <button onClick={(e) => { e.stopPropagation(); setOpen(!open); }} className="rounded-md px-1 text-faint opacity-0 transition-opacity hover:text-text group-hover:opacity-100 focus:opacity-100" aria-label="More actions">⋯</button>
+      {open ? (
+        <span className="absolute right-0 top-5 z-30 block w-44 rounded-lg border border-line bg-panel-solid p-1 shadow-xl" onMouseLeave={() => setOpen(false)}>
+          <button className={item} onClick={run(async () => { await copyText(storyForChat(c)); useStore.getState().pushToast({ kind: 'info', title: 'Copied for chat' }); })}>Copy for chat</button>
+          <button className={item} onClick={run(() => shareCard({ kicker: `${DOMAIN_LABEL[primaryDomain(c.domains)]} · impact ${c.impact}`, title: c.headline, body: c.tldr ?? c.summary.slice(0, 240), meta: `${c.source}${c.articles.length > 1 ? ` +${c.articles.length - 1} sources` : ''} · ${new Date(c.publishedAt).toLocaleString()}`, filename: `pulse-story-${c.id}.png` }))}>Export PNG card</button>
+          <button className={item} onClick={run(() => useV2.getState().set({ explain: { kind: 'story', ref: c.id, label: c.headline }, copilotOpen: true }))}>Explain this (E)</button>
+          <button className={item} onClick={run(async () => { await addNote({ kind: 'story', ref: c.id, label: c.headline, ts: c.publishedAt }, c.headline.slice(0, 80), `[${c.headline}](${c.url})\n\n`); useV2.getState().set({ journalOpen: true }); })}>Add note</button>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 export const NewsCard = memo(function NewsCard({ c, fresh, selected, read, saved, inBook }: Props) {
   const now = useNow(1000);
   const [expanded, setExpanded] = useState(false);
@@ -68,6 +90,9 @@ export const NewsCard = memo(function NewsCard({ c, fresh, selected, read, saved
   return (
     <article
       data-cluster={c.id}
+      data-explain={c.id}
+      data-explain-kind="story"
+      data-explain-label={c.headline}
       onClick={() => s().set({ selectedId: c.id })}
       className={`d-${dom} group relative overflow-hidden rounded-xl border bg-panel p-3 pl-4 card-hover ${fresh ? 'card-in' : ''} ${fresh && high ? 'glow-sweep' : ''} ${selected ? 'border-accent/60 ring-1 ring-accent/30' : c.watchHit ? 'border-[color-mix(in_oklab,var(--warn)_45%,transparent)]' : 'border-line'} ${read ? 'opacity-60' : ''} ${inBook || c.watchHit ? 'relevant' : ''}`}
       aria-current={selected || undefined}
@@ -93,6 +118,7 @@ export const NewsCard = memo(function NewsCard({ c, fresh, selected, read, saved
           <button onClick={(e) => { e.stopPropagation(); open(); }} className="rounded-md p-0.5 text-faint opacity-0 transition-opacity hover:text-text group-hover:opacity-100 focus:opacity-100" aria-label="Open source" title="Open source (O)">
             <Icon name="external" size={13} />
           </button>
+          <CardMenu c={c} />
         </span>
         <ImpactMeter value={c.impact} animate={fresh} />
       </div>

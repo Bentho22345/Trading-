@@ -7,6 +7,7 @@ import { api } from '@/lib/v2';
 import { ACTIONS, bindings, conflicts, keyOf, prettyKey, type Action } from '@/lib/shortcuts';
 import { Row, Section, Slider, Switch, btnCls, download, inputCls, primaryBtn } from './controls';
 import { Segmented, Icon } from '../ui';
+import { toCsv } from '@/lib/share';
 
 const TZS = ['America/New_York', 'America/Chicago', 'America/Los_Angeles', 'America/Sao_Paulo', 'Europe/London', 'Europe/Berlin', 'Europe/Zurich', 'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Australia/Sydney', 'UTC'];
 
@@ -142,6 +143,11 @@ export function DataSection() {
     <Section title="Backup, restore & sync" description="One JSON file holds everything: theme, layout, workspaces, brief profiles, playbooks, smart feeds, positions, journal, levels, alert routes, sources and score weights. Integration secrets are never exported.">
       <Row label="Export all settings"><button className={primaryBtn} onClick={() => void exportAll()}><Icon name="external" size={12} /> Export JSON</button></Row>
       <Row label="Import settings" hint="Replaces matching collections"><button className={btnCls} onClick={() => fileRef.current?.click()}>Choose file…</button><input ref={fileRef} type="file" accept="application/json" className="hidden" onChange={(e) => e.target.files?.[0] && void importAll(e.target.files[0])} /></Row>
+      <Row label="Export pieces" hint="Watchlist and alert rules as CSV / JSON">
+        <button className={btnCls} onClick={() => download('pulse-watchlist.csv', toCsv(useStore.getState().watchlist as never), 'text/csv')}>Watchlist CSV</button>
+        <button className={btnCls} onClick={() => download('pulse-alerts.json', JSON.stringify(useStore.getState().alerts, null, 2))}>Alerts JSON</button>
+        <button className={btnCls} onClick={() => download('pulse-alerts.csv', toCsv(useStore.getState().alerts as never), 'text/csv')}>Alerts CSV</button>
+      </Row>
       <Row label="Sync across devices" hint="Settings saved to this PULSE server; other browsers adopt the newest copy"><Switch label="Sync" on={s.syncEnabled} onChange={(v) => s.set({ syncEnabled: v })} /></Row>
       <Row label="Reset this browser's preferences"><button onClick={s.reset} className="rounded-md border border-down/40 px-2 py-1 text-[11px] text-down">Reset</button></Row>
     </Section>
