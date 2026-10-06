@@ -1,0 +1,20 @@
+# One-click deploy on Render (render.com): Dashboard → New → Blueprint → pick this repo/branch.
+# PULSE needs an always-on Node process (live WebSocket + pollers), which static/serverless
+# hosts like Netlify can't provide.
+services:
+  - type: web
+    name: pulse
+    runtime: node
+    plan: free            # free instances sleep after ~15 min idle; use "starter" to keep it always on
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PULSE_MODE
+        value: live
+      - key: FINNHUB_API_KEY      # optional: real-time stocks + extra news
+        sync: false
+      - key: ANTHROPIC_API_KEY    # optional: AI summaries
+        sync: false

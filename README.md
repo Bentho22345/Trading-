@@ -210,6 +210,16 @@ Motion uses transforms and opacity only. `prefers-reduced-motion` is honoured ev
 
 ## Deploying
 
+> ⚠️ **Not Netlify / Vercel / GitHub Pages.** Those only serve static pages and short-lived functions. PULSE needs one always-on Node process (live WebSocket, news pollers, SQLite), so on those hosts the page loads but stays "Offline — reconnecting".
+
+**Easiest: Render (free tier works)**
+1. Sign in at https://render.com with GitHub.
+2. **New → Blueprint**, pick this repo and the `claude/pulse-financial-terminal-879fxy` branch. It reads `render.yaml`.
+3. Optionally fill in `FINNHUB_API_KEY`, then **Apply**. After the build (~3–5 min) open the `https://pulse-xxxx.onrender.com` URL.
+
+Free Render instances sleep after ~15 minutes without visitors and take ~30 s to wake; pick the Starter plan to keep it running all day. Railway and Fly.io work the same way: build `npm ci && npm run build`, start `npm start`, it listens on `PORT`.
+
+
 Serverless functions can't hold upstream WebSockets, so split it:
 
 - **Worker → Fly.io / Railway / Render** (any always-on container):

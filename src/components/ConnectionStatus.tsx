@@ -46,6 +46,11 @@ export function ConnectionStatus() {
               <span className="font-semibold text-text">Data streams</span>
               <span className="num text-[10px] text-faint">browser ⇄ worker {rtt ?? '—'}ms · last msg {lastMsgAt ? timeAgo(lastMsgAt, now) : '—'}</span>
             </div>
+            {conn === 'closed' ? (
+              <div className="mb-2 rounded-md border border-down/30 bg-down/10 px-2 py-1.5 text-[11px] text-down">
+                Can&apos;t reach the PULSE server. If you deployed to a static or serverless host (Netlify, Vercel, GitHub Pages), it can&apos;t run the live server: deploy to Render, Railway or Fly instead (see README → Deploying), or run <span className="num">npm run dev</span> locally.
+              </div>
+            ) : null}
             {allBlocked ? (
               <div className="mb-2 rounded-md border border-down/30 bg-down/10 px-2 py-1.5 text-[11px] text-down">
                 No data source is reachable from the machine running PULSE. Its network (office/school Wi-Fi, VPN, firewall or a hosted preview) is blocking outbound requests. Run <span className="num">npm run doctor</span> there to see which sites are blocked.
