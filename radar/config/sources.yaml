@@ -1,0 +1,24 @@
+# Keyless feeds polled automatically. Edit freely; restart to apply.
+# Add your own feeds/APIs in the app under Connectors -> "Add your own" (no restart needed).
+rss:
+  every_s: 60
+  feeds:
+    # Crypto news
+    - { name: CoinDesk,      url: "https://www.coindesk.com/arc/outboundfeeds/rss/", group: crypto }
+    - { name: Cointelegraph, url: "https://cointelegraph.com/rss", group: crypto }
+    - { name: Decrypt,       url: "https://decrypt.co/feed", group: crypto }
+    - { name: The Block,     url: "https://www.theblock.co/rss.xml", group: crypto }
+    - { name: Bloomberg Markets, url: "https://feeds.bloomberg.com/markets/news.rss", group: macro }
+    # Mainstream breaking news via Google News topic search (official RSS output)
+    - { name: "GNews: Reuters",  url: "https://news.google.com/rss/search?q=when:1h+site:reuters.com&hl=en-US&gl=US&ceid=US:en", group: breaking }
+    - { name: "GNews: AP",       url: "https://news.google.com/rss/search?q=when:1h+site:apnews.com&hl=en-US&gl=US&ceid=US:en", group: breaking }
+    - { name: "GNews: memecoin", url: "https://news.google.com/rss/search?q=memecoin+OR+%22meme+coin%22+when:1d&hl=en-US&gl=US&ceid=US:en", group: crypto }
+    - { name: "GNews: Trump crypto", url: "https://news.google.com/rss/search?q=Trump+crypto+when:1d&hl=en-US&gl=US&ceid=US:en", group: politics }
+    - { name: "GNews: Elon Musk", url: "https://news.google.com/rss/search?q=%22Elon+Musk%22+when:1d&hl=en-US&gl=US&ceid=US:en", group: celebrity }
+    # Reddit publishes official RSS per subreddit (low volume, polite polling). OAuth connector upgrades this.
+    - { name: r/memecoins,      url: "https://www.reddit.com/r/memecoins/new/.rss", group: reddit, every_s: 120 }
+    - { name: r/solana,         url: "https://www.reddit.com/r/solana/new/.rss", group: reddit, every_s: 120 }
+    - { name: r/CryptoCurrency, url: "https://www.reddit.com/r/CryptoCurrency/rising/.rss", group: reddit, every_s: 120 }
+    - { name: r/wallstreetbets, url: "https://www.reddit.com/r/wallstreetbets/rising/.rss", group: reddit, every_s: 180 }
+    # Google Trends official "trending now" RSS — is mainstream attention moving?
+    - { name: Google Trends US, url: "https://trends.google.com/trending/rss?geo=US", group: trends, every_s: 300 }

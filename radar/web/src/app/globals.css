@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #07090c;
+  --color-panel: #0d1117;
+  --color-panel2: #121821;
+  --color-line: #1d2531;
+  --color-mute: #6b7787;
+  --color-fg: #d6dde6;
+  --color-up: #22c55e;
+  --color-down: #f43f5e;
+  --color-warn: #f59e0b;
+  --color-accent: #38bdf8;
+  --color-flash: #e879f9;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+html, body { background: var(--color-bg); color: var(--color-fg); }
+body { font-family: var(--font-mono); font-size: 12px; }
+* { scrollbar-width: thin; scrollbar-color: #2a3442 transparent; }
+.num { font-variant-numeric: tabular-nums; }
+@keyframes flashin { from { background: rgba(56,189,248,.18); } to { background: transparent; } }
+.flash-in { animation: flashin 1.2s ease-out; }
