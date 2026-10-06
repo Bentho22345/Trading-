@@ -35,6 +35,7 @@ export interface V2Feature {
 export function createV2(d: V2Deps) {
   const router = new Router();
   const features: V2Feature[] = [];
+  const hooks = { playbook: [] as ((o: import('../shared/v2').PlaybookOutcome) => void)[], theme: [] as ((t: import('../shared/v2').ThemeItem) => void)[] };
   let deliver: (b: Brief, p: BriefProfile) => void = (b, p) => console.log(`[brief] ${p.name}: delivery requested to ${p.destinations.join(', ')}`);
   let meetings: () => { title: string; start: number; end: number }[] = () => [];
 
@@ -167,6 +168,10 @@ export function createV2(d: V2Deps) {
       return { intel: [...d.hub.intel.values()], exposure: null, handoffs: briefs.handoffs, replayAvailable: true };
     },
     kvGet, kvSet,
+    /** hooks wired up by the alerts module */
+    emitPlaybook: (o: import('../shared/v2').PlaybookOutcome) => hooks.playbook.forEach((f) => f(o)),
+    emitTheme: (t: import('../shared/v2').ThemeItem) => hooks.theme.forEach((f) => f(t)),
+    hooks,
   };
 }
 

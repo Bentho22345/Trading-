@@ -56,6 +56,9 @@ export class AlertEngine extends EventEmitter {
       pct: kind === 'pct_move' ? Number(i.pct) : undefined,
       windowMin: kind === 'pct_move' ? Math.max(1, Math.min(1440, Number(i.windowMin) || 60)) : undefined,
       keyword: kind === 'keyword' ? i.keyword!.trim().slice(0, 80) : undefined,
+      moveDir: kind === 'pct_move' && (i.moveDir === 'up' || i.moveDir === 'down') ? i.moveDir : kind === 'pct_move' ? 'either' : undefined,
+      conditions: Array.isArray(i.conditions) ? i.conditions.filter((c) => c && ['funding', 'price', 'changePct', 'vix', 'fearGreed'].includes(c.metric) && (c.op === '>' || c.op === '<') && Number.isFinite(Number(c.value))).slice(0, 4).map((c) => ({ metric: c.metric, op: c.op, value: Number(c.value), ...(c.symbol ? { symbol: String(c.symbol).toUpperCase() } : {}) })) : undefined,
+      label: i.label ? String(i.label).slice(0, 160) : undefined,
       enabled: i.enabled ?? true,
       once: i.once ?? false,
       createdAt: i.createdAt ?? Date.now(),
@@ -75,7 +78,7 @@ export class AlertEngine extends EventEmitter {
         if (r.kind === 'price_cross' && prev !== undefined && r.level) {
           const up = prev < r.level && q.price >= r.level;
           const down = prev > r.level && q.price <= r.level;
-          if ((r.direction === 'above' && up) || (r.direction === 'below' && down) || (r.direction === 'cross' && (up || down))) {
+          if (((r.direction === 'above' && up) || (r.direction === 'below' && down) || (r.direction === 'cross' && (up || down))) && this.conditionsHold(r)) {
             if (r.lastFiredAt && now - r.lastFiredAt < 60_000) continue; // debounce chatter around the level
             this.fire(r, `${q.symbol} crossed ${up ? 'above' : 'below'} ${r.level.toFixed(d)} (now ${q.price.toFixed(d)})`, { symbol: q.symbol });
           }
@@ -84,13 +87,36 @@ export class AlertEngine extends EventEmitter {
           const then = this.hub.priceAt(q.symbol, now - r.windowMin * 60_000);
           if (!then) continue;
           const pct = ((q.price - then) / then) * 100;
-          if (Math.abs(pct) >= r.pct) {
+          const dirOk = r.moveDir === 'up' ? pct > 0 : r.moveDir === 'down' ? pct < 0 : true;
+          if (Math.abs(pct) >= r.pct && dirOk && this.conditionsHold(r)) {
             const win = r.windowMin >= 60 ? `${+(r.windowMin / 60).toFixed(1)}h` : `${r.windowMin}m`;
             this.fire(r, `${q.symbol} ${pct > 0 ? '+' : ''}${pct.toFixed(2)}% in ${win} (${q.price.toFixed(d)})`, { symbol: q.symbol });
           }
         }
       }
     }
+  }
+
+  private conditionsHold(r: AlertRule): boolean {
+    for (const c of r.conditions ?? []) {
+      let v: number | null = null;
+      if (c.metric === 'funding') {
+        const f = this.hub.crypto?.funding.find((x) => x.symbol.startsWith(c.symbol ?? r.symbol ?? 'BTC')) ?? this.hub.crypto?.funding[0];
+        v = f ? f.rate : null;
+      } else if (c.metric === 'vix') v = this.hub.quotes.get('VIX')?.price ?? null;
+      else if (c.metric === 'fearGreed') v = this.hub.crypto?.fearGreed?.value ?? null;
+      else if (c.metric === 'price') v = this.hub.quotes.get(c.symbol ?? r.symbol ?? '')?.price ?? null;
+      else if (c.metric === 'changePct') v = this.hub.quotes.get(c.symbol ?? r.symbol ?? '')?.changePct ?? null;
+      if (v === null || !(c.op === '>' ? v > c.value : v < c.value)) return false;
+    }
+    return true;
+  }
+
+  /** Fire an alert from another module (smart feeds, playbooks, levels, themes). */
+  external(ruleId: string, message: string, extra: { symbol?: string; clusterId?: string } = {}) {
+    const ev: AlertEvent = { id: randomUUID(), ruleId, message, ts: Date.now(), ...extra };
+    db.insert(schema.alertEvents).values({ id: ev.id, ruleId, message, ts: ev.ts }).run();
+    this.emit('alert', ev);
   }
 
   onCluster(c: NewsCluster) {

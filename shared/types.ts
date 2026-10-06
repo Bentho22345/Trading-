@@ -241,6 +241,12 @@ export interface AlertRule {
   pct?: number;
   windowMin?: number;
   keyword?: string;
+  /** pct_move only: which way the move must go */
+  moveDir?: 'up' | 'down' | 'either';
+  /** extra conditions that must also hold ("while funding is positive") */
+  conditions?: { metric: 'funding' | 'price' | 'changePct' | 'vix' | 'fearGreed'; symbol?: string; op: '>' | '<'; value: number }[];
+  /** human-readable description (smart alert builder) */
+  label?: string;
   enabled: boolean;
   once: boolean;
   createdAt: number;

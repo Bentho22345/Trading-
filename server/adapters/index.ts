@@ -70,3 +70,13 @@ export function buildAdapters(log: { warn: (m: string) => void }): Adapter[] {
   if (out.some((a) => a.id === 'cboe')) mockMarket.skip.add('VIX');
   return out;
 }
+
+/** Runtime switching (admin console): build the adapter(s) for one stream with a given provider. */
+export function buildStream(stream: string, provider: 'mock' | 'live'): Adapter[] {
+  const reg = REGISTRY[stream];
+  if (!reg) return [];
+  if (provider === 'mock') return reg.mock ? [reg.mock()] : [];
+  const name = stream === 'news' ? 'rss' : (providers as Record<string, string | string[]>)[stream] as string;
+  const pickName = name && name !== 'mock' && reg[name] && (!NEEDS_KEY[name] || NEEDS_KEY[name]()) ? name : KEYLESS[stream];
+  return reg[pickName] ? [reg[pickName]()] : [];
+}

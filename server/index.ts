@@ -17,6 +17,16 @@ import { Fanout } from './ws';
 import { createApi } from './http';
 import { createV2 } from './v2';
 import { tuningFeature } from './tuning';
+import { playbooksFeature } from './playbooks';
+import { portfolioFeature } from './portfolio';
+import { intelFeature } from './intel';
+import { integrationsFeature } from './integrations';
+import { alerts2Feature } from './alerts2';
+import { copilotFeature } from './copilot';
+import { replayFeature } from './replay';
+import { adminFeature, instrumentFetch } from './admin';
+import { journalFeature } from './journal';
+instrumentFetch();
 
 const log = {
   info: (m: string, ...a: unknown[]) => console.log(m, ...a),
@@ -99,6 +109,16 @@ const server = createServer((req, res) => {
 const fanout = new Fanout(snapshot);
 const v2 = createV2({ hub, pipeline, alerts, watchlist: () => watchlist, broadcast: (m) => fanout.broadcast(m) });
 v2.use(tuningFeature(pipeline));
+v2.use(playbooksFeature(hub, (d) => fanout.broadcast({ t: 'playbook', d }), (o) => v2.emitPlaybook(o)));
+v2.use(portfolioFeature(hub, (d) => fanout.broadcast({ t: 'exposure', d })));
+const integrations = integrationsFeature(hub);
+v2.use(integrations);
+v2.setDeliver(integrations.deliverBrief);
+v2.setMeetings(integrations.meetings);
+v2.use(alerts2Feature(alerts, pipeline, (d) => fanout.broadcast({ t: 'alert2', d }), v2.hooks));
+v2.use(copilotFeature(hub, pipeline, v2.briefs));
+v2.use(replayFeature(hub, pipeline));
+v2.use(intelFeature(hub, pipeline, () => watchlist.filter((w) => w.kind !== 'keyword').map((w) => w.value), (t) => v2.emitTheme(t)));
 server.on('upgrade', (req, socket, head) => {
   if (req.url?.split('?')[0] === '/ws') fanout.handleUpgrade(req, socket, head);
   else if (web) void web.upgrade(req, socket, head);
@@ -128,6 +148,9 @@ alerts.on('rules', (d) => fanout.broadcast({ t: 'alerts', d }));
 // ------------------------------------------------------------------ adapters
 const adapters = buildAdapters(log);
 const ctx: AdapterContext = { hub, log, emitNews: (a) => pipeline.ingest(a), newsCount: () => pipeline.recent(1000).length };
+
+v2.use(adminFeature(hub, pipeline, adapters, ctx));
+v2.use(journalFeature(hub, pipeline));
 
 // one status row per stream (several news adapters share the "news" stream)
 const LABELS: Record<StreamId, string> = {

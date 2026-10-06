@@ -1,0 +1,21 @@
+[
+  { "name": "Jerome Powell", "bank": "Fed", "role": "Chair", "lean": 0 },
+  { "name": "Philip Jefferson", "bank": "Fed", "role": "Vice Chair", "lean": -0.1 },
+  { "name": "Christopher Waller", "bank": "Fed", "role": "Governor", "lean": -0.3 },
+  { "name": "Michelle Bowman", "bank": "Fed", "role": "Vice Chair for Supervision", "lean": -0.2 },
+  { "name": "Lisa Cook", "bank": "Fed", "role": "Governor", "lean": -0.1 },
+  { "name": "Michael Barr", "bank": "Fed", "role": "Governor", "lean": 0.1 },
+  { "name": "John Williams", "bank": "Fed", "role": "NY Fed President", "lean": 0 },
+  { "name": "Neel Kashkari", "bank": "Fed", "role": "Minneapolis Fed", "lean": 0.3 },
+  { "name": "Lorie Logan", "bank": "Fed", "role": "Dallas Fed", "lean": 0.4 },
+  { "name": "Austan Goolsbee", "bank": "Fed", "role": "Chicago Fed", "lean": -0.3 },
+  { "name": "Christine Lagarde", "bank": "ECB", "role": "President", "lean": 0 },
+  { "name": "Isabel Schnabel", "bank": "ECB", "role": "Executive Board", "lean": 0.5 },
+  { "name": "Philip Lane", "bank": "ECB", "role": "Chief Economist", "lean": -0.2 },
+  { "name": "Joachim Nagel", "bank": "ECB", "role": "Bundesbank", "lean": 0.5 },
+  { "name": "Andrew Bailey", "bank": "BoE", "role": "Governor", "lean": -0.1 },
+  { "name": "Huw Pill", "bank": "BoE", "role": "Chief Economist", "lean": 0.4 },
+  { "name": "Kazuo Ueda", "bank": "BoJ", "role": "Governor", "lean": 0.2 },
+  { "name": "Michele Bullock", "bank": "RBA", "role": "Governor", "lean": 0.2 },
+  { "name": "Tiff Macklem", "bank": "BoC", "role": "Governor", "lean": -0.2 }
+]
