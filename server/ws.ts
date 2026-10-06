@@ -40,6 +40,7 @@ export class Fanout {
         try {
           const m = JSON.parse(buf.toString()) as ClientMsg;
           if (m.t === 'ping') this.sendTo(c, { t: 'pong', id: m.id, serverTime: Date.now() });
+          else if (m.t === 'resnap') this.sendTo(c, { t: 'snapshot', d: this.snapshot() });
           else if (m.t === 'vis') {
             c.hidden = !!m.hidden;
             if (!c.hidden) this.flush(c);

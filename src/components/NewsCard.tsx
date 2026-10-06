@@ -48,9 +48,10 @@ interface Props {
   selected: boolean;
   read: boolean;
   saved: boolean;
+  inBook?: boolean;
 }
 
-export const NewsCard = memo(function NewsCard({ c, fresh, selected, read, saved }: Props) {
+export const NewsCard = memo(function NewsCard({ c, fresh, selected, read, saved, inBook }: Props) {
   const now = useNow(1000);
   const [expanded, setExpanded] = useState(false);
   const dom = primaryDomain(c.domains);
@@ -68,14 +69,15 @@ export const NewsCard = memo(function NewsCard({ c, fresh, selected, read, saved
     <article
       data-cluster={c.id}
       onClick={() => s().set({ selectedId: c.id })}
-      className={`d-${dom} group relative overflow-hidden rounded-xl border bg-panel p-3 pl-4 card-hover ${fresh ? 'card-in' : ''} ${fresh && high ? 'glow-sweep' : ''} ${selected ? 'border-accent/60 ring-1 ring-accent/30' : c.watchHit ? 'border-[color-mix(in_oklab,var(--warn)_45%,transparent)]' : 'border-line'} ${read ? 'opacity-60' : ''}`}
+      className={`d-${dom} group relative overflow-hidden rounded-xl border bg-panel p-3 pl-4 card-hover ${fresh ? 'card-in' : ''} ${fresh && high ? 'glow-sweep' : ''} ${selected ? 'border-accent/60 ring-1 ring-accent/30' : c.watchHit ? 'border-[color-mix(in_oklab,var(--warn)_45%,transparent)]' : 'border-line'} ${read ? 'opacity-60' : ''} ${inBook || c.watchHit ? 'relevant' : ''}`}
       aria-current={selected || undefined}
     >
       <span className="absolute inset-y-2 left-1.5 w-[3px] rounded-full" style={{ background: 'var(--d)' }} />
       <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-faint">
         <span className="font-semibold uppercase tracking-wider" style={{ color: 'var(--d)' }}>{DOMAIN_LABEL[dom]}</span>
         {c.breaking ? <span className="rounded bg-down/15 px-1 font-bold uppercase tracking-wider text-down">Breaking</span> : null}
-        {c.watchHit ? <span className="rounded bg-warn/15 px-1 font-semibold uppercase text-warn" title="Matches your watchlist">Watchlist</span> : null}
+        {inBook ? <span className="rounded bg-accent/15 px-1 font-semibold text-accent" title="Touches a position in your book (or a correlated proxy)">📌 In your book</span> : null}
+        {c.watchHit ? <span className="rounded bg-warn/15 px-1 font-semibold uppercase text-warn" title="Matches your watchlist">{inBook ? '' : '📌 '}Watchlist</span> : null}
         <span className="num" title={new Date(c.publishedAt).toLocaleString()}>{timeAgo(c.publishedAt, now)}</span>
         <span>·</span>
         <span className="truncate text-dim">{c.source}</span>

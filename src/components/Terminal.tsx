@@ -4,7 +4,8 @@ import dynamic from 'next/dynamic';
 import type { NewsCluster } from '@shared/types';
 import { connect } from '@/lib/socket';
 import { useStore } from '@/lib/store';
-import { useSettings, type PanelId } from '@/lib/settings';
+import { useSettings } from '@/lib/settings';
+import { useActiveWorkspace } from '@/lib/workspaces';
 import { Header, Footer } from './Header';
 import { TickerStrip } from './TickerStrip';
 import { NewsFeed } from './NewsFeed';
@@ -19,8 +20,11 @@ import { useV2 } from '@/lib/v2';
 // Overlays aren't needed for first paint: split them (and cmdk / chart code) out of the main bundle.
 // Side rails mount on idle anyway; loading them (and the animation library they use) lazily keeps
 // the first-paint bundle small.
-const Rail = dynamic(() => import('./Rails').then((m) => m.Rail), { ssr: false, loading: () => <div className="space-y-3"><div className="glass h-64 rounded-xl" /><div className="glass h-64 rounded-xl" /></div> });
-const LayoutEditBar = dynamic(() => import('./Rails').then((m) => m.LayoutEditBar), { ssr: false });
+const WorkspaceGrid = dynamic(() => import('./layout/Grid').then((m) => m.WorkspaceGrid), { ssr: false, loading: () => <div className="grid h-full grid-cols-12 gap-3"><div className="glass col-span-3 rounded-xl" /><div className="col-span-6 space-y-2"><div className="skeleton h-24" /><div className="skeleton h-24" /></div><div className="glass col-span-3 rounded-xl" /></div> });
+const WidgetStack = dynamic(() => import('./layout/Stack').then((m) => m.WidgetStack), { ssr: false });
+const WidgetLibrary = dynamic(() => import('./layout/WorkspaceBar').then((m) => m.WidgetLibrary), { ssr: false });
+const WorkspaceBar = dynamic(() => import('./layout/WorkspaceBar').then((m) => m.WorkspaceBar), { ssr: false, loading: () => <div className="h-9 border-b border-line" /> });
+const WorkspaceAutoSwitch = dynamic(() => import('./layout/WorkspaceBar').then((m) => m.WorkspaceAutoSwitch), { ssr: false });
 const TickerDrawer = dynamic(() => import('./Drawer').then((m) => m.TickerDrawer), { ssr: false });
 const StoryTimeline = dynamic(() => import('./Timeline').then((m) => m.StoryTimeline), { ssr: false });
 const CommandPalette = dynamic(() => import('./CommandPalette').then((m) => m.CommandPalette), { ssr: false });
@@ -72,7 +76,8 @@ function ThemeSync() {
 
 export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] }) {
   const hydrateSettings = useSettings((s) => s.hydrate);
-  const layout = useSettings((s) => s.layout);
+  const ws = useActiveWorkspace();
+  const libraryOpen = useV2((s) => s.libraryOpen);
   const focus = useSettings((s) => s.focus);
   const editing = useStore((s) => s.layoutEditing);
   const overlays = useOpenedOverlays();
@@ -94,32 +99,21 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
   if (focus && !editing) {
     body = <div className="mx-auto flex h-full w-full max-w-3xl min-h-0 flex-col">{feed}</div>;
   } else if (bp === 'lg' || editing) {
-    body = (
-      <div className="grid h-full min-h-0 grid-cols-12 gap-3">
-        <aside className="col-span-3 min-h-0 overflow-y-auto pb-4 pr-1" aria-label="Calendar, sessions and central banks"><Rail side="left" panels={layout.left} /></aside>
-        <div className="col-span-6 flex min-h-0 flex-col">{editing ? <LayoutEditBar /> : null}{feed}</div>
-        <aside className="col-span-3 min-h-0 overflow-y-auto pb-4 pr-1" aria-label="Markets"><Rail side="right" panels={layout.right} /></aside>
-      </div>
-    );
+    body = <WorkspaceGrid ws={ws} initialClusters={initialClusters} />;
   } else if (bp === 'md') {
     body = (
       <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(300px,38%)] gap-3">
         {feed}
-        <aside className="min-h-0 overflow-y-auto pb-4 pr-1"><Rail side="right" panels={[...layout.left, ...layout.right]} /></aside>
+        <aside className="min-h-0 overflow-y-auto pb-4 pr-1"><WidgetStack ws={ws} /></aside>
       </div>
     );
   } else {
-    const tabs: Record<string, PanelId[]> = {
-      markets: [...layout.left, ...layout.right].filter((p) => !['watchlist', 'alerts', 'sessions', 'calendar', 'banks'].includes(p)),
-      calendar: ['sessions', 'calendar', 'banks'],
-      watch: ['watchlist', 'alerts'],
-    };
     body = (
       <div className="flex h-full min-h-0 flex-col">
         <div className="mb-2 flex justify-center">
-          <Segmented label="Section" size="md" value={mobileTab} onChange={(v) => useStore.getState().set({ mobileTab: v })} options={[{ value: 'feed', label: 'Feed' }, { value: 'markets', label: 'Markets' }, { value: 'calendar', label: 'Calendar' }, { value: 'watch', label: 'Watch' }]} />
+          <Segmented label="Section" size="md" value={mobileTab === 'feed' ? 'feed' : 'markets'} onChange={(v) => useStore.getState().set({ mobileTab: v })} options={[{ value: 'feed', label: 'Feed' }, { value: 'markets', label: 'Panels' }]} />
         </div>
-        {mobileTab === 'feed' ? feed : <div className="min-h-0 flex-1 overflow-y-auto pb-4"><Rail side="right" panels={tabs[mobileTab]} /></div>}
+        {mobileTab === 'feed' ? feed : <div className="min-h-0 flex-1 overflow-y-auto pb-4"><WidgetStack ws={ws} /></div>}
       </div>
     );
   }
@@ -129,8 +123,8 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
       <ThemeSync />
       <Ambient />
       <div className="flex h-dvh flex-col">
-        <Header />
-        <TickerStrip />
+        <div className={`transition-opacity ${editing ? 'pointer-events-none opacity-50' : ''}`}><Header /><TickerStrip /></div>
+        {bp === 'lg' && !focus ? <WorkspaceBar /> : null}
         <div className="relative min-h-0 flex-1 p-3">
           <BreakingBanner />
           {body}
@@ -148,6 +142,8 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
       {overlays.brief && <MorningBrief />}
       <BriefAutoOpen />
       <KeyboardShortcuts />
+      <WorkspaceAutoSwitch />
+      {libraryOpen ? <WidgetLibrary /> : null}
       <AwayTracker />
     </>
   );

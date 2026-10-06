@@ -1,6 +1,12 @@
 'use client';
 import { useEffect, useRef } from 'react';
-import { useStore, type FeedFilter } from '@/lib/store';
+import { useMemo } from 'react';
+import type { FeedFilter } from '@/lib/store';
+import { useStore } from '@/lib/store';
+import type { SmartFeed } from '@shared/v2';
+import { matches } from '@shared/rules';
+import { useFeedFilter } from '@/lib/feedFilter';
+import { useDocs, useV2 } from '@/lib/v2';
 import { Segmented, Icon, Kbd } from './ui';
 
 const TABS: { value: FeedFilter; label: string; accent?: string }[] = [
@@ -14,21 +20,56 @@ const TABS: { value: FeedFilter; label: string; accent?: string }[] = [
 
 export const searchInputRef: { current: HTMLInputElement | null } = { current: null };
 
-export function FilterBar({ counts }: { counts: { shown: number; total: number } }) {
-  const filter = useStore((s) => s.filter);
-  const search = useStore((s) => s.search);
-  const high = useStore((s) => s.highImpactOnly);
-  const breakingOnly = useStore((s) => s.breakingOnly);
-  const set = useStore((s) => s.set);
+/** Matches per hour over the last 12h, for the tiny sparkline in each smart-feed tab. */
+function useFeedRates(feeds: SmartFeed[]) {
+  const clusters = useStore((s) => s.clusters);
+  return useMemo(() => {
+    const now = Date.now();
+    const out: Record<string, number[]> = {};
+    for (const f of feeds) {
+      const bins = new Array(12).fill(0);
+      for (const c of clusters) {
+        const age = Math.floor((now - c.receivedAt) / 3600_000);
+        if (age >= 0 && age < 12 && matches(f.query, c, { watch: !!c.watchHit })) bins[11 - age]++;
+      }
+      out[f.id] = bins;
+    }
+    return out;
+  }, [feeds, clusters]);
+}
+
+function MiniBars({ data, color }: { data: number[]; color: string }) {
+  const max = Math.max(1, ...data);
+  return (
+    <span className="inline-flex h-3 items-end gap-px" aria-hidden>
+      {data.map((v, i) => <span key={i} className="w-[2px] rounded-sm" style={{ height: `${Math.max(8, (v / max) * 100)}%`, background: color, opacity: v ? 0.9 : 0.25 }} />)}
+    </span>
+  );
+}
+
+export function FilterBar({ counts, compact = false }: { counts: { shown: number; total: number }; compact?: boolean }) {
+  const { state, set, local } = useFeedFilter();
+  const { filter, search, highImpactOnly: high, breakingOnly, smartFeedId } = state;
+  const feeds = useDocs<SmartFeed>('smart_feeds');
+  const sorted = useMemo(() => [...feeds].sort((a, b) => a.order - b.order), [feeds]);
+  const rates = useFeedRates(sorted);
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    searchInputRef.current = ref.current;
-  }, []);
+    if (!local) searchInputRef.current = ref.current;
+  }, [local]);
 
   return (
     <div className="flex flex-col gap-2 px-1 pb-2">
-      <div className="overflow-x-auto">
-        <Segmented label="Feed filter" size="md" value={filter} onChange={(v) => set({ filter: v })} options={TABS} />
+      <div className="flex items-center gap-2 overflow-x-auto">
+        <Segmented label="Feed filter" size={compact ? 'sm' : 'md'} value={smartFeedId ? ('' as FeedFilter) : filter} onChange={(v) => set({ filter: v, smartFeedId: null })} options={TABS} />
+        {sorted.map((f) => (
+          <button key={f.id} onClick={() => set({ smartFeedId: smartFeedId === f.id ? null : f.id })} onDoubleClick={() => useV2.getState().set({ feedBuilder: f.id })} title={`${f.query}\nDouble-click to edit`}
+            className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-medium ${smartFeedId === f.id ? 'border-line-strong bg-panel-hover text-text' : 'border-line text-faint hover:text-dim'}`}>
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: f.color }} />{f.icon ? <span aria-hidden>{f.icon}</span> : null}{f.name}
+            <MiniBars data={rates[f.id] ?? []} color={f.color} />
+          </button>
+        ))}
+        <button onClick={() => useV2.getState().set({ feedBuilder: 'new' })} className="flex shrink-0 items-center gap-1 rounded-lg border border-dashed border-line px-2 py-1 text-[11px] text-faint hover:text-text" title="New smart feed"><Icon name="plus" size={11} />Feed</button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <label className="glass flex min-w-[220px] flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 focus-within:border-accent/50">

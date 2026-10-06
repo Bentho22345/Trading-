@@ -29,6 +29,8 @@ export interface Settings {
   ttsRate: number;
   ttsVoice: string;
   ttsServer: boolean;
+  activeWorkspace: string;
+  shortcuts: Record<string, string>;
 }
 
 export const DEFAULT_LAYOUT: Layout = {
@@ -40,7 +42,7 @@ export const DEFAULT_LAYOUT: Layout = {
 const DEFAULTS: Settings = {
   theme: 'dark', colorblind: false, calm: false, tickerSpeed: 45, tickerGroups: ['EQ', 'FX', 'CRYPTO'],
   sound: false, notifications: false, focus: false, layout: DEFAULT_LAYOUT,
-  ttsRate: 1, ttsVoice: '', ttsServer: false,
+  ttsRate: 1, ttsVoice: '', ttsServer: false, activeWorkspace: 'desk', shortcuts: {},
 };
 
 const KEY = 'pulse.settings.v1';

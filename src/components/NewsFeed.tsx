@@ -11,6 +11,10 @@ import { NextEventCard } from './NextEvent';
 import { HandoffCards } from './HandoffCards';
 import { EmptyState, Skeleton, Icon } from './ui';
 import { useSettings } from '@/lib/settings';
+import { useFeedFilter } from '@/lib/feedFilter';
+import { useDocs } from '@/lib/v2';
+import { useHeld, touchesBook } from '@/lib/relevance';
+import type { SmartFeed } from '@shared/v2';
 
 function FeedSkeleton() {
   return (
@@ -27,15 +31,16 @@ function FeedSkeleton() {
   );
 }
 
-export function NewsFeed({ initial }: { initial?: NewsCluster[] }) {
+export function NewsFeed({ initial, compact = false }: { initial?: NewsCluster[]; compact?: boolean }) {
   const live = useStore((s) => s.clusters);
   // server-rendered first screen until the WebSocket snapshot arrives
   const clusters = live.length || !initial ? live : initial;
   const hydrated = useStore((s) => s.hydrated);
-  const filter = useStore((s) => s.filter);
-  const search = useStore((s) => s.search);
-  const highImpactOnly = useStore((s) => s.highImpactOnly);
-  const breakingOnly = useStore((s) => s.breakingOnly);
+  const { state: ff, local } = useFeedFilter();
+  const { filter, search, highImpactOnly, breakingOnly, smartFeedId } = ff;
+  const feeds = useDocs<SmartFeed>('smart_feeds');
+  const query = smartFeedId ? feeds.find((f) => f.id === smartFeedId)?.query ?? null : null;
+  const held = useHeld();
   const breakingThreshold = useStore((s) => s.breakingThreshold);
   const savedIds = useStore((s) => s.savedIds);
   const readIds = useStore((s) => s.readIds);
@@ -49,13 +54,13 @@ export function NewsFeed({ initial }: { initial?: NewsCluster[] }) {
   const [exhausted, setExhausted] = useState(false);
 
   const filtered = useMemo(
-    () => clusters.filter((c) => matchesFilter(c, { filter, search, highImpactOnly, breakingOnly, breakingThreshold, savedIds })),
-    [clusters, filter, search, highImpactOnly, breakingOnly, breakingThreshold, savedIds],
+    () => clusters.filter((c) => matchesFilter(c, { filter, search, highImpactOnly, breakingOnly, breakingThreshold, savedIds, query, inBook: (x) => touchesBook(x, held) })),
+    [clusters, filter, search, highImpactOnly, breakingOnly, breakingThreshold, savedIds, query, held],
   );
   // While the reader is scrolled down, hold back newer items so nothing shifts under them.
   const display = useMemo(() => (anchorTs === null ? filtered : filtered.filter((c) => c.receivedAt <= anchorTs)), [filtered, anchorTs]);
   const pending = filtered.length - display.length;
-  feedOrder.ids = display.map((c) => c.id);
+  if (!local) feedOrder.ids = display.map((c) => c.id);
 
   // "fresh" = arrived live after the initial load → gets the entrance animation once
   const seen = useRef<Map<string, number>>(new Map());
@@ -126,9 +131,9 @@ export function NewsFeed({ initial }: { initial?: NewsCluster[] }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <FilterBar counts={{ shown: display.length, total: clusters.length }} />
+      <FilterBar counts={{ shown: display.length, total: clusters.length }} compact={compact} />
       {focus ? <div className="px-1 pb-2"><NextEventCard compact /></div> : null}
-      <HandoffCards />
+      {!local ? <HandoffCards /> : null}
       <div className="relative min-h-0 flex-1">
         {pending > 0 && (
           <button
@@ -159,7 +164,7 @@ export function NewsFeed({ initial }: { initial?: NewsCluster[] }) {
                     className="absolute left-0 right-0 top-0"
                     style={{ transform: `translateY(${vi.start}px)`, transition: calm ? undefined : 'transform 340ms cubic-bezier(0.2, 0.8, 0.2, 1)' }}
                   >
-                    <NewsCard c={c} fresh={t > 0 && now - t < 2000} selected={selectedId === c.id} read={readIds.has(c.id)} saved={savedIds.has(c.id)} />
+                    <NewsCard c={c} fresh={t > 0 && now - t < 2000} selected={selectedId === c.id} read={readIds.has(c.id)} saved={savedIds.has(c.id)} inBook={touchesBook(c, held)} />
                   </div>
                 );
               })}

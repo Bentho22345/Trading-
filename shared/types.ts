@@ -296,7 +296,7 @@ export type ServerMsg =
   | { t: 'pong'; id: number; serverTime: number }
   | V2Msg;
 
-export type ClientMsg = { t: 'ping'; id: number } | { t: 'vis'; hidden: boolean };
+export type ClientMsg = { t: 'ping'; id: number } | { t: 'vis'; hidden: boolean } | { t: 'resnap' };
 
 export interface HistoryPoint {
   t: number; // ms, minute start

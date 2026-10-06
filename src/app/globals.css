@@ -329,3 +329,7 @@ body {
   .no-print { display: none !important; }
   .print-root { position: static !important; overflow: visible !important; }
 }
+/* panels inside workspace widgets fill their cell and scroll internally */
+.widget-fill > section { height: 100%; }
+.widget-fill > section > div:last-child { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.widget-fill > div:only-child { height: 100%; }
