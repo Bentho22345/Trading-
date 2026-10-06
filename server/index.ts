@@ -15,6 +15,7 @@ import { updateBankHeadline } from './adapters/banks';
 import type { AdapterContext } from './adapters/types';
 import { Fanout } from './ws';
 import { createApi } from './http';
+import { createV2 } from './v2';
 
 const log = {
   info: (m: string, ...a: unknown[]) => console.log(m, ...a),
@@ -64,6 +65,7 @@ function snapshot(): Snapshot {
     savedIds: savedIds(),
     aiEnabled: ai.enabled,
     breakingThreshold: config.breakingThreshold,
+    ...v2.snapshotExtra(),
   };
 }
 
@@ -85,10 +87,16 @@ const embedWeb = process.env.PULSE_WEB !== '0' && !process.argv.includes('--api-
 type NextHandlers = { handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>; upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => Promise<void> };
 let web: NextHandlers | null = null;
 const server = createServer((req, res) => {
-  if (req.url?.startsWith('/api/') || !web) return void api(req, res);
+  if (req.url?.startsWith('/api/') || !web) {
+    void v2.handle(req, res).then((handled) => {
+      if (!handled) void api(req, res);
+    });
+    return;
+  }
   void web.handle(req, res);
 });
 const fanout = new Fanout(snapshot);
+const v2 = createV2({ hub, pipeline, alerts, watchlist: () => watchlist, broadcast: (m) => fanout.broadcast(m) });
 server.on('upgrade', (req, socket, head) => {
   if (req.url?.split('?')[0] === '/ws') fanout.handleUpgrade(req, socket, head);
   else if (web) void web.upgrade(req, socket, head);
@@ -105,6 +113,7 @@ hub.on('banks', (d) => fanout.broadcast({ t: 'banks', d }));
 hub.on('crypto', (d) => fanout.broadcast({ t: 'crypto', d }));
 hub.on('vol', (d) => fanout.broadcast({ t: 'vol', d }));
 hub.on('analytics', (d) => fanout.broadcast({ t: 'analytics', d }));
+hub.on('intel', (d) => fanout.broadcast({ t: 'intel', d }));
 pipeline.on('cluster', (c, breakingNow: boolean) => {
   fanout.broadcast({ t: 'cluster', d: c, breakingNow });
   alerts.onCluster(c);
@@ -121,7 +130,7 @@ const ctx: AdapterContext = { hub, log, emitNews: (a) => pipeline.ingest(a), new
 // one status row per stream (several news adapters share the "news" stream)
 const LABELS: Record<StreamId, string> = {
   crypto: 'Crypto prices', fx: 'FX quotes', equities: 'Equities', news: 'News', calendar: 'Economic calendar', banks: 'Central banks',
-  cryptoMarket: 'Crypto metrics', vol: 'Volatility', options: 'Options flow', earnings: 'Earnings calendar',
+  cryptoMarket: 'Crypto metrics', vol: 'Volatility', options: 'Options flow', earnings: 'Earnings calendar', macro: 'Rates, indices & commodities',
 };
 const byStream = new Map<StreamId, typeof adapters>();
 for (const a of adapters) byStream.set(a.stream, [...(byStream.get(a.stream) ?? []), a]);
@@ -157,6 +166,7 @@ server.listen(config.port, config.host, async () => {
 });
 
 const pruneTimer = setInterval(() => pipeline.pruneDb(), 3600_000);
+v2.start();
 
 let shuttingDown = false;
 async function shutdown(sig: string) {
@@ -171,6 +181,7 @@ async function shutdown(sig: string) {
       /* ignore */
     }
   }
+  v2.stop();
   hub.stop();
   fanout.close();
   server.close();

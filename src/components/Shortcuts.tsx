@@ -6,6 +6,7 @@ import { feedOrder } from '@/lib/filter';
 import { searchInputRef } from './FilterBar';
 import { Overlay } from './Overlay';
 import { Kbd } from './ui';
+import { useV2 } from '@/lib/v2';
 
 const SHORTCUTS: [string, string][] = [
   ['⌘K / Ctrl K', 'Command palette'],
@@ -13,7 +14,8 @@ const SHORTCUTS: [string, string][] = [
   ['Enter', 'Open story timeline'],
   ['O', 'Open source article'],
   ['S', 'Save / unsave story'],
-  ['M', 'Toggle read / unread'],
+  ['U', 'Toggle read / unread'],
+  ['M', 'Morning brief'],
   ['/', 'Search'],
   ['B', 'Toggle breaking-only'],
   ['H', 'Toggle high impact only'],
@@ -39,6 +41,7 @@ export function KeyboardShortcuts() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (st.paletteOpen || st.drawerSymbol || st.timelineId || st.settingsOpen || st.digestSince) return;
+      if (useV2.getState().briefOpen) return;
 
       const ids = feedOrder.ids;
       const idx = st.selectedId ? ids.indexOf(st.selectedId) : -1;
@@ -73,9 +76,13 @@ export function KeyboardShortcuts() {
         case 'S':
           if (sel) st.toggleSaved(sel.id);
           break;
+        case 'u':
+        case 'U':
+          if (sel) st.markRead(sel.id, !st.readIds.has(sel.id));
+          break;
         case 'm':
         case 'M':
-          if (sel) st.markRead(sel.id, !st.readIds.has(sel.id));
+          useV2.getState().openBrief(null);
           break;
         case '/':
           e.preventDefault();

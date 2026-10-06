@@ -41,6 +41,7 @@ export const providers = {
   cryptoMarket: pick('CRYPTO_MARKET_PROVIDER', () => (MODE === 'live' ? 'public' : 'mock')),
   vol: pick('VOL_PROVIDER', () => (MODE === 'live' ? 'cboe' : 'mock')),
   options: pick('OPTIONS_PROVIDER', () => (MODE === 'live' ? 'cboe' : 'mock')),
+  macro: pick('MACRO_PROVIDER', () => (MODE === 'live' ? 'stooq' : 'mock')),
 };
 
 export const config = {

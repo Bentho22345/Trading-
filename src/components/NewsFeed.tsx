@@ -8,6 +8,7 @@ import { matchesFilter, feedOrder } from '@/lib/filter';
 import { NewsCard } from './NewsCard';
 import { FilterBar } from './FilterBar';
 import { NextEventCard } from './NextEvent';
+import { HandoffCards } from './HandoffCards';
 import { EmptyState, Skeleton, Icon } from './ui';
 import { useSettings } from '@/lib/settings';
 
@@ -127,6 +128,7 @@ export function NewsFeed({ initial }: { initial?: NewsCluster[] }) {
     <div className="flex h-full min-h-0 flex-col">
       <FilterBar counts={{ shown: display.length, total: clusters.length }} />
       {focus ? <div className="px-1 pb-2"><NextEventCard compact /></div> : null}
+      <HandoffCards />
       <div className="relative min-h-0 flex-1">
         {pending > 0 && (
           <button

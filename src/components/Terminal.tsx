@@ -14,6 +14,7 @@ import { Toasts } from './Toasts';
 import { KeyboardShortcuts } from './Shortcuts';
 import { AwayTracker } from './Digest';
 import { Segmented } from './ui';
+import { useV2 } from '@/lib/v2';
 
 // Overlays aren't needed for first paint: split them (and cmdk / chart code) out of the main bundle.
 // Side rails mount on idle anyway; loading them (and the animation library they use) lazily keeps
@@ -26,6 +27,8 @@ const CommandPalette = dynamic(() => import('./CommandPalette').then((m) => m.Co
 const ShortcutSheet = dynamic(() => import('./Shortcuts').then((m) => m.ShortcutSheet), { ssr: false });
 const SettingsModal = dynamic(() => import('./SettingsModal').then((m) => m.SettingsModal), { ssr: false });
 const DigestModal = dynamic(() => import('./Digest').then((m) => m.DigestModal), { ssr: false });
+const MorningBrief = dynamic(() => import('./brief/MorningBrief').then((m) => m.MorningBrief), { ssr: false });
+const BriefAutoOpen = dynamic(() => import('./brief/MorningBrief').then((m) => m.BriefAutoOpen), { ssr: false });
 
 type BP = 'sm' | 'md' | 'lg';
 function useBreakpoint(): BP {
@@ -47,8 +50,9 @@ function useOpenedOverlays() {
   const shortcuts = useStore((s) => s.shortcutsOpen);
   const settings = useStore((s) => s.settingsOpen);
   const digest = useStore((s) => !!s.digestSince);
-  const seen = useRef({ drawer: false, timeline: false, palette: false, shortcuts: false, settings: false, digest: false });
-  const now = { drawer, timeline, palette, shortcuts, settings, digest };
+  const brief = useV2((s) => s.briefOpen);
+  const seen = useRef({ drawer: false, timeline: false, palette: false, shortcuts: false, settings: false, digest: false, brief: false });
+  const now = { drawer, timeline, palette, shortcuts, settings, digest, brief };
   for (const k of Object.keys(now) as (keyof typeof now)[]) if (now[k]) seen.current[k] = true;
   return seen.current;
 }
@@ -141,6 +145,8 @@ export function Terminal({ initialClusters }: { initialClusters?: NewsCluster[] 
       {overlays.shortcuts && <ShortcutSheet />}
       {overlays.settings && <SettingsModal />}
       {overlays.digest && <DigestModal />}
+      {overlays.brief && <MorningBrief />}
+      <BriefAutoOpen />
       <KeyboardShortcuts />
       <AwayTracker />
     </>

@@ -95,6 +95,37 @@ export function stooqFxAdapter(): Adapter {
   };
 }
 
+// ------------------------------------------------------------------ Stooq macro (indices, commodities, yields, DXY)
+export function stooqMacroAdapter(): Adapter {
+  let stop: (() => void) | null = null;
+  const syms = SYMBOLS.filter((s) => s.stooq);
+  return {
+    id: 'stooq-macro', stream: 'macro', provider: 'Stooq (keyless, delayed)', mock: false, delayedMin: 15, staleAfterMs: 15 * 60_000,
+    start(ctx) {
+      stop = poller(async () => {
+        const qs: QuoteInput[] = [];
+        for (let i = 0; i < syms.length; i += 12) {
+          const chunk = syms.slice(i, i + 12);
+          const rows = await stooqBatch(chunk.map((s) => s.stooq!));
+          for (const s of chunk) {
+            const r = rows.get(s.stooq!.toLowerCase());
+            if (r) qs.push({ symbol: s.symbol, price: +r.close.toFixed(s.decimals), ref: r.prev ?? undefined, ts: r.ts, source: 'Stooq', delayedMin: Math.max(15, delayOf(r.ts)) });
+          }
+          await sleep(500);
+        }
+        if (!qs.length) throw new Error('no macro quotes from Stooq');
+        ctx.hub.pushQuotes(qs, 'macro');
+      }, 90_000, (e) => {
+        ctx.log.warn(`[stooq-macro] ${errText(e)}`);
+        ctx.hub.reportError('macro', errText(e));
+      });
+    },
+    stop() {
+      stop?.();
+    },
+  };
+}
+
 // ------------------------------------------------------------------ Nasdaq earnings calendar
 export function nasdaqEarningsAdapter(): Adapter {
   let stop: (() => void) | null = null;

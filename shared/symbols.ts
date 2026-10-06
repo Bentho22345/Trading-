@@ -55,6 +55,10 @@ export interface SymbolDef extends SymbolMeta {
   alpaca?: string;
   /** Aliases the news tagger uses to link text to this symbol */
   aliases?: string[];
+  /** Stooq symbol for keyless macro quotes */
+  stooq?: string;
+  /** Yields: changes are shown in basis points */
+  bp?: boolean;
 }
 
 const equities: [string, string, number, number, string[]][] = [
@@ -108,6 +112,33 @@ const coins: [string, string, number, number, string[], number][] = [
   ['USDC', 'USD Coin', 1.0, 0.004, ['USDC', 'Circle'], 4],
 ];
 
+// [symbol, name, class, base, vol, stooq, decimals, aliases]
+const macro: [string, string, 'index' | 'commodity' | 'rate', number, number, string, number, string[]][] = [
+  ['SPX', 'S&P 500', 'index', 6650, 0.15, '^spx', 2, ['S&P 500', 'S&P']],
+  ['NDX', 'Nasdaq 100', 'index', 24500, 0.2, '^ndx', 2, ['Nasdaq 100', 'Nasdaq']],
+  ['DJI', 'Dow Jones', 'index', 46300, 0.14, '^dji', 2, ['Dow Jones', 'the Dow']],
+  ['DAX', 'DAX 40', 'index', 23700, 0.17, '^dax', 2, ['DAX']],
+  ['UKX', 'FTSE 100', 'index', 9350, 0.13, '^ukx', 2, ['FTSE 100', 'FTSE']],
+  ['NKY', 'Nikkei 225', 'index', 45500, 0.2, '^nkx', 2, ['Nikkei']],
+  ['HSI', 'Hang Seng', 'index', 26500, 0.24, '^hsi', 2, ['Hang Seng']],
+  ['DXY', 'US Dollar Index', 'index', 97.8, 0.07, 'dx.f', 3, ['dollar index', 'DXY']],
+  ['GOLD', 'Gold', 'commodity', 3790, 0.16, 'gc.f', 2, ['gold']],
+  ['SILVER', 'Silver', 'commodity', 46, 0.3, 'si.f', 3, ['silver']],
+  ['WTI', 'WTI Crude', 'commodity', 62.5, 0.35, 'cl.f', 2, ['WTI', 'crude oil', 'oil prices']],
+  ['BRENT', 'Brent Crude', 'commodity', 66.2, 0.33, 'cb.f', 2, ['Brent']],
+  ['NATGAS', 'Natural Gas', 'commodity', 3.1, 0.6, 'ng.f', 3, ['natural gas']],
+  ['COPPER', 'Copper', 'commodity', 4.75, 0.25, 'hg.f', 4, ['copper']],
+  ['US2Y', 'US 2Y yield', 'rate', 3.58, 0.3, '2usy.b', 3, ['2-year Treasury', 'two-year yield']],
+  ['US5Y', 'US 5Y yield', 'rate', 3.68, 0.25, '5usy.b', 3, ['5-year Treasury']],
+  ['US10Y', 'US 10Y yield', 'rate', 4.12, 0.2, '10usy.b', 3, ['10-year Treasury', '10-year yield', 'Treasury yields']],
+  ['US30Y', 'US 30Y yield', 'rate', 4.71, 0.17, '30usy.b', 3, ['30-year Treasury']],
+  ['DE10Y', 'German 10Y Bund', 'rate', 2.71, 0.22, '10dey.b', 3, ['Bund yield', 'Bunds']],
+  ['GB10Y', 'UK 10Y Gilt', 'rate', 4.71, 0.2, '10uky.b', 3, ['gilt yield', 'gilts']],
+  ['JP10Y', 'Japan 10Y JGB', 'rate', 1.65, 0.3, '10jpy.b', 3, ['JGB yield', 'JGBs']],
+  ['FR10Y', 'France 10Y OAT', 'rate', 3.52, 0.2, '10fry.b', 3, ['OAT yield']],
+  ['IT10Y', 'Italy 10Y BTP', 'rate', 3.55, 0.22, '10ity.b', 3, ['BTP yield', 'BTPs']],
+];
+
 function fxDef(pair: string, major: boolean): SymbolDef {
   const b = pair.slice(0, 3), q = pair.slice(3);
   const base = (MOCK_USD_PER[b] ?? 1) / (MOCK_USD_PER[q] ?? 1);
@@ -137,6 +168,9 @@ export const SYMBOLS: SymbolDef[] = [
   ...MAJOR_PAIRS.map((p) => fxDef(p, HEADLINE_FX.includes(p))),
   ...EM_FX.map((p) => fxDef(p, false)),
   fxDef('XAUUSD', false),
+  ...macro.map(([symbol, name, assetClass, base, vol, stooq, decimals, aliases]): SymbolDef => ({
+    symbol, name, assetClass, decimals, group: 'MACRO', mock: { base, vol }, stooq, aliases, bp: assetClass === 'rate' || undefined,
+  })),
   ...coins.map(([symbol, name, base, vol, aliases, decimals]): SymbolDef => ({
     symbol, name, assetClass: 'crypto', decimals, group: 'CRYPTO', mock: { base, vol },
     coinbase: `${symbol}-USD`, binance: `${symbol}USDT`, aliases,
@@ -146,10 +180,13 @@ export const SYMBOLS: SymbolDef[] = [
 export const SYMBOL_MAP: Record<string, SymbolDef> = Object.fromEntries(SYMBOLS.map((s) => [s.symbol, s]));
 
 export function toMeta(s: SymbolDef): SymbolMeta {
-  const { symbol, name, assetClass, decimals, group, major } = s;
-  return { symbol, name, assetClass, decimals, group, major };
+  const { symbol, name, assetClass, decimals, group, major, bp } = s;
+  return { symbol, name, assetClass, decimals, group, major, ...(bp ? { bp } : {}) };
 }
 
 export function isPair(s: string) {
   return SYMBOL_MAP[s]?.assetClass === 'fx';
 }
+
+export const MACRO_CLASSES = new Set(['index', 'commodity', 'rate']);
+export const isMacro = (s: string) => MACRO_CLASSES.has(SYMBOL_MAP[s]?.assetClass ?? '');

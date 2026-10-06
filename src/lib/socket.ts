@@ -3,6 +3,7 @@ import type { Quote, ServerMsg } from '@shared/types';
 import { useStore } from './store';
 import { useSettings } from './settings';
 import { playChime } from './sound';
+import { useV2 } from './v2';
 
 /**
  * Browser ⇄ worker WebSocket.
@@ -80,10 +81,37 @@ export function connect(): () => void {
     const s = st();
     s.set({ lastMsgAt: Date.now() });
     switch (m.t) {
-      case 'snapshot':
+      case 'snapshot': {
         s.applySnapshot(m.d);
+        const v = useV2.getState();
+        v.set({ intel: Object.fromEntries((m.d.intel ?? []).map((b) => [b.key, b])), handoffs: m.d.handoffs ?? [], exposure: m.d.exposure ?? null });
+        if (!v.docsLoaded) void v.loadDocs();
         backfill();
         break;
+      }
+      case 'intel': useV2.getState().setIntel(m.d); break;
+      case 'doc': useV2.getState().applyDoc(m.c, m.op, m.d); break;
+      case 'brief': {
+        const v = useV2.getState();
+        v.set({ latestBrief: m.d });
+        s.pushToast({ kind: 'info', title: `${m.d.kind === 'eod' ? 'End-of-day wrap' : m.d.kind === 'weekly' ? 'Weekly review' : m.d.kind === 'handoff' ? 'Session handoff' : 'Brief'} ready`, body: m.d.headline });
+        if (m.open && !document.hidden) v.openBrief(m.d.id);
+        break;
+      }
+      case 'handoff': useV2.getState().set({ handoffs: [m.d, ...useV2.getState().handoffs.filter((h) => h.id !== m.d.id)].slice(0, 6) }); break;
+      case 'exposure': useV2.getState().set({ exposure: m.d }); break;
+      case 'playbook': {
+        const v = useV2.getState();
+        v.set({ outcomes: [m.d, ...v.outcomes.filter((o) => o.id !== m.d.id)].slice(0, 50) });
+        if (m.d.status === 'pending') s.pushToast({ kind: 'alert', title: `Playbook fired: ${m.d.playbookName}`, body: m.d.scenarioLabel ? `Scenario “${m.d.scenarioLabel}” — ${m.d.eventTitle}` : `${m.d.eventTitle}: no scenario matched` });
+        break;
+      }
+      case 'alert2': {
+        const v = useV2.getState();
+        v.set({ alertHistory: [m.d, ...v.alertHistory.filter((a) => a.id !== m.d.id)].slice(0, 200) });
+        window.dispatchEvent(new CustomEvent('pulse:alert2', { detail: m.d }));
+        break;
+      }
       case 'q': for (const q of m.d) pendingQuotes.set(q.symbol, q); schedule(); break;
       case 'status': s.set({ statuses: m.d }); break;
       case 'cluster':

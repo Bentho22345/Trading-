@@ -21,6 +21,15 @@ const GeistMono = localFont({
   adjustFontFallback: false,
 });
 
+// Editorial serif for the Morning Brief (self-hosted from @fontsource-variable, only loaded where used)
+const Newsreader = localFont({
+  src: '../../node_modules/@fontsource-variable/newsreader/files/newsreader-latin-wght-normal.woff2',
+  variable: '--font-newsreader',
+  weight: '200 800',
+  display: 'swap',
+  preload: false,
+});
+
 export const metadata: Metadata = {
   title: 'PULSE — Markets Intelligence Terminal',
   description: 'Real-time FX, crypto and equities news and market data.',
@@ -37,7 +46,7 @@ const themeScript = `try{var s=JSON.parse(localStorage.getItem('pulse.settings.v
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" data-theme="dark" className={`${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
+    <html lang="en" data-theme="dark" className={`${GeistSans.variable} ${GeistMono.variable} ${Newsreader.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>

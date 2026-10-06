@@ -5,13 +5,13 @@ import { HEADLINE_FX } from '@shared/symbols';
 import { useStore } from '@/lib/store';
 import { useSettings } from '@/lib/settings';
 import { useFlash, useQuote, usePrefersReducedMotion, useInterval } from '@/lib/hooks';
-import { fmtChange, fmtPct, fmtPrice, pairLabel } from '@/lib/format';
+import { fmtBp, fmtChange, fmtPct, fmtPrice, pairLabel } from '@/lib/format';
 import { Odometer } from './Odometer';
 import { Icon } from './ui';
 
 type Item = { kind: 'label'; group: TickerGroup; text: string } | { kind: 'sym'; symbol: string; group: TickerGroup };
 
-const GROUP_COLOR: Record<TickerGroup, string> = { EQ: 'var(--eq)', FX: 'var(--fx)', CRYPTO: 'var(--crypto)' };
+const GROUP_COLOR: Record<TickerGroup, string> = { EQ: 'var(--eq)', FX: 'var(--fx)', CRYPTO: 'var(--crypto)', MACRO: 'var(--rates)' };
 
 /** Membership is recomputed once a minute (not on every tick) so the strip doesn't reshuffle under the reader. */
 function computeItems(groups: TickerGroup[]): Item[] {
@@ -31,6 +31,9 @@ function computeItems(groups: TickerGroup[]): Item[] {
     } else if (g === 'FX') {
       out.push({ kind: 'label', group: g, text: 'FX' });
       for (const s of [...HEADLINE_FX, 'USDMXN', 'USDCNH', 'XAUUSD']) if (quotes[s]) out.push({ kind: 'sym', symbol: s, group: g });
+    } else if (g === 'MACRO') {
+      out.push({ kind: 'label', group: g, text: 'Macro' });
+      for (const s of ['SPX', 'NDX', 'DAX', 'NKY', 'DXY', 'US2Y', 'US10Y', 'GOLD', 'WTI', 'BRENT', 'COPPER']) if (quotes[s]) out.push({ kind: 'sym', symbol: s, group: g });
     } else {
       const cr = qs.filter((q) => symbols[q.symbol]?.assetClass === 'crypto' && q.symbol !== 'USDC').sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct));
       out.push({ kind: 'label', group: g, text: 'Crypto' });
@@ -58,8 +61,10 @@ const TickerItem = memo(function TickerItem({ symbol }: { symbol: string }) {
       <Odometer value={fmtPrice(q.price, d)} className="text-text" />
       <span className={`flex items-center gap-0.5 num ${up ? 'text-up' : 'text-down'}`}>
         <Icon name={up ? 'up' : 'down'} size={10} />
-        <span className="hidden sm:inline">{fmtChange(q.change, d)}</span>
-        <span className="opacity-90">({fmtPct(q.changePct)})</span>
+        {meta.bp ? <span>{fmtBp(q.change)}</span> : <>
+          <span className="hidden sm:inline">{fmtChange(q.change, d)}</span>
+          <span className="opacity-90">({fmtPct(q.changePct)})</span>
+        </>}
       </span>
       {q.delayedMin ? <span className="rounded bg-warn/15 px-1 text-[9px] font-semibold text-warn">{q.delayedMin}m</span> : null}
     </button>

@@ -10,7 +10,7 @@ import { twelveDataAdapter, finnhubFxAdapter } from './live/fx';
 import { rssAdapter, cryptoPanicAdapter } from './live/news';
 import { publicCryptoMarketAdapter, cboeVolAdapter, forexFactoryAdapter } from './live/panels';
 import { cboeOptionsAdapter } from './live/options';
-import { stooqEquityAdapter, stooqFxAdapter, nasdaqEarningsAdapter, okxLiquidationsAdapter } from './live/keyless';
+import { stooqEquityAdapter, stooqFxAdapter, stooqMacroAdapter, nasdaqEarningsAdapter, okxLiquidationsAdapter } from './live/keyless';
 
 type Factory = () => Adapter;
 
@@ -25,10 +25,11 @@ const REGISTRY: Record<string, Record<string, Factory>> = {
   cryptoMarket: { mock: mockCryptoMarketAdapter, public: publicCryptoMarketAdapter },
   vol: { mock: mockVolAdapter, cboe: cboeVolAdapter },
   options: { mock: mockOptionsAdapter, cboe: cboeOptionsAdapter },
+  macro: { mock: () => mockQuoteAdapter('macro'), stooq: stooqMacroAdapter },
 };
 
 /** In live mode a missing key or unknown provider falls back to the keyless real source, never to demo data. */
-const KEYLESS: Record<string, string> = { crypto: 'coinbase', equities: 'stooq', fx: 'stooq', news: 'rss', calendar: 'forexfactory', earnings: 'nasdaq', cryptoMarket: 'public', vol: 'cboe', options: 'cboe' };
+const KEYLESS: Record<string, string> = { crypto: 'coinbase', equities: 'stooq', fx: 'stooq', news: 'rss', calendar: 'forexfactory', earnings: 'nasdaq', cryptoMarket: 'public', vol: 'cboe', options: 'cboe', macro: 'stooq' };
 const fallbackFor = (stream: string) => (MODE === 'live' || stream === 'news' ? KEYLESS[stream] : 'mock');
 
 const NEEDS_KEY: Record<string, () => boolean> = {
@@ -65,6 +66,7 @@ export function buildAdapters(log: { warn: (m: string) => void }): Adapter[] {
   if (providers.cryptoMarket === 'public') out.push(okxLiquidationsAdapter());
   add('vol', providers.vol);
   add('options', providers.options);
+  add('macro', providers.macro);
   if (out.some((a) => a.id === 'cboe')) mockMarket.skip.add('VIX');
   return out;
 }

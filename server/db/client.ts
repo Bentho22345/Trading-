@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { config } from '../config';
 import * as schema from './schema';
+import { migrate } from './migrate';
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 const sqlite = new Database(config.dbPath);
@@ -31,6 +32,8 @@ CREATE TABLE IF NOT EXISTS watchlist (id TEXT PRIMARY KEY, kind TEXT NOT NULL, v
 CREATE TABLE IF NOT EXISTS alerts (id TEXT PRIMARY KEY, rule TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS alert_events (id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, message TEXT NOT NULL, ts INTEGER NOT NULL);
 `);
+
+migrate(sqlite);
 
 export const db = drizzle(sqlite, { schema });
 export { schema, sqlite };

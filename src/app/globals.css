@@ -23,6 +23,9 @@
   --eq: #a78bfa;
   --macro: #2dd4bf;
   --reg: #f472b6;
+  --rates: #60a5fa;
+  --cmdty: #e6b422;
+  --social: #fb7fc4;
   --warn: #fbbf24;
   --accent: #8b8bff;
   --shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.7);
@@ -50,6 +53,9 @@
   --eq: #7c3aed;
   --macro: #0d9488;
   --reg: #db2777;
+  --rates: #2563eb;
+  --cmdty: #a16207;
+  --social: #c026d3;
   --warn: #b45309;
   --accent: #5b5bf0;
   --shadow: 0 10px 30px -18px rgba(20, 20, 60, 0.35);
@@ -61,6 +67,9 @@
   --down: #ff8a1f;
   --up-bg: rgba(59, 158, 255, 0.16);
   --down-bg: rgba(255, 138, 31, 0.16);
+  /* keep domain hues distinguishable from the blue/orange up/down pair */
+  --rates: #9aa5ff;
+  --cmdty: #d9c74a;
 }
 
 @theme inline {
@@ -81,6 +90,10 @@
   --color-eq: var(--eq);
   --color-macro: var(--macro);
   --color-reg: var(--reg);
+  --color-rates: var(--rates);
+  --color-cmdty: var(--cmdty);
+  --color-social: var(--social);
+  --font-serif: var(--font-newsreader), 'Iowan Old Style', Georgia, serif;
   --color-warn: var(--warn);
   --color-accent: var(--accent);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
@@ -157,6 +170,8 @@ body {
 .d-equities, .d-options { --d: var(--eq); }
 .d-macro, .d-centralbanks { --d: var(--macro); }
 .d-regulation { --d: var(--reg); }
+.d-rates { --d: var(--rates); }
+.d-commodities { --d: var(--cmdty); }
 
 }
 
@@ -276,4 +291,41 @@ body {
     scroll-behavior: auto !important;
   }
   .skeleton { animation: none; }
+}
+
+/* ------------------------------------------------------------------ PULSE 2.0 */
+.font-serif { font-family: var(--font-serif); font-optical-sizing: auto; }
+@keyframes spark-draw { to { stroke-dashoffset: 0; } }
+@keyframes brief-reveal { from { opacity: 0; transform: translateY(10px); clip-path: inset(0 0 100% 0); } to { opacity: 1; transform: none; clip-path: inset(0 0 0 0); } }
+.brief-reveal { opacity: 0; animation: brief-reveal 320ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+/* personal relevance: thin left accent on anything touching the book / watchlist / playbooks */
+.relevant { box-shadow: inset 2px 0 0 0 var(--accent); }
+@keyframes ring-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+.ring-pulse { animation: ring-pulse 1.1s ease-out 1; }
+@keyframes bar-grow { from { transform: scaleX(0); } }
+.bar-grow { transform-origin: left; animation: bar-grow 700ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.ease-value { transition: width 700ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 700ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 900ms ease, opacity 400ms ease; }
+.brief-paper {
+  background:
+    radial-gradient(1200px 500px at 50% -10%, color-mix(in oklab, var(--accent) 10%, transparent), transparent 70%),
+    var(--bg);
+}
+@keyframes grain { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(-3%, 2%); } 50% { transform: translate(2%, -3%); } 75% { transform: translate(-2%, -2%); } }
+.film-grain::before {
+  content: ''; position: fixed; inset: -50%; pointer-events: none; z-index: 1; opacity: 0.07;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: grain 1.2s steps(4) infinite;
+}
+.edit-dim > :not(.edit-target) { opacity: 0.55; transition: opacity 200ms; }
+.calm .brief-reveal { animation: fade-in 120ms ease-out forwards; }
+.calm .ring-pulse, .calm .bar-grow, .calm .film-grain::before { animation: none; }
+.calm .ease-value { transition-duration: 150ms; }
+@media (prefers-reduced-motion: reduce) {
+  .brief-reveal { animation: none; opacity: 1; }
+  .ring-pulse, .bar-grow, .film-grain::before { animation: none; }
+}
+@media print {
+  body { overflow: visible !important; background: #fff !important; }
+  .no-print { display: none !important; }
+  .print-root { position: static !important; overflow: visible !important; }
 }

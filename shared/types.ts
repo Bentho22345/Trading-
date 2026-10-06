@@ -1,8 +1,9 @@
 // Types shared by the worker and the browser. Keep this file dependency-free.
+import type { IntelBlock, V2Msg, Exposure, HandoffCard } from './v2';
 
-export type AssetClass = 'fx' | 'crypto' | 'equity' | 'etf' | 'vol';
-export type TickerGroup = 'EQ' | 'FX' | 'CRYPTO';
-export type Domain = 'fx' | 'crypto' | 'equities' | 'options' | 'macro' | 'centralbanks' | 'regulation';
+export type AssetClass = 'fx' | 'crypto' | 'equity' | 'etf' | 'vol' | 'index' | 'commodity' | 'rate';
+export type TickerGroup = 'EQ' | 'FX' | 'CRYPTO' | 'MACRO';
+export type Domain = 'fx' | 'crypto' | 'equities' | 'options' | 'macro' | 'centralbanks' | 'regulation' | 'rates' | 'commodities';
 
 export interface SymbolMeta {
   symbol: string;
@@ -12,6 +13,8 @@ export interface SymbolMeta {
   group?: TickerGroup;
   /** Shown in the FX ticker/heatmap */
   major?: boolean;
+  /** Yield instrument: changes are shown in basis points */
+  bp?: boolean;
 }
 
 export interface Quote {
@@ -44,7 +47,8 @@ export type StreamId =
   | 'cryptoMarket'
   | 'vol'
   | 'options'
-  | 'earnings';
+  | 'earnings'
+  | 'macro';
 
 export type StreamState = 'live' | 'stale' | 'down' | 'connecting';
 
@@ -270,6 +274,10 @@ export interface Snapshot {
   savedIds: string[];
   aiEnabled: boolean;
   breakingThreshold: number;
+  intel: IntelBlock[];
+  exposure: Exposure | null;
+  handoffs: HandoffCard[];
+  replayAvailable: boolean;
 }
 
 export type ServerMsg =
@@ -285,7 +293,8 @@ export type ServerMsg =
   | { t: 'watchlist'; d: WatchItem[] }
   | { t: 'alerts'; d: AlertRule[] }
   | { t: 'alert'; d: AlertEvent }
-  | { t: 'pong'; id: number; serverTime: number };
+  | { t: 'pong'; id: number; serverTime: number }
+  | V2Msg;
 
 export type ClientMsg = { t: 'ping'; id: number } | { t: 'vis'; hidden: boolean };
 

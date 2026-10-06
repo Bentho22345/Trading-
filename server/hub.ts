@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type {
   Analytics, CentralBank, CryptoMarket, EconEvent, HistoryPoint, Quote, StreamId, StreamState, StreamStatus, VolData,
 } from '../shared/types';
+import type { IntelBlock, IntelKey } from '../shared/v2';
 import { SYMBOL_MAP, MAJOR_PAIRS } from '../shared/symbols';
 import { currencyStrength } from '../shared/strength';
 
@@ -35,6 +36,7 @@ export class Hub extends EventEmitter {
   crypto: CryptoMarket | null = null;
   vol: VolData | null = null;
   analytics: Analytics | null = null;
+  intel = new Map<IntelKey, IntelBlock>();
   private timers: NodeJS.Timeout[] = [];
 
   constructor() {
@@ -229,6 +231,12 @@ export class Hub extends EventEmitter {
     this.vol = { ...base, ...v, ts: Date.now() };
     this.touch(stream);
     this.emit('vol', this.vol);
+  }
+
+  /** Publish an intel block (rates, COT, filings…). Each carries its own source, cadence and timestamp. */
+  setIntel<T>(b: IntelBlock<T>) {
+    this.intel.set(b.key, b as IntelBlock);
+    this.emit('intel', b);
   }
 
   // ---------------------------------------------------------------- analytics

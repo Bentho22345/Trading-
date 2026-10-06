@@ -4,6 +4,7 @@ import { SYMBOLS, SYMBOL_MAP, MOCK_USD_PER, type SymbolDef } from '../../../shar
 import type { Adapter, AdapterContext } from '../types';
 
 const MINUTE = 60_000;
+const MOCK_SOURCE = { fx: 'Mock FX', crypto: 'Mock Crypto', equities: 'Mock Equities', macro: 'Mock Macro' } as const;
 const YEAR_MS = 365 * 24 * 3600_000;
 
 function gauss() {
@@ -13,8 +14,9 @@ function gauss() {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-type Kind = 'crypto' | 'fx' | 'equities';
-const kindOf = (s: SymbolDef): Kind => (s.assetClass === 'crypto' ? 'crypto' : s.assetClass === 'fx' ? 'fx' : 'equities');
+type Kind = 'crypto' | 'fx' | 'equities' | 'macro';
+const MACRO = new Set(['index', 'commodity', 'rate']);
+const kindOf = (s: SymbolDef): Kind => (s.assetClass === 'crypto' ? 'crypto' : s.assetClass === 'fx' ? 'fx' : MACRO.has(s.assetClass) ? 'macro' : 'equities');
 
 /**
  * Plausible streaming prices for demo mode: geometric random walks with realistic
@@ -130,20 +132,20 @@ class MockMarket {
       }
     }
 
-    for (const kind of ['equities', 'crypto'] as const) {
+    for (const kind of ['equities', 'crypto', 'macro'] as const) {
       if (!this.active.has(kind)) continue;
       const qs: QuoteInput[] = [];
       let spyMove = 0;
       for (const s of SYMBOLS) {
         if (kindOf(s) !== kind || s.symbol === 'VIX') continue;
-        if (Math.random() > (kind === 'crypto' ? 0.45 : 0.3)) continue;
+        if (Math.random() > (kind === 'crypto' ? 0.45 : kind === 'macro' ? 0.2 : 0.3)) continue;
         const p0 = this.price.get(s.symbol) ?? s.mock.base;
         let lr = gauss() * sig(s.mock.vol) + this.applyImpulse(s.symbol);
         if (s.symbol === 'USDC') lr = (Math.log(1) - Math.log(p0)) * 0.2 + gauss() * 0.00003;
         const p = round(p0 * Math.exp(lr), s.decimals);
         if (s.symbol === 'SPY') spyMove = Math.log(p / p0);
         this.price.set(s.symbol, p);
-        qs.push({ symbol: s.symbol, price: p, ts: now, source: kind === 'crypto' ? 'Mock Crypto' : 'Mock Equities', mock: true, volume: undefined });
+        qs.push({ symbol: s.symbol, price: p, ts: now, source: MOCK_SOURCE[kind], mock: true, volume: undefined });
       }
       if (kind === 'equities' && !this.skip.has('VIX')) {
         const v0 = this.price.get('VIX') ?? 16;
@@ -179,7 +181,7 @@ class MockMarket {
       if (kindOf(s) !== kind || this.skip.has(s.symbol)) continue;
       const p = this.price.get(s.symbol)!;
       const ref = this.hub.priceAt(s.symbol, now - 24 * 3600_000) ?? p;
-      qs.push({ symbol: s.symbol, price: p, ref, ts: now, source: `Mock ${kind === 'fx' ? 'FX' : kind === 'crypto' ? 'Crypto' : 'Equities'}`, mock: true });
+      qs.push({ symbol: s.symbol, price: p, ref, ts: now, source: MOCK_SOURCE[kind], mock: true });
     }
     this.hub.pushQuotes(qs, initial ? (kind as StreamId) : undefined);
   }
@@ -208,7 +210,7 @@ export function mockQuoteAdapter(kind: Kind): Adapter {
   return {
     id: `mock-${kind}`,
     stream: kind,
-    provider: `Mock ${kind === 'fx' ? 'FX' : kind === 'crypto' ? 'crypto' : 'equities'} engine`,
+    provider: `${MOCK_SOURCE[kind]} engine`,
     mock: true,
     delayedMin: 0,
     staleAfterMs: 10_000,

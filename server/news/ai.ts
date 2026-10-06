@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { NewsCluster } from '../../shared/types';
 import { config, keys } from '../config';
+import { budgetLeft, recordUsage } from '../ai/client';
 
 /**
  * Optional AI layer: one TL;DR + one "why it matters" line per high-impact cluster.
@@ -62,7 +63,7 @@ export class AiSummarizer {
       while (this.queue.length) {
         const now = Date.now();
         this.stamps = this.stamps.filter((t) => now - t < 3600_000);
-        if (this.stamps.length >= config.aiMaxPerHour) break;
+        if (this.stamps.length >= config.aiMaxPerHour || budgetLeft() < 2000) break;
         const id = this.queue.shift()!;
         const c = this.get(id);
         if (!c) continue;
@@ -112,6 +113,7 @@ export class AiSummarizer {
     }
     if (betas.length) params.betas = betas;
     const res = (await this.client!.beta.messages.create(params as never)) as Anthropic.Beta.BetaMessage;
+    recordUsage('tldr', model, res.usage);
     if (res.stop_reason === 'refusal') return null;
     const text = res.content.find((b): b is Anthropic.Beta.BetaTextBlock => b.type === 'text')?.text;
     if (!text) return null;

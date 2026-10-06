@@ -11,6 +11,13 @@ export function fmtChange(v: number, decimals = 2): string {
   return `${v > 0 ? '+' : v < 0 ? '−' : ''}${s}`;
 }
 
+/** Change in basis points for yield instruments (price is a % yield) */
+export function fmtBp(change: number): string {
+  if (!Number.isFinite(change)) return '—';
+  const bp = change * 100;
+  return `${bp > 0 ? '+' : bp < 0 ? '−' : ''}${Math.abs(bp).toFixed(1)}bp`;
+}
+
 export function fmtPct(v: number | null | undefined, d = 2): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return '—';
   return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(d)}%`;
@@ -55,12 +62,12 @@ export function flag(country: string): string {
 }
 
 export const DOMAIN_LABEL: Record<Domain, string> = {
-  fx: 'FX', crypto: 'Crypto', equities: 'Equities', options: 'Options', macro: 'Macro', centralbanks: 'Central banks', regulation: 'Regulation',
+  fx: 'FX', crypto: 'Crypto', equities: 'Equities', options: 'Options', macro: 'Macro', centralbanks: 'Central banks', regulation: 'Regulation', rates: 'Rates', commodities: 'Commodities',
 };
 
 /** The primary domain decides the card's accent colour. */
 export function primaryDomain(domains: Domain[]): Domain {
-  const order: Domain[] = ['centralbanks', 'crypto', 'fx', 'options', 'equities', 'regulation', 'macro'];
+  const order: Domain[] = ['centralbanks', 'crypto', 'fx', 'options', 'equities', 'rates', 'commodities', 'regulation', 'macro'];
   return order.find((d) => domains.includes(d)) ?? 'macro';
 }
 

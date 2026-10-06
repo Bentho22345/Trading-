@@ -5,6 +5,7 @@ import { useSettings, PANEL_LABELS, type PanelId } from '@/lib/settings';
 import { pairLabel } from '@/lib/format';
 import { Overlay } from './Overlay';
 import { Icon, Kbd } from './ui';
+import { useV2 } from '@/lib/v2';
 
 const EMPTY = {} as Record<string, import('@shared/types').Quote>;
 
@@ -63,6 +64,13 @@ export function CommandPalette() {
                 set({ mobileTab: p === 'calendar' || p === 'sessions' || p === 'banks' ? 'calendar' : p === 'watchlist' || p === 'alerts' ? 'watch' : 'markets' });
               })} className={item}><Icon name="layout" size={13} />Go to {PANEL_LABELS[p]}</Command.Item>
             ))}
+          </Command.Group>
+          <Command.Group heading="Briefings" className={group}>
+            <Command.Item value="morning brief open today" onSelect={run(() => useV2.getState().openBrief(null))} className={item}><Icon name="sparkle" size={13} />Open the Morning Brief <span className="ml-auto"><Kbd>M</Kbd></span></Command.Item>
+            <Command.Item value="brief archive history" onSelect={run(() => useV2.getState().openBrief(null, 'archive'))} className={item}><Icon name="timeline" size={13} />Brief archive</Command.Item>
+            <Command.Item value="brief editor customize brief sections" onSelect={run(() => useV2.getState().openBrief(null, 'editor'))} className={item}><Icon name="layout" size={13} />Edit brief sections &amp; schedule</Command.Item>
+            <Command.Item value="regenerate brief now" onSelect={run(() => { void fetch('/api/briefs/regenerate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"profileId":"morning"}' }).then((r) => r.json()).then((b: { id: string }) => useV2.getState().openBrief(b.id)); })} className={item}><Icon name="sparkle" size={13} />Regenerate the morning brief now</Command.Item>
+            <Command.Item value="end of day wrap eod" onSelect={run(() => { void fetch('/api/briefs/regenerate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"profileId":"eod"}' }).then((r) => r.json()).then((b: { id: string }) => useV2.getState().openBrief(b.id)); })} className={item}><Icon name="sparkle" size={13} />Build the end-of-day wrap now</Command.Item>
           </Command.Group>
           <Command.Group heading="Settings & actions" className={group}>
             <Command.Item value="toggle theme light dark" onSelect={run(() => settings.set({ theme: settings.theme === 'dark' ? 'light' : 'dark' }))} className={item}><Icon name={settings.theme === 'dark' ? 'sun' : 'moon'} size={13} />Switch to {settings.theme === 'dark' ? 'light' : 'dark'} theme</Command.Item>

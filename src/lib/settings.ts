@@ -25,6 +25,10 @@ export interface Settings {
   notifications: boolean;
   focus: boolean;
   layout: Layout;
+  // ---- PULSE 2.0
+  ttsRate: number;
+  ttsVoice: string;
+  ttsServer: boolean;
 }
 
 export const DEFAULT_LAYOUT: Layout = {
@@ -36,6 +40,7 @@ export const DEFAULT_LAYOUT: Layout = {
 const DEFAULTS: Settings = {
   theme: 'dark', colorblind: false, calm: false, tickerSpeed: 45, tickerGroups: ['EQ', 'FX', 'CRYPTO'],
   sound: false, notifications: false, focus: false, layout: DEFAULT_LAYOUT,
+  ttsRate: 1, ttsVoice: '', ttsServer: false,
 };
 
 const KEY = 'pulse.settings.v1';

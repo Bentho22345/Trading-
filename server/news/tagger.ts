@@ -1,5 +1,5 @@
 import type { Domain } from '../../shared/types';
-import { SYMBOLS } from '../../shared/symbols';
+import { SYMBOLS, SYMBOL_MAP } from '../../shared/symbols';
 
 // ------------------------------------------------------------------ entities
 const EQUITY_TICKERS = new Set(SYMBOLS.filter((s) => s.assetClass === 'equity' || s.assetClass === 'etf').map((s) => s.symbol));
@@ -134,7 +134,12 @@ export function tagText(text: string, hints: { tickers?: string[]; category?: st
   }
 
   for (const [d, re] of DOMAIN_RULES) if (re.test(text)) domains.add(d);
-  for (const t of tickers) domains.add(COINS.has(t) ? 'crypto' : 'equities');
+  for (const t of tickers) {
+    const ac = SYMBOL_MAP[t]?.assetClass;
+    domains.add(COINS.has(t) ? 'crypto' : ac === 'rate' ? 'rates' : ac === 'commodity' ? 'commodities' : ac === 'index' ? 'macro' : 'equities');
+  }
+  if (/\b(treasur(y|ies)|yields?|bund|gilt|JGB|auction|curve)\b/i.test(text)) domains.add('rates');
+  if (/\b(oil|crude|OPEC|gold|copper|natural gas|silver)\b/i.test(text)) domains.add('commodities');
   const hasPair = [...currencies].some((c) => c.length === 6);
   if (hasPair || (currencies.size && !['XAU'].includes([...currencies][0]) && domains.has('centralbanks'))) domains.add('fx');
   if (hints.category === 'crypto') domains.add('crypto');
