@@ -184,6 +184,28 @@ CREATE TABLE IF NOT EXISTS wallet_trades (
 CREATE INDEX IF NOT EXISTS wt_wallet ON wallet_trades(wallet, ts DESC);
 CREATE INDEX IF NOT EXISTS wt_mint ON wallet_trades(mint, ts DESC);
 
+CREATE TABLE IF NOT EXISTS wallet_positions (  -- average-cost ledger per (wallet, token) from observed trades
+  wallet TEXT NOT NULL, mint TEXT NOT NULL, qty REAL, cost_sol REAL, bought_sol REAL, sold_sol REAL, realized_sol REAL,
+  first_ts REAL, last_ts REAL, PRIMARY KEY (wallet, mint)
+);
+CREATE INDEX IF NOT EXISTS wpos_open ON wallet_positions(qty, mint);
+
+CREATE TABLE IF NOT EXISTS wallet_pnl (  -- per-wallet P&L buckets: span 3600 (kept 48h) and 86400 (kept 35d)
+  wallet TEXT NOT NULL, span INTEGER NOT NULL, bucket INTEGER NOT NULL, realized_sol REAL, basis_sol REAL,
+  bought_sol REAL, sold_sol REAL, unmatched_sol REAL, trades INTEGER, wins INTEGER, losses INTEGER,
+  PRIMARY KEY (wallet, span, bucket)
+);
+CREATE INDEX IF NOT EXISTS wpnl_bucket ON wallet_pnl(span, bucket);
+
+CREATE TABLE IF NOT EXISTS wallet_board (  -- ranked snapshot per period (1d / 7d / 30d), rebuilt every few minutes
+  period TEXT NOT NULL, wallet TEXT NOT NULL, rank_roi INTEGER, rank_pnl INTEGER, roi REAL, realized_sol REAL,
+  basis_sol REAL, bought_sol REAL, sold_sol REAL, unmatched_sol REAL, trades INTEGER, wins INTEGER, losses INTEGER,
+  win_rate REAL, active_buckets INTEGER, bot INTEGER, unrealized_sol REAL, open_cost_sol REAL, unpriced_cost_sol REAL,
+  as_of REAL, PRIMARY KEY (period, wallet)
+);
+CREATE INDEX IF NOT EXISTS wboard_roi ON wallet_board(period, rank_roi);
+CREATE INDEX IF NOT EXISTS wboard_pnl ON wallet_board(period, rank_pnl);
+
 CREATE TABLE IF NOT EXISTS holder_snapshots (
   token_address TEXT NOT NULL, ts REAL NOT NULL, holders INTEGER, top10_pct REAL, source TEXT
 );

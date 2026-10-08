@@ -224,6 +224,26 @@ async def discover() -> dict[str, Any]:
     return {"tracked": await S.smart.discover()}
 
 
+# ---------------- top-wallet leaderboard ----------------
+@router.get("/leaderboard")
+async def leaderboard(period: str = "1d", sort: str = "roi", limit: int = 100, offset: int = 0,
+                      include_bots: bool = False) -> dict[str, Any]:
+    try:
+        return await S.board.board(period, sort, max(1, min(limit, 1000)), max(0, offset), include_bots)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/leaderboard/wallet/{address}")
+async def leaderboard_wallet(address: str) -> dict[str, Any]:
+    return await S.board.wallet(address)
+
+
+@router.post("/leaderboard/refresh")
+async def leaderboard_refresh() -> dict[str, Any]:
+    return {"ranked": await S.board.refresh(), "followed": len(S.board.followed)}
+
+
 # ---------------- paper / scorecard / backtest ----------------
 @router.get("/scorecard")
 async def scorecard(hours: float | None = None) -> dict[str, Any]:

@@ -15,6 +15,7 @@ export const LINKS = [
   { href: '/signals', label: 'Signals', key: 's', icon: 'signal' },
   { href: '/social', label: 'Social', key: 'f', icon: 'social' },
   { href: '/smart-money', label: 'Smart money', key: 'w', icon: 'wallet' },
+  { href: '/wallets', label: 'Top wallets', key: 'o', icon: 'score' },
   { href: '/scorecard', label: 'Scorecard', key: 'p', icon: 'score' },
   { href: '/risk', label: 'Risk', key: 'r', icon: 'risk' },
   { href: '/rotation', label: 'Rotation & Brief', key: 'b', icon: 'rotation' },

@@ -127,3 +127,11 @@ alerts:
   exits: true
   rug: true
   cooldown_mutes_buy: true
+
+leaderboard:        # top wallets ranked by realized return on observed pump.fun trades (Smart money → Top wallets)
+  size: 1000               # wallets ranked per period (1d / 7d / 30d)
+  follow: 1000             # top wallets streamed live (PumpPortal account trades)
+  min_basis_sol: {1d: 0.5, 7d: 2, 30d: 5}   # cost basis closed in the window to qualify
+  min_closes: {1d: 2, 7d: 3, 30d: 5}        # exits in the window to qualify
+  bot_trades_per_day: 400  # above this the wallet is flagged as a bot and hidden by default
+  refresh_s: 300

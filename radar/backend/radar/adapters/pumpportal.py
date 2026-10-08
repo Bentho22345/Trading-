@@ -43,8 +43,7 @@ class PumpPortal(Stream):
         await self.send({"method": "subscribeMigration"})
         if self.token_subs:
             await self.send({"method": "subscribeTokenTrade", "keys": sorted(self.token_subs)})
-        if self.account_subs:
-            await self.send({"method": "subscribeAccountTrade", "keys": sorted(self.account_subs)})
+        await self._chunked("subscribeAccountTrade", self.account_subs)
 
     async def on_message(self, msg: Any) -> None:
         if not isinstance(msg, dict):
@@ -64,10 +63,14 @@ class PumpPortal(Stream):
         self.account_subs = set(wallets)
         if self.ws is None:
             return
-        if drop:
-            await self.send({"method": "unsubscribeAccountTrade", "keys": sorted(drop)})
-        if add:
-            await self.send({"method": "subscribeAccountTrade", "keys": sorted(add)})
+        await self._chunked("unsubscribeAccountTrade", drop)
+        await self._chunked("subscribeAccountTrade", add)
+
+    async def _chunked(self, method: str, keys: set[str], size: int = 100) -> None:
+        """Up to ~1,200 followed wallets: send them in batches rather than one huge frame."""
+        ks = sorted(keys)
+        for i in range(0, len(ks), size):
+            await self.send({"method": method, "keys": ks[i:i + size]})
 
     async def set_token_trades(self, mints: Any) -> None:
         """Diff-update trade subscriptions, capped by config."""

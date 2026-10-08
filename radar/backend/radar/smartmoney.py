@@ -22,6 +22,7 @@ class SmartMoney:
     def __init__(self, db: Any, cfg: Any, tracker: Any, alerts: Any, connectors: Any) -> None:
         self.db, self.cfg, self.tracker, self.alerts, self.connectors = db, cfg, tracker, alerts, connectors
         self.tracked: dict[str, dict[str, Any]] = {}
+        self.also_follow: set[str] = set()  # leaderboard wallets: streamed for P&L, no smart-money alerts
 
     async def load(self) -> None:
         for w in self.cfg.watch.get("kol_wallets") or []:
@@ -38,7 +39,7 @@ class SmartMoney:
     async def refresh_tracked(self) -> None:
         rows = await self.db.all("SELECT * FROM wallets WHERE tracked=1 ORDER BY kind='kol' DESC, score DESC LIMIT 200")
         self.tracked = {r["address"]: r for r in rows}
-        await self.tracker.pump.set_account_trades(set(self.tracked))
+        await self.tracker.pump.set_account_trades(set(self.tracked) | self.also_follow)
 
     async def on_trade(self, t: dict[str, Any]) -> None:
         w = self.tracked.get(t.get("trader") or "")

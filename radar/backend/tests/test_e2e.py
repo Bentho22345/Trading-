@@ -235,3 +235,12 @@ def test_discovery_endpoints(stack):
         time.sleep(0.25)
     assert hits[0]["hits"] >= 1
     assert any("Launch Watch" in a["title"] for a in httpx.get(f"http://{stack}/api/alerts").json())
+
+
+def test_leaderboard_endpoints(stack):
+    r = httpx.post(f"http://{stack}/api/leaderboard/refresh", timeout=10).json()
+    assert set(r["ranked"]) == {"1d", "7d", "30d"}
+    b = httpx.get(f"http://{stack}/api/leaderboard?period=30d&sort=pnl&limit=1000").json()
+    assert b["period"] == "30d" and isinstance(b["rows"], list) and b["wallets_seen"] >= 1  # fake stream trades were ingested
+    assert httpx.get(f"http://{stack}/api/leaderboard?period=2y").status_code == 400
+    assert httpx.get(f"http://{stack}/api/leaderboard/wallet/Buyer11111111111111111111111111111111111111").json()["positions"]

@@ -43,6 +43,7 @@ class State:
     alerts: Any
     social: Any
     smart: Any
+    board: Any
     paper: Any
     signals: Any
     insights: Any
@@ -79,6 +80,8 @@ async def lifespan(app: FastAPI):
     S.social = SocialEngine(S.db, S.cfg, S.ai, S.alerts, S.tracker)
     S.smart = SmartMoney(S.db, S.cfg, S.tracker, S.alerts, S.connectors)
     S.paper = Paper(S.db, S.cfg)
+    from .leaderboard import Leaderboard
+    S.board = Leaderboard(S.db, S.cfg, S.smart)
     S.signals = SignalEngine(S.db, S.cfg, S.tracker, S.social, S.smart, S.paper, S.alerts, S.ai)
     S.insights = Insights(S.db, S.cfg, S.ai, S.alerts, S.social, S.paper, S.tracker)
     from .discover import Discover
@@ -99,7 +102,7 @@ async def lifespan(app: FastAPI):
         await on_change(cid, await S.connectors.values(cid))
 
     S.tracker.hooks["social"].append(S.social.ingest)
-    S.tracker.hooks["trade"] += [S.smart.on_trade, S.signals.rug_shield_trade, S.signals.on_trade]
+    S.tracker.hooks["trade"] += [S.smart.on_trade, S.signals.rug_shield_trade, S.signals.on_trade, S.board.on_trade]
     S.tracker.hooks["tokens"] += [S.signals.rug_shield_tokens, watch_rules, S.signals.on_tokens]
     S.tracker.hooks["safety"].append(S.signals.rug_shield_safety)
     S.custom.on_item = S.social.ingest
@@ -111,7 +114,7 @@ async def lifespan(app: FastAPI):
         await S.custom.start_all()
         S.social.start()
         await S.smart.load()
-        jobs = [S.story.loop(), S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(),
+        jobs = [S.story.loop(), S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(), S.board.loop(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
