@@ -5,6 +5,7 @@ import { NarrativeRadar } from '@/components/discover';
 import { Icon } from '@/components/Icon';
 import { LiveTape } from '@/components/LiveTape';
 import { MarketBar } from '@/components/MarketBar';
+import { TopTradesHero } from '@/components/TopTradesHero';
 import { AnimatePresence, AreaSpark, Chips, Flash, motion } from '@/components/motion';
 import { VerdictBadge } from '@/components/radar';
 import { Copy, Panel, SafetyFlags, TokenIcon } from '@/components/ui';
@@ -91,6 +92,7 @@ export default function Dashboard() {
     <div>
       <MarketBar />
       <LiveTape />
+      <TopTradesHero />
       <div className="grid gap-3 2xl:grid-cols-[1fr_420px] xl:grid-cols-[1fr_380px]">
         <section className="glass flex min-h-[520px] min-w-0 flex-col overflow-hidden rounded-2xl xl:h-[calc(100vh-200px)]">
           <header className="flex flex-wrap items-center gap-2 border-b border-white/5 px-3 py-2">

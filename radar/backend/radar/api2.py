@@ -179,6 +179,8 @@ async def wallets(kind: str = "", tracked_only: bool = False, limit: int = 200) 
     if kind:
         q += " AND kind=?"
         args.append(kind)
+    else:
+        q += " AND COALESCE(kind,'') != 'top'"  # the 1,000 leaderboard wallets live on the Top wallets page
     if tracked_only:
         q += " AND tracked=1"
     return await S.db.all(q + " ORDER BY tracked DESC, score DESC NULLS LAST LIMIT ?", [*args, limit])
@@ -232,6 +234,43 @@ async def leaderboard(period: str = "1d", sort: str = "roi", limit: int = 100, o
         return await S.board.board(period, sort, max(1, min(limit, 1000)), max(0, offset), include_bots)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+class TopTradeFixture(BaseModel):
+    wallet: str
+    mint: str
+    side: str = "buy"
+    sol: float = 1.0
+    rank: int = 1
+
+
+@router.post("/dev/simulate-top-trade")
+async def simulate_top_trade(b: TopTradeFixture) -> dict[str, Any]:
+    """Test fixture: push one top-wallet trade through the live path. Disabled unless RADAR_ENABLE_FIXTURES=1; flagged is_fixture."""
+    if os.environ.get("RADAR_ENABLE_FIXTURES") != "1":
+        raise HTTPException(403, "Fixtures are disabled (set RADAR_ENABLE_FIXTURES=1)")
+    S.smart.also_follow.setdefault(b.wallet, {"rank": b.rank, "period": "1d", "roi": None})
+    sig = f"fixture-{time.time_ns()}"
+    await S.smart.on_trade({"trader": b.wallet, "mint": b.mint, "side": b.side, "sol": b.sol, "tokens": b.sol * 1e6,
+                            "ts": time.time(), "mcap_sol": None, "signature": sig, "is_fixture": True})
+    return {"signature": sig}
+
+
+@router.get("/top-trades")
+async def top_trades(limit: int = 80, hours: float = 24) -> list[dict[str, Any]]:
+    """Recent trades by the followed top wallets, newest first, with their current rank."""
+    follow = S.smart.also_follow
+    if not follow:
+        return []
+    rows = await S.db.all(
+        "SELECT wt.*, t.symbol, t.name, t.image FROM wallet_trades wt LEFT JOIN tokens t ON t.address=wt.mint "
+        f"WHERE wt.wallet IN ({','.join('?' * len(follow))}) AND wt.ts > ? ORDER BY wt.ts DESC LIMIT ?",
+        (*follow, time.time() - hours * 3600, max(1, min(limit, 500))))
+    for r in rows:
+        r.update(follow.get(r["wallet"]) or {"rank": None, "period": None, "roi": None})
+        r["usd"] = S.tracker._usd(r.get("sol"))
+        r["mcap_usd"] = S.tracker._usd(r.get("mcap_sol"))
+    return rows
 
 
 @router.get("/leaderboard/wallet/{address}")

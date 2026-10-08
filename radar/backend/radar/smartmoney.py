@@ -22,7 +22,9 @@ class SmartMoney:
     def __init__(self, db: Any, cfg: Any, tracker: Any, alerts: Any, connectors: Any) -> None:
         self.db, self.cfg, self.tracker, self.alerts, self.connectors = db, cfg, tracker, alerts, connectors
         self.tracked: dict[str, dict[str, Any]] = {}
-        self.also_follow: set[str] = set()  # leaderboard wallets: streamed for P&L, no smart-money alerts
+        self.also_follow: dict[str, dict[str, Any]] = {}  # leaderboard wallets -> {rank, period, roi}
+        self.top_seen: dict[str, None] = {}
+        self.push_times: list[float] = []
 
     async def load(self) -> None:
         for w in self.cfg.watch.get("kol_wallets") or []:
@@ -39,10 +41,13 @@ class SmartMoney:
     async def refresh_tracked(self) -> None:
         rows = await self.db.all("SELECT * FROM wallets WHERE tracked=1 ORDER BY kind='kol' DESC, score DESC LIMIT 200")
         self.tracked = {r["address"]: r for r in rows}
-        await self.tracker.pump.set_account_trades(set(self.tracked) | self.also_follow)
+        await self.tracker.pump.set_account_trades(set(self.tracked) | set(self.also_follow))
 
     async def on_trade(self, t: dict[str, Any]) -> None:
-        w = self.tracked.get(t.get("trader") or "")
+        trader = t.get("trader") or ""
+        if trader in self.also_follow:
+            await self.on_top_trade(t, self.also_follow[trader])
+        w = self.tracked.get(trader)
         if not w:
             return
         await self.db.exec("INSERT OR IGNORE INTO wallet_trades (wallet, mint, ts, side, sol, tokens, mcap_sol, signature) "
@@ -58,6 +63,55 @@ class SmartMoney:
             if n >= 2:
                 await self.alerts.send("info", f"🧠 {n} smart wallets buying", f"Tracked profitable wallets are buying {t['mint'][:6]}…",
                                        token=t["mint"], dedupe=f"smart:{t['mint']}:{n}", ttl=3600)
+
+    async def on_top_trade(self, t: dict[str, Any], top: dict[str, Any]) -> None:
+        """A top-1000 wallet traded: record it (chart markers), flash it in the UI, push big ones, FLASH on clusters."""
+        sig = t.get("signature") or f"{t.get('trader')}:{t.get('mint')}:{t.get('ts')}"
+        if sig in self.top_seen or t.get("side") not in ("buy", "sell") or not t.get("mint"):
+            return  # one trade can arrive on both the token and the account subscription
+        self.top_seen[sig] = None
+        if len(self.top_seen) > 20_000:
+            self.top_seen = dict.fromkeys(list(self.top_seen)[-5_000:])
+        wallet, mint = t["trader"], t["mint"]
+        await self.db.exec("INSERT OR IGNORE INTO wallets (address, label, kind, tracked, updated) VALUES (?,?,'top',0,?)",
+                           (wallet, f"Top #{top['rank']} {top['period']}", time.time()))
+        await self.db.exec("INSERT OR IGNORE INTO wallet_trades (wallet, mint, ts, side, sol, tokens, mcap_sol, signature) "
+                           "VALUES (?,?,?,?,?,?,?,?)", (wallet, mint, t["ts"], t["side"], t.get("sol"), t.get("tokens"),
+                                                        t.get("mcap_sol"), sig))
+        await self.tracker._ensure_token(mint, "solana", None, None, None, "smart_money")
+        tok = await self.db.one("SELECT symbol, name, image FROM tokens WHERE address=?", (mint,)) or {}
+        msg = {**t, "signature": sig, "wallet": wallet, "rank": top["rank"], "period": top["period"], "roi": top["roi"],
+               "symbol": tok.get("symbol"), "name": tok.get("name"), "image": tok.get("image"),
+               "usd": self.tracker._usd(t.get("sol")), "mcap_usd": self.tracker._usd(t.get("mcap_sol"))}
+        await hub.publish("top_trade", msg)
+        await hub.publish("wallet_trade", {**msg, "label": f"Top #{top['rank']}", "kind": "top"})
+        f = (self.cfg.scoring.get("leaderboard") or {}).get("flash") or {}
+        sym = tok.get("symbol") or mint[:6] + "…"
+        sol = float(t.get("sol") or 0)
+        now = time.time()
+        self.push_times = [x for x in self.push_times if x > now - 60]
+        if f.get("push", True) and sol >= float(f.get("push_min_sol", 1.0)) and len(self.push_times) < int(f.get("push_max_per_min", 12)):
+            self.push_times.append(now)
+            roi = f" ({top['roi'] * 100:+.0f}% {top['period']})" if top.get("roi") is not None else ""
+            await self.alerts.send("wallet", f"{'🟢' if t['side'] == 'buy' else '🔴'} Top #{top['rank']} wallet {t['side']}s {sym}",
+                                   f"{sol:.2f} SOL · wallet {wallet[:4]}…{wallet[-4:]}{roi}", token=mint, dedupe=f"top:{sig}")
+        if t["side"] == "buy":
+            await self.top_cluster(mint, sym, int(f.get("cluster_wallets", 3)), float(f.get("cluster_minutes", 10)))
+
+    async def top_cluster(self, mint: str, sym: str, need: int, minutes: float) -> None:
+        rows = await self.db.all("SELECT DISTINCT wallet FROM wallet_trades WHERE mint=? AND side='buy' AND ts > ?",
+                                 (mint, time.time() - minutes * 60))
+        wallets = [r["wallet"] for r in rows if r["wallet"] in self.also_follow]
+        if len(wallets) < need:
+            return
+        key = f"topcluster:{mint}:{len(wallets)}"
+        if not await self.alerts.send("flash", f"⚡ {len(wallets)} top wallets buying {sym}",
+                                      f"{len(wallets)} of the top-1000 wallets bought within {minutes:.0f} minutes", token=mint,
+                                      dedupe=key, ttl=6 * 3600):
+            return
+        top = sorted((self.also_follow[w] | {"wallet": w} for w in wallets), key=lambda m: m["rank"])
+        await hub.publish("flash", {"kind": "top_cluster", "token_address": mint, "symbol": sym, "wallets": top[:10],
+                                    "minutes": minutes, "ts": time.time()})
 
     async def check_shill(self, w: dict[str, Any], mint: str) -> bool:
         if not w.get("handle"):

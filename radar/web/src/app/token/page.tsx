@@ -38,6 +38,8 @@ function TokenInner() {
     if (ch === 'tokens') {
       const t = (data as any[]).find((x) => x.address === a);
       if (t) setD((p: any) => ({ ...p, token: { ...p.token, ...t } }));
+    } else if (ch === 'wallet_trade' && data.mint === a) {
+      setD((p: any) => (p.smart_trades || []).some((x: any) => x.signature === data.signature) ? p : ({ ...p, smart_trades: [data, ...(p.smart_trades || [])] }));
     } else if (ch === 'trade' && data.mint === a) {
       setD((p: any) => ({ ...p, trades: [data, ...p.trades].slice(0, 200) }));
     } else if ((ch === 'safety' && data.token_address === a) || (ch === 'signal' && data.token_address === a)) {
@@ -97,7 +99,7 @@ function TokenInner() {
       <p className="text-[11px]"><AsOf ts={t.as_of} now={now} staleAfter={30} source={`DexScreener ${t.dex || ''}`} /></p>
 
       <div className="grid gap-2 xl:grid-cols-[1fr_380px]">
-        <Panel title="Chart · social timeline overlay" className="h-[460px]" right={<span><span className="text-flash">●</span> VIP <span className="text-accent">●</span> post <span className="text-warn">▲</span> signal <span className="text-up">●</span> smart $</span>}>
+        <Panel title="Chart · social timeline overlay" className="h-[460px]" right={<span><span className="text-flash">●</span> VIP <span className="text-accent">●</span> post <span className="text-warn">▲</span> signal <span className="text-up">●</span> smart $ <span className="text-[#facc15]">▲▼</span> top wallets</span>}>
           <Chart address={a} markers={markers(d)} />
         </Panel>
         <Panel title="Safety report" className="h-[460px]" right={<>
@@ -121,12 +123,13 @@ function TokenInner() {
             {!(d.social || []).length && <li className="p-4 text-center text-mute">No posts mention this token or its ticker yet.</li>}
           </ul>
         </Panel>
-        <Panel title="Smart-money & KOL activity" className="h-[360px]">
+        <Panel title="Smart-money, KOL & top-wallet activity" className="h-[360px]">
           <ul>
             {(d.smart_trades || []).map((t: any) => (
-              <li key={t.id} className="flex gap-2 border-b border-line/50 px-2 py-1 text-[12px] num">
+              <li key={t.id || t.signature} className="flex gap-2 border-b border-line/50 px-2 py-1 text-[12px] num">
                 <span className="text-mute">{clock(t.ts)}</span><span className={t.side === 'buy' ? 'text-up' : 'text-down'}>{t.side}</span>
-                <span className={t.kind === 'kol' ? 'text-flash' : ''}>{t.label || short(t.wallet)}</span><span className="text-mute">score {t.score ?? '—'}</span>
+                <span className={t.kind === 'kol' ? 'text-flash' : t.kind === 'top' ? 'text-warn' : ''}>{t.label || short(t.wallet)}</span>
+                {t.kind === 'top' ? <span className="text-mute">{short(t.wallet)}</span> : <span className="text-mute">score {t.score ?? '—'}</span>}
                 <span className="ml-auto">{t.sol != null ? `${(+t.sol).toFixed(2)} SOL` : ''}</span>
               </li>
             ))}
@@ -236,8 +239,11 @@ function markers(d: any): ChartMarker[] {
   const out: ChartMarker[] = [];
   for (const p of d.social || []) out.push({ ts: p.ts, kind: p.author_tier === 'vip' ? 'vip' : 'post', label: p.author_tier === 'vip' ? `VIP ${p.author_id?.split(':')[1] || ''}` : p.source });
   for (const s of d.signals || []) out.push({ ts: s.ts, kind: 'signal', label: `${s.verdict} ${s.score}` });
-  for (const t of d.smart_trades || []) out.push({ ts: t.ts, kind: 'smart', label: `${t.side} ${t.label || 'smart'}` });
-  return out.slice(0, 300);
+  for (const t of d.smart_trades || []) {
+    if (t.kind === 'top') out.push({ ts: t.ts, kind: 'top', side: t.side, label: `${t.label?.split(' ')[1] || 'top'} ${t.side}${t.sol ? ` ${(+t.sol).toFixed(1)}` : ''}` });
+    else out.push({ ts: t.ts, kind: 'smart', label: `${t.side} ${t.label || 'smart'}` });
+  }
+  return out.slice(0, 400);
 }
 
 function SignalSection({ d, a, now, reload }: { d: any; a: string; now: number; reload: () => void }) {

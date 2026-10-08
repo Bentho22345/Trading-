@@ -59,7 +59,7 @@ def test_average_cost_realized_return_and_ranking():
         assert pnl["rows"][0]["wallet"] == "A"
         d = await db.one("SELECT * FROM wallet_pnl WHERE wallet='D' AND span=?", (DAY,))
         assert d["unmatched_sol"] == 5 and d["realized_sol"] == 0
-        assert lb.followed == {"A", "B"} and smart.also_follow == {"A", "B"} and smart.calls == 1
+        assert lb.followed == {"A", "B"} and set(smart.also_follow) == {"A", "B"} and smart.also_follow["A"]["rank"] == 1 and smart.calls == 1
         w = await lb.wallet("A")
         assert w["ranks"]["1d"]["rank_roi"] == 1 and w["positions"][0]["unrealized_sol"] is not None
         await db.close()
@@ -93,4 +93,64 @@ def test_windows_bots_and_backfill():
         assert (await lb2.coverage())["observing_since"] == now - 100
         await db.close()
         await db2.close()
+    asyncio.run(run())
+
+
+def test_top_wallet_trades_flash_push_and_cluster():
+    from radar import smartmoney
+    from radar.smartmoney import SmartMoney
+
+    published = []
+
+    async def publish(ch, data):
+        published.append((ch, data))
+
+    class Tracker:
+        sol_usd = 200.0
+
+        async def _ensure_token(self, *a):
+            pass
+
+        def _usd(self, sol):
+            return sol * 200 if sol is not None else None
+
+    class Alerts:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, kind, title, body="", token=None, dedupe=None, ttl=900, extra=None):
+            if any(d == dedupe for *_, d in self.sent):
+                return None
+            self.sent.append((kind, title, token, dedupe))
+            return {"kind": kind}
+
+    class C:
+        scoring = {"leaderboard": {"flash": {"push_min_sol": 1, "push_max_per_min": 2, "cluster_wallets": 2, "cluster_minutes": 10}},
+                   "smart_money": {"wallet_min_score": 60}}
+
+    async def run():
+        db = DB(":memory:")
+        await db.open()
+        orig, smartmoney.hub.publish = smartmoney.hub.publish, publish
+        alerts = Alerts()
+        sm = SmartMoney(db, C(), Tracker(), alerts, None)
+        sm.also_follow = {"A": {"rank": 1, "period": "1d", "roi": 2.0}, "B": {"rank": 7, "period": "30d", "roi": 0.5}}
+        now = time.time()
+        t = {"trader": "A", "mint": "M1", "side": "buy", "sol": 2.0, "tokens": 1000, "ts": now, "mcap_sol": 50, "signature": "s1"}
+        await sm.on_trade(t)
+        await sm.on_trade(dict(t))  # same trade again from the token subscription: ignored
+        await sm.on_trade({**t, "signature": "s2", "sol": 0.1})  # small: flashes in UI, not pushed
+        await sm.on_trade({**t, "trader": "Z", "signature": "s3"})  # not a followed wallet
+        tops = [d for ch, d in published if ch == "top_trade"]
+        assert [d["signature"] for d in tops] == ["s1", "s2"] and tops[0]["rank"] == 1 and tops[0]["usd"] == 400
+        assert [a[0] for a in alerts.sent] == ["wallet"]
+        assert (await db.one("SELECT COUNT(*) n FROM wallet_trades WHERE wallet='A'"))["n"] == 2
+        await sm.on_trade({**t, "trader": "B", "signature": "s4"})  # second distinct top wallet buying M1 -> FLASH
+        flashes = [d for ch, d in published if ch == "flash"]
+        assert flashes and flashes[0]["kind"] == "top_cluster" and [w["wallet"] for w in flashes[0]["wallets"]] == ["A", "B"]
+        assert ("flash" in [a[0] for a in alerts.sent]) and len([a for a in alerts.sent if a[0] == "wallet"]) == 2  # cap = 2/min
+        await sm.on_trade({**t, "trader": "B", "signature": "s5", "sol": 5})  # over the push cap: UI only
+        assert len([a for a in alerts.sent if a[0] == "wallet"]) == 2
+        smartmoney.hub.publish = orig
+        await db.close()
     asyncio.run(run())

@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { usd } from '@/lib/format';
+import { short, usd } from '@/lib/format';
+import { getTopFlash, wantsFlash } from '@/lib/topflash';
 import { useLive } from '@/lib/live';
 import { Copy } from './ui';
 
@@ -9,12 +10,31 @@ import { Copy } from './ui';
 export function FlashOverlay() {
   const [flash, setFlash] = useState<any | null>(null);
   const [toasts, setToasts] = useState<any[]>([]);
+  const [tops, setTops] = useState<any[]>([]);
+  const lastNotif = useRef(0);
   const notifOk = useRef(false);
   useEffect(() => {
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().then((p) => { notifOk.current = p === 'granted'; });
     else notifOk.current = typeof Notification !== 'undefined' && Notification.permission === 'granted';
   }, []);
   useLive(({ ch, data }) => {
+    if (ch === 'top_trade') {
+      const prefs = getTopFlash();
+      if (!wantsFlash(data, prefs)) return;
+      setTops((t) => (t.some((x) => x.signature === data.signature) ? t : [data, ...t].slice(0, 4)));
+      setTimeout(() => setTops((t) => t.filter((x) => x.signature !== data.signature)), 9000);
+      if (prefs.sound) beep(data.side === 'buy' ? 880 : 440);
+      // background tab: OS notification, at most one every 3s so a burst doesn't bury the screen
+      if (notifOk.current && document.visibilityState !== 'visible' && Date.now() - lastNotif.current > 3000) {
+        lastNotif.current = Date.now();
+        try {
+          const n = new Notification(`Top #${data.rank} wallet ${data.side}s ${data.symbol || short(data.mint)}`, { body: `${(+data.sol || 0).toFixed(2)} SOL · ${short(data.wallet)}`, tag: 'top-trade' });
+          n.onclick = () => { window.focus(); location.href = `/token?a=${data.mint}`; };
+        } catch { /* */ }
+      }
+      return;
+    }
+    if (ch === 'alert' && data.kind === 'wallet') return; // already shown as a top-trade flash card
     if (ch === 'flash') {
       setFlash({ ...data, received: Date.now() / 1000 });
       try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=').play().catch(() => {}); } catch { /* */ }
@@ -66,6 +86,15 @@ export function FlashOverlay() {
                   <p className="mt-1 text-warn">Copycats launch within seconds — verify the CA matches the official post before buying.</p>
                 </div>
               </>
+            ) : flash.kind === 'top_cluster' ? (
+              <>
+                <p className="mt-2 text-lg font-bold">{flash.wallets?.length} top wallets bought {flash.symbol} in {flash.minutes} minutes</p>
+                <ul className="mt-2 space-y-0.5 text-[12px] num">
+                  {(flash.wallets || []).map((w: any) => <li key={w.wallet} className="flex gap-2"><span className="w-10 text-warn">#{w.rank}</span><span className="flex-1">{short(w.wallet, 6)}</span><span className="text-up">{w.roi != null ? `${w.roi > 0 ? '+' : ''}${Math.round(w.roi * 100)}% ${w.period}` : ''}</span></li>)}
+                </ul>
+                <div className="mt-3 flex flex-wrap items-center gap-2"><Copy text={flash.token_address} label="COPY CA" /><a href={`/token?a=${flash.token_address}`} className="rounded border border-flash/60 px-3 py-1 font-bold">Open chart →</a></div>
+                <p className="mt-2 text-[12px] text-warn">Top wallets also exit fast. Check safety and their sells on the chart before following.</p>
+              </>
             ) : (
               <>
                 <p className="mt-2 text-lg font-bold">Narrative breakout: {flash.title}</p>
@@ -77,6 +106,21 @@ export function FlashOverlay() {
           </div>
         </div>
       )}
+      <div className="pointer-events-none fixed right-3 top-16 z-40 flex w-72 max-w-[calc(100vw-24px)] flex-col gap-1.5">
+        {tops.map((t) => (
+          <a key={t.signature} href={`/token?a=${t.mint}`} style={{ animation: 'tapein .25s ease-out' }}
+            className={`pointer-events-auto rounded-xl border-2 bg-panel/95 p-2 text-[12px] shadow-2xl backdrop-blur ${t.side === 'buy' ? 'border-up' : 'border-down'}`}>
+            <div className="flex items-center gap-1.5">
+              <span className="font-black text-warn">⚡ TOP #{t.rank}</span>
+              {t.is_fixture ? <span className="rounded bg-warn/20 px-1 text-[9px] text-warn">TEST</span> : null}
+              <span className={`rounded px-1 text-[10px] font-bold uppercase ${t.side === 'buy' ? 'bg-up/20 text-up' : 'bg-down/20 text-down'}`}>{t.side}</span>
+              <b className="truncate">{t.symbol || short(t.mint)}</b>
+              <span className="num ml-auto font-bold">{(+t.sol || 0).toFixed(2)} SOL</span>
+            </div>
+            <div className="num mt-0.5 flex justify-between text-[11px] text-mute"><span>{short(t.wallet)}{t.roi != null ? ` · ${t.roi > 0 ? '+' : ''}${Math.round(t.roi * 100)}% ${t.period}` : ''}</span><span>{t.mcap_usd ? `mcap ${usd(t.mcap_usd)}` : ''}</span></div>
+          </a>
+        ))}
+      </div>
       <div className="fixed bottom-3 right-3 z-40 flex w-80 max-w-[calc(100vw-24px)] flex-col gap-2">
         {toasts.map((t) => (
           <div key={t.id} className={`rounded border bg-panel p-2 shadow-lg ${t.kind === 'rug' ? 'border-down' : t.kind === 'buy' ? 'border-up' : t.kind === 'flash' ? 'border-flash' : 'border-line'}`}>
@@ -88,4 +132,14 @@ export function FlashOverlay() {
       </div>
     </>
   );
+}
+
+let ctx: AudioContext | null = null;
+function beep(freq: number) {
+  try {
+    ctx ||= new AudioContext();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = freq; g.gain.setValueAtTime(0.06, ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.15);
+    o.connect(g).connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.16);
+  } catch { /* autoplay blocked until the first click */ }
 }

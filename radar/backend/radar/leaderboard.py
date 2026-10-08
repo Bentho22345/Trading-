@@ -33,12 +33,19 @@ DEFAULTS: dict[str, Any] = {
     "min_closes": {"1d": 2, "7d": 3, "30d": 5},        # profitable-or-not exits in the window to qualify
     "bot_trades_per_day": 400,  # above this, the wallet is flagged as a bot and left out unless asked for
     "refresh_s": 300,
+    "flash": {                 # every trade by a followed top wallet flashes in the UI; these limit phone/Telegram pushes
+        "push": True,
+        "push_min_sol": 1.0,   # only trades at least this big are pushed
+        "push_max_per_min": 12,
+        "cluster_wallets": 3,  # this many distinct top wallets buying one coin within cluster_minutes = full-screen FLASH
+        "cluster_minutes": 10,
+    },
 }
 
 
 def _cfg(cfg: Any) -> dict[str, Any]:
     out = {**DEFAULTS, **((getattr(cfg, "scoring", None) or {}).get("leaderboard") or {})}
-    for k in ("min_basis_sol", "min_closes"):
+    for k in ("min_basis_sol", "min_closes", "flash"):
         out[k] = {**DEFAULTS[k], **(out.get(k) or {})}
     return out
 
@@ -164,7 +171,7 @@ class Leaderboard:
         now = time.time()
         opens = await self.open_pnl()
         counts: dict[str, int] = {}
-        ranks: dict[str, dict[str, int]] = {}
+        ranks: dict[str, dict[str, tuple[int, float]]] = {}
         for period, (span, window) in PERIODS.items():
             since = int(now // span) * span - (window // span - 1) * span  # e.g. 1d = this hour + the 23 before it
             rows = await self.db.all(
@@ -202,19 +209,30 @@ class Leaderboard:
             await self.db.conn.commit()
             counts[period] = len(clean)
             for r in clean:
-                ranks.setdefault(r["wallet"], {})[period] = r["rank_roi"]
+                ranks.setdefault(r["wallet"], {})[period] = (r["rank_roi"], r["roi"])
         await self._follow(ranks, c["follow"])
         await self.db.exec("INSERT OR REPLACE INTO kv (key, value, updated) VALUES ('leaderboard:last', ?, ?)",
                            (json.dumps(counts), now))
         board_h.ok(0)
         return counts
 
-    async def _follow(self, ranks: dict[str, dict[str, int]], n: int) -> None:
+    async def _follow(self, ranks: dict[str, dict[str, tuple[int, float]]], n: int) -> None:
         """Follow the best wallets across periods: rank by each wallet's best ROI rank in 1d / 7d / 30d."""
-        best = sorted(ranks, key=lambda w: min(ranks[w].values()))
-        self.followed = set(best[:n])
+        meta: dict[str, dict[str, Any]] = {}
+        for w, per in ranks.items():
+            period, (rank, roi) = min(per.items(), key=lambda kv: kv[1][0])
+            meta[w] = {"rank": rank, "period": period, "roi": roi}
+        best = sorted(meta, key=lambda w: meta[w]["rank"])[:n]
+        self.followed = set(best)
+        follow = {w: meta[w] for w in best}
+        now = time.time()
+        # a wallets row lets chart markers / wallet-trade queries join them; never overrides a smart or KOL wallet's kind
+        await self.db.many(
+            "INSERT INTO wallets (address, label, kind, score, tracked, updated) VALUES (?,?,'top',?,0,?) ON CONFLICT(address) "
+            "DO UPDATE SET label=CASE WHEN kind='top' THEN excluded.label ELSE label END, updated=excluded.updated",
+            [(w, f"Top #{m['rank']} {m['period']}", round((m["roi"] or 0) * 100, 1), now) for w, m in follow.items()])
         if self.smart is not None:
-            self.smart.also_follow = self.followed
+            self.smart.also_follow = follow
             await self.smart.refresh_tracked()
 
     async def prune(self) -> None:

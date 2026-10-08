@@ -351,7 +351,7 @@ async def token(address: str) -> dict[str, Any]:
         "narrative": await S.social.narrative_for_token(address),
         "social": await token_social(address, (summary or {}).get("symbol")),
         "smart_trades": await S.db.all("SELECT wt.*, w.label, w.kind, w.score FROM wallet_trades wt JOIN wallets w ON w.address=wt.wallet "
-                                       "WHERE wt.mint=? ORDER BY wt.ts DESC LIMIT 50", (address,)),
+                                       "WHERE wt.mint=? ORDER BY wt.ts DESC LIMIT 200", (address,)),
         "flash": await S.db.all("SELECT * FROM flash_events WHERE token_address=? ORDER BY id DESC LIMIT 5", (address,)),
         "sol_usd": S.tracker.sol_usd,
         "disclaimer": DISCLAIMER,
