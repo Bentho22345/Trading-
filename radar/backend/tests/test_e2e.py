@@ -260,3 +260,19 @@ def test_top_traders_pipeline(stack):
     assert st["backfill"]["pinned"] >= 1 and any(x["source"] == "geckoterminal" for x in st["sources"])
     p = httpx.get(f"http://{stack}/api/pulse").json()
     assert {"new", "final_stretch", "migrated"} <= p.keys() and p["new"]
+
+
+def test_top_wallet_trade_reaches_ui_and_chart(stack):
+    async def run():
+        async with websockets.connect(f"ws://{stack}/ws") as ws:
+            r = httpx.post(f"http://{stack}/api/dev/simulate-top-trade", json={"wallet": "TopW1", "mint": MINT, "sol": 3, "rank": 4}).json()
+            t0 = time.time()
+            while time.time() - t0 < 10:
+                msg = json.loads(await asyncio.wait_for(ws.recv(), 10))
+                if msg["ch"] == "top_trade" and msg["data"]["signature"] == r["signature"]:
+                    return msg["data"]
+    data = asyncio.run(run())
+    assert data and data["rank"] == 4 and data["side"] == "buy" and data["is_fixture"]
+    assert any(t["signature"] == data["signature"] for t in httpx.get(f"http://{stack}/api/top-trades").json())
+    smart = httpx.get(f"http://{stack}/api/token/{MINT}").json()["smart_trades"]
+    assert any(t["wallet"] == "TopW1" for t in smart)  # drawn as a chart marker on the token page

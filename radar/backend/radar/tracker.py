@@ -77,7 +77,9 @@ class Tracker:
         self.flash_tokens: dict[str, float] = {}
         self.launch_watch: dict[str, float] = {}       # mint -> until (first-90s trade capture)       # address -> until (max refresh rate during FLASH)
         # hooks wired by the app: trade(t), tokens(rows), safety(rep), social(event), custom(item)
-        self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": [], "new_token": []}
+        self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": [], "new_token": [], "news": []}
+        self.news_enricher: Any = None                 # NewsIntel.enrich(row, feed) -> tagged row; wired by the app
+        self.feed_backoff: dict[str, tuple[int, float]] = {}   # feed name -> (consecutive failures, retry after)
         self.gecko_networks = [n.strip() for n in __import__("os").environ.get("GECKO_NETWORKS", "solana,base,bsc,eth").split(",") if n.strip()]
         self.poly_prev: dict[str, float] = {}
         for c in (self.dex.http, self.gecko.http, self.rug.http):
@@ -423,13 +425,32 @@ class Tracker:
         await self._store_trending("kalshi", "top", await self.market.kalshi_top(), key="ticker")
 
     async def poll_feed(self, f: dict[str, Any]) -> None:
-        rows = await feeds.fetch(f["url"], f["name"])
+        now = time.time()
+        fails, until = self.feed_backoff.get(f["name"], (0, 0.0))
+        if until > now:
+            return
+        try:
+            rows = await feeds.fetch(f["url"], f["name"], conditional=True)
+        except Exception:
+            # a dead or throttling feed backs off (1, 2, 4 ... 30 min) instead of hammering the publisher every cycle
+            self.feed_backoff[f["name"]] = (fails + 1, now + min(1800, 60 * 2 ** fails))
+            raise
+        self.feed_backoff.pop(f["name"], None)
         fresh = []
         for r in rows:
             if await self.db.one("SELECT 1 FROM news WHERE id=?", (r["id"],)):
                 continue
-            await self.db.exec("INSERT OR IGNORE INTO news (id, source, title, link, published, fetched) VALUES (?,?,?,?,?,?)",
-                               (r["id"], r["source"], r["title"], r["link"], r["published"], r["fetched"]))
+            if self.news_enricher:
+                try:
+                    r = self.news_enricher(r, f)
+                except Exception as e:  # noqa: BLE001 - tagging must never drop a headline
+                    log.debug("news enrich %s: %s", f["name"], e)
+            await self.db.exec("INSERT OR IGNORE INTO news (id, source, title, link, published, fetched, grp, publisher, story_id, "
+                               "tags_json, metas_json, tickers_json, sentiment, impact) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                               (r["id"], r["source"], r["title"], r["link"], r["published"], r["fetched"], f.get("group"),
+                                r.get("publisher"), r.get("story_id"), json.dumps(r.get("tags") or []),
+                                json.dumps(r.get("metas") or []), json.dumps(r.get("tickers") or []), r.get("sentiment"),
+                                r.get("impact")))
             fresh.append({**r, "group": f.get("group"), "detected": detect(r["title"])})
             src = {"reddit": "reddit", "trends": "google_trends"}.get(f.get("group") or "", "rss")
             await self._hook("social", {"id": f"rss:{r['id']}", "source": src, "author": f["name"], "text": r["title"],
@@ -437,6 +458,7 @@ class Tracker:
                                         "tier_hint": "news" if src in ("rss", "google_trends") else None, "group": f.get("group")})
         if fresh:
             await hub.publish("news", fresh)
+            await self._hook("news", fresh)
 
     # ---------- safety ----------
     def queue_rug(self, mint: str, only_if_missing: bool = False) -> None:

@@ -27,6 +27,7 @@ const P: Record<string, string> = {
   download: 'M12 3v12M7 10l5 5 5-5M5 21h14',
   arrow: 'M5 12h14M13 6l6 6-6 6',
   plus: 'M12 5v14M5 12h14',
+  news: 'M4 5h13v14H6a2 2 0 0 1-2-2zM17 9h3v8a2 2 0 0 1-2 2M8 9h5M8 13h5M8 16h3',
   link: 'M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1',
 };
 

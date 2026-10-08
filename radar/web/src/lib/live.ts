@@ -12,6 +12,30 @@ let views: string[] = [];
 const listeners = new Set<Listener>();
 const statusListeners = new Set<(c: boolean) => void>();
 
+// Bursts of socket messages are delivered once per animation frame, so React batches the
+// resulting state updates into one render instead of one per message. Hidden tabs get no
+// frames, so they flush right away (alerts and FLASH toasts must not wait).
+let queue: Msg[] = [];
+let scheduled = false;
+let visHooked = false;
+function flush() {
+  scheduled = false;
+  const batch = queue;
+  queue = [];
+  for (const m of batch) listeners.forEach((f) => f(m));
+}
+function schedule() {
+  if (!visHooked) {
+    // a frame requested just before the tab was hidden never fires; flush it now
+    visHooked = true;
+    document.addEventListener('visibilitychange', () => { if (scheduled && document.hidden) flush(); });
+  }
+  if (scheduled) return;
+  scheduled = true;
+  if (document.hidden) setTimeout(flush, 0);
+  else requestAnimationFrame(flush);
+}
+
 function connect() {
   if (typeof window === 'undefined' || socket || window.location.pathname === '/login') return;
   const ws = new WebSocket(wsUrl());
@@ -23,8 +47,8 @@ function connect() {
   };
   ws.onmessage = (e) => {
     try {
-      const m = JSON.parse(e.data) as Msg;
-      listeners.forEach((f) => f(m));
+      queue.push(JSON.parse(e.data) as Msg);
+      schedule();
     } catch { /* ignore */ }
   };
   ws.onclose = (e) => {
@@ -74,4 +98,20 @@ export function useNow(ms = 1000) {
     return () => clearInterval(t);
   }, [ms]);
   return now;
+}
+
+/** Runs `fn` now and every `ms` while the tab is visible; refreshes as soon as it becomes visible again. */
+export function usePoll(fn: () => unknown, ms: number, deps: React.DependencyList = []) {
+  const ref = useRef(fn);
+  ref.current = fn;
+  useEffect(() => {
+    let t: ReturnType<typeof setInterval> | undefined;
+    const start = () => { stop(); ref.current(); t = setInterval(() => ref.current(), ms); };
+    const stop = () => { if (t) clearInterval(t); t = undefined; };
+    const onVis = () => (document.hidden ? stop() : start());
+    if (document.hidden) ref.current(); else start();
+    document.addEventListener('visibilitychange', onVis);
+    return () => { stop(); document.removeEventListener('visibilitychange', onVis); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ms, ...deps]);
 }

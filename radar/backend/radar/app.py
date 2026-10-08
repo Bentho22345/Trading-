@@ -50,6 +50,8 @@ class State:
     discover: Any
     story: Any
     traders: Any
+    metas: Any
+    news: Any
 
 
 S = State()
@@ -90,7 +92,15 @@ async def lifespan(app: FastAPI):
     from .traders import Traders
     S.traders = Traders(S.db, S.tracker, S.connectors, S.alerts, S.cfg)
     S.smart.traders = S.traders
+    S.traders.smart = S.smart        # top ranks drive Smart Money's top-trade flashes, pushes and cluster alerts
     S.tracker.hooks["trade"].append(S.traders.on_pump_trade)
+    from .metas import MetaBoard
+    from .newsintel import NewsIntel
+    S.metas = MetaBoard(S.db, S.alerts)
+    S.news = NewsIntel(S.metas, S.alerts, S.db)
+    await S.news.load()
+    S.tracker.news_enricher = S.news.enrich
+    S.tracker.hooks["news"].append(S.news.on_fresh)
 
     async def on_change(cid: str, vals: dict[str, str]) -> None:
         if cid == "coingecko":
@@ -104,8 +114,8 @@ async def lifespan(app: FastAPI):
         await on_change(cid, await S.connectors.values(cid))
 
     S.tracker.hooks["social"].append(S.social.ingest)
-    S.tracker.hooks["trade"] += [S.smart.on_trade, S.signals.rug_shield_trade]
-    S.tracker.hooks["tokens"] += [S.signals.rug_shield_tokens, watch_rules]
+    S.tracker.hooks["trade"] += [S.smart.on_trade, S.signals.rug_shield_trade, S.signals.on_trade]
+    S.tracker.hooks["tokens"] += [S.signals.rug_shield_tokens, watch_rules, S.signals.on_tokens]
     S.tracker.hooks["safety"].append(S.signals.rug_shield_safety)
     S.custom.on_item = S.social.ingest
     vals = S.connectors.values
@@ -117,7 +127,8 @@ async def lifespan(app: FastAPI):
         S.social.start()
         await S.smart.load()
         jobs = [S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
-                S.story.loop(), S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(),
+                S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
+                S.insights.brief_scheduler(), S.smart.helius_loop(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
@@ -354,7 +365,7 @@ async def token(address: str) -> dict[str, Any]:
         "narrative": await S.social.narrative_for_token(address),
         "social": await token_social(address, (summary or {}).get("symbol")),
         "smart_trades": await S.db.all("SELECT wt.*, w.label, w.kind, w.score FROM wallet_trades wt JOIN wallets w ON w.address=wt.wallet "
-                                       "WHERE wt.mint=? ORDER BY wt.ts DESC LIMIT 50", (address,)),
+                                       "WHERE wt.mint=? ORDER BY wt.ts DESC LIMIT 200", (address,)),
         "flash": await S.db.all("SELECT * FROM flash_events WHERE token_address=? ORDER BY id DESC LIMIT 5", (address,)),
         "sol_usd": S.tracker.sol_usd,
         "disclaimer": DISCLAIMER,
@@ -510,8 +521,10 @@ async def source_items(source_id: int | None = None, limit: int = 100) -> list[d
 
 
 from .api2 import router as _router2  # noqa: E402
+from .api_news import router as _router_news  # noqa: E402
 
 app.include_router(_router2)
+app.include_router(_router_news)
 
 
 # ---------------- live socket ----------------

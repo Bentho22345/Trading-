@@ -72,9 +72,13 @@ CREATE TABLE IF NOT EXISTS trending (
 );
 
 CREATE TABLE IF NOT EXISTS news (
-  id TEXT PRIMARY KEY, source TEXT, title TEXT, link TEXT, published REAL, fetched REAL NOT NULL
+  id TEXT PRIMARY KEY, source TEXT, title TEXT, link TEXT, published REAL, fetched REAL NOT NULL,
+  grp TEXT, publisher TEXT, story_id TEXT, tags_json TEXT, metas_json TEXT, tickers_json TEXT,
+  sentiment REAL, impact REAL
 );
 CREATE INDEX IF NOT EXISTS news_pub ON news(published DESC);
+CREATE INDEX IF NOT EXISTS news_fetched ON news(fetched DESC);
+CREATE INDEX IF NOT EXISTS news_story ON news(story_id);
 
 CREATE TABLE IF NOT EXISTS market (
   key TEXT PRIMARY KEY, value REAL, source TEXT, as_of REAL NOT NULL, data_json TEXT
@@ -122,6 +126,7 @@ CREATE TABLE IF NOT EXISTS social_events (
 );
 CREATE INDEX IF NOT EXISTS social_ts ON social_events(ts DESC);
 CREATE INDEX IF NOT EXISTS social_narr ON social_events(narrative_id, ts DESC);
+CREATE INDEX IF NOT EXISTS social_ingested ON social_events(ingested);
 
 CREATE TABLE IF NOT EXISTS narratives (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -184,6 +189,34 @@ CREATE TABLE IF NOT EXISTS wallet_trades (
 );
 CREATE INDEX IF NOT EXISTS wt_wallet ON wallet_trades(wallet, ts DESC);
 CREATE INDEX IF NOT EXISTS wt_mint ON wallet_trades(mint, ts DESC);
+
+CREATE TABLE IF NOT EXISTS wallet_positions (  -- average-cost ledger per (wallet, token) from observed trades
+  wallet TEXT NOT NULL, mint TEXT NOT NULL, qty REAL, cost_sol REAL, bought_sol REAL, sold_sol REAL, realized_sol REAL,
+  first_ts REAL, last_ts REAL, PRIMARY KEY (wallet, mint)
+);
+CREATE INDEX IF NOT EXISTS wpos_open ON wallet_positions(qty, mint);
+
+CREATE TABLE IF NOT EXISTS wallet_pnl (  -- per-wallet P&L buckets: span 3600 (kept 48h) and 86400 (kept 35d)
+  wallet TEXT NOT NULL, span INTEGER NOT NULL, bucket INTEGER NOT NULL, realized_sol REAL, basis_sol REAL,
+  bought_sol REAL, sold_sol REAL, unmatched_sol REAL, trades INTEGER, wins INTEGER, losses INTEGER,
+  PRIMARY KEY (wallet, span, bucket)
+);
+CREATE INDEX IF NOT EXISTS wpnl_bucket ON wallet_pnl(span, bucket);
+
+CREATE TABLE IF NOT EXISTS wallet_board (  -- ranked snapshot per period (1d / 7d / 30d), rebuilt every few minutes
+  period TEXT NOT NULL, wallet TEXT NOT NULL, rank_roi INTEGER, rank_pnl INTEGER, roi REAL, realized_sol REAL,
+  basis_sol REAL, bought_sol REAL, sold_sol REAL, unmatched_sol REAL, trades INTEGER, wins INTEGER, losses INTEGER,
+  win_rate REAL, active_buckets INTEGER, bot INTEGER, unrealized_sol REAL, open_cost_sol REAL, unpriced_cost_sol REAL,
+  as_of REAL, PRIMARY KEY (period, wallet)
+);
+CREATE INDEX IF NOT EXISTS wboard_roi ON wallet_board(period, rank_roi);
+CREATE INDEX IF NOT EXISTS wboard_pnl ON wallet_board(period, rank_pnl);
+
+CREATE TABLE IF NOT EXISTS wallet_external (  -- top-trader lists from other platforms (Birdeye), per source and period
+  source TEXT NOT NULL, period TEXT NOT NULL, wallet TEXT NOT NULL, rank INTEGER, pnl_usd REAL, volume_usd REAL,
+  trades INTEGER, token TEXT, as_of REAL, PRIMARY KEY (source, period, wallet)
+);
+CREATE INDEX IF NOT EXISTS wext_wallet ON wallet_external(wallet);
 
 CREATE TABLE IF NOT EXISTS holder_snapshots (
   token_address TEXT NOT NULL, ts REAL NOT NULL, holders INTEGER, top10_pct REAL, source TEXT

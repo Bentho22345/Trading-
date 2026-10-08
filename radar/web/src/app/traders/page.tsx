@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { FlashPrefs } from '@/components/FlashPrefs';
 import { Icon } from '@/components/Icon';
 import { AnimatePresence, AreaSpark, Chips, motion } from '@/components/motion';
 import { CountUp, money, Reveal, Ring, WalletAvatar } from '@/components/whoop';
@@ -61,6 +62,7 @@ export default function TradersPage() {
         </button>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search wallet or label"
           className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[13px] outline-none focus:border-white/40 md:max-w-xs" />
+        <FlashPrefs />
         <button onClick={() => setShowImport(!showImport)} className="btn-ghost !py-2 !text-[11px]">Import & sources</button>
       </div>
       <AnimatePresence>{showImport && <ImportPanel onDone={load} />}</AnimatePresence>

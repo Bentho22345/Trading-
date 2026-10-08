@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { MetaDetail, MetaHeatmap } from '@/components/metas';
 import { Spark } from '@/components/radar';
 import { Panel } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -14,14 +15,26 @@ export default function NarrativesPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [cat, setCat] = useState('');
   const [sel, setSel] = useState<number | null>(null);
-  useEffect(() => { const n = new URLSearchParams(window.location.search).get('n'); if (n) setSel(+n); }, []);
+  const [meta, setMeta] = useState<string | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('n')) setSel(+q.get('n')!);
+    if (q.get('meta')) setMeta(q.get('meta'));
+  }, []);
   const load = useCallback(() => api(`/api/narratives?limit=60&category=${cat}`).then(setRows).catch(() => {}), [cat]);
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
-  useLive(({ ch }) => { if (ch === 'narrative_new') load(); });
+  // the server pushes the narrative board every few seconds; refetch (throttled) so velocity, stage and tokens stay live
+  const last = useRef(0);
+  useLive(({ ch }) => {
+    if (ch === 'narrative_new' || (ch === 'narratives' && Date.now() - last.current > 5000)) { last.current = Date.now(); load(); }
+  });
+  const pickMeta = (id: string) => { setMeta(id); setSel(null); };
+  const pickNarr = (id: number) => { setSel(id); setMeta(null); };
   const cats = Array.from(new Set(rows.map((r) => r.category).filter(Boolean)));
   return (
     <div className="grid gap-2 pt-2 xl:grid-cols-[1fr_520px]">
-      <div className="space-y-2">
+      <div className="min-w-0 space-y-2">
+        <MetaHeatmap now={now} onSelect={pickMeta} selected={meta} />
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-lg font-bold">Narrative board</h1>
           <select value={cat} onChange={(e) => setCat(e.target.value)} className="rounded border border-line bg-panel2 px-1">
@@ -31,7 +44,7 @@ export default function NarrativesPage() {
         </div>
         <div className="grid gap-2 md:grid-cols-2">
           {rows.map((n) => (
-            <button key={n.id} onClick={() => setSel(n.id)} className={`glass glass-hover rounded-2xl p-3 text-left ${n.flash ? 'flash-pulse' : sel === n.id ? 'grad-border' : ''}`}>
+            <button key={n.id} onClick={() => pickNarr(n.id)} className={`glass glass-hover rounded-2xl p-3 text-left ${n.flash ? 'flash-pulse' : sel === n.id ? 'grad-border' : ''}`}>
               <div className="flex items-center gap-2">
                 <span className={`text-[11px] font-bold uppercase ${STAGE[n.stage] || ''}`}>{n.stage}</span>
                 {n.flash && <span className="text-[11px] font-bold text-flash">⚡ FLASH</span>}
@@ -48,6 +61,14 @@ export default function NarrativesPage() {
                 <span>bots {Math.round((n.bot_share || 0) * 100)}%</span><span>strength {n.strength}</span>
               </div>
               <div className="mt-1 text-[11px] text-mute">{(n.sources || []).join(' → ')} · {(n.tickers || []).slice(0, 5).map((t: string) => `$${t}`).join(' ')}</div>
+              {!!n.metas?.length && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {n.metas.slice(0, 4).map((m: string) => (
+                    <span key={m} role="link" onClick={(e) => { e.stopPropagation(); pickMeta(m); }}
+                      className="rounded-md bg-accent2/10 px-1 text-[10px] text-accent2 hover:bg-accent2/20">#{m.replace('_', ' ')}</span>
+                  ))}
+                </div>
+              )}
               {!!n.tokens?.length && (
                 <div className="mt-1 flex flex-wrap gap-1">
                   {n.tokens.map((t: any) => (
@@ -62,7 +83,9 @@ export default function NarrativesPage() {
           {!rows.length && <p className="p-6 text-mute">No narratives yet — they form as posts from X, Telegram, Bluesky, 4chan, Reddit, news and trends cluster together.</p>}
         </div>
       </div>
-      {sel ? <NarrativeDetail id={sel} now={now} /> : <Panel title="Detail"><p className="p-4 text-mute">Select a narrative.</p></Panel>}
+      {meta ? <MetaDetail id={meta} now={now} onClose={() => setMeta(null)} />
+        : sel ? <NarrativeDetail id={sel} now={now} />
+          : <Panel title="Detail"><p className="p-4 text-mute">Select a meta tile or a narrative.</p></Panel>}
     </div>
   );
 }

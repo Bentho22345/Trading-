@@ -229,6 +229,7 @@ class Traders:
         self.ranked: dict[str, dict[str, Any]] = {}      # address -> {rank, score, label} for 30d
         self.followed: set[str] = set()
         self.extra_live: set[str] = set()                # SmartMoney contributes its KOL/smart wallets
+        self.smart: Any = None
         self.client = httpx.AsyncClient(timeout=20, headers={"User-Agent": USER_AGENT})
         self.gecko_bucket = TokenBucket(float(__import__("os").environ.get("TRADER_GECKO_RPM", "6")), burst=1)
         self.helius_calls_today = 0
@@ -315,24 +316,41 @@ class Traders:
             await asyncio.sleep(float(__import__("os").environ.get("TRADER_HARVEST_EVERY", "10")))
 
     async def harvest_birdeye_loop(self) -> None:
+        """Birdeye (key): its own trader leaderboards (gainers by PnL, this week / today / yesterday) + each hot coin's top
+        traders. These seed the pool; Radar then computes every stat itself from the trades (Helius backfill + live)."""
         while True:
             try:
                 key = (await self.connectors.values("birdeye")).get("api_key")
                 if key:
+                    hdr = {"X-API-KEY": key, "x-chain": "solana"}
+                    for btype in ("1W", "today", "yesterday"):
+                        for page in range(10):                      # up to 100 wallets per period
+                            r = await self.client.get("https://public-api.birdeye.so/trader/gainers-losers", headers=hdr,
+                                                      params={"type": btype, "sort_by": "PnL", "sort_type": "desc", "offset": page * 10, "limit": 10})
+                            if r.status_code >= 400:
+                                birdeye_h.fail(f"gainers HTTP {r.status_code}")
+                                break
+                            birdeye_h.ok()
+                            items = ((r.json().get("data") or {}).get("items")) or []
+                            for it in items:
+                                if it.get("address"):
+                                    await self.add_candidate(it["address"], "birdeye_leaderboard")
+                            if len(items) < 10:
+                                break
+                            await asyncio.sleep(1.2)
                     for tok in await self.db.all("SELECT t.address FROM tokens t JOIN pairs p ON p.pair_address=t.best_pair WHERE "
                                                  "t.chain='solana' AND p.as_of > ? ORDER BY p.vol_h24 DESC LIMIT 20", (time.time() - 3600,)):
-                        r = await self.client.get("https://public-api.birdeye.so/defi/v2/tokens/top_traders",
+                        r = await self.client.get("https://public-api.birdeye.so/defi/v2/tokens/top_traders", headers=hdr,
                                                   params={"address": tok["address"], "time_frame": "24h", "sort_type": "desc",
-                                                          "sort_by": "volume", "offset": 0, "limit": 10},
-                                                  headers={"X-API-KEY": key, "x-chain": "solana"})
+                                                          "sort_by": "volume", "offset": 0, "limit": 10})
                         if r.status_code >= 400:
-                            birdeye_h.fail(f"HTTP {r.status_code}")
+                            birdeye_h.fail(f"top_traders HTTP {r.status_code}")
                             break
                         birdeye_h.ok()
                         for it in ((r.json().get("data") or {}).get("items") or []):
-                            if it.get("owner"):
+                            if it.get("owner") and "bot" not in (it.get("tags") or []):
                                 await self.add_candidate(it["owner"], "birdeye")
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(1.2)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -485,6 +503,11 @@ class Traders:
         self.ranked = {r["address"]: {"rank": r["rank"], "score": r["score"], "label": (labels.get(r["address"]) or {}).get("label")}
                        for r in await self.db.all("SELECT address, rank, score FROM trader_stats WHERE win='30d' AND rank IS NOT NULL")}
         self.followed = {a for a, r in labels.items() if r["followed"]}
+        if self.smart is not None:
+            rows = await self.db.all("SELECT address, rank, roi FROM trader_stats WHERE win='30d' AND rank IS NOT NULL ORDER BY rank LIMIT ?",
+                                     (self.live_n,))
+            self.smart.also_follow = {r["address"]: {"rank": r["rank"], "period": "30d", "roi": (r["roi"] or 0) / 100 if r["roi"] is not None else None}
+                                      for r in rows}
         await self.refresh_live()
         await hub.publish("traders_ranked", {"as_of": now, "counts": counts})
         return counts

@@ -32,9 +32,13 @@ smart_wallets: []                  # manually tracked wallets in addition to aut
 exchange_listing_words: [listing, "will list", lists, "now available", "trading opens"]
 category_keywords:
   politifi: [trump, maga, biden, election, vote, president, senate, congress, kamala, vance, politic, government, tariff, fed]
-  ai: [ai, agent, gpt, llm, openai, claude, grok, robot, neural, agi, bot]
-  animal: [dog, cat, frog, pepe, doge, shiba, inu, monkey, ape, bird, hawk, hippo, penguin, bear, bull, wif, bonk, fish, goat]
-  celebrity: [elon, musk, kanye, drake, taylor, swift, celebrity, rapper, star, influencer, tiktok]
-  sports: [nfl, nba, superbowl, world cup, fifa, olympic, ufc, f1, soccer, football]
-  gaming: [game, gaming, play, minecraft, roblox, fortnite, steam, nintendo]
+  ai: [ai, agent, agents, gpt, chatgpt, llm, openai, claude, grok, gemini, deepseek, robot, humanoid, neural, agi, bot, ai16z, aixbt, virtuals]
+  animal: [dog, cat, frog, pepe, doge, shiba, inu, monkey, ape, bird, hawk, hippo, penguin, bear, bull, wif, bonk, fish, goat,
+           kitty, puppy, squirrel, capybara, otter, raccoon, hamster, moodeng, pnut, popcat, pengu, whale, shark, duck, chicken]
+  celebrity: [elon, musk, kanye, drake, taylor, swift, celebrity, rapper, star, influencer, tiktok, streamer, mrbeast, ishowspeed,
+              snoop, kardashian, twitch]
+  meme: [skibidi, rizz, sigma, gyatt, brainrot, aura, npc, wojak, chad, gigachad, fart, fartcoin, viral, hawk tuah, chill guy,
+         knowyourmeme, shitpost, absurd]
+  sports: [nfl, nba, superbowl, world cup, fifa, olympic, ufc, f1, soccer, football, messi, ronaldo, lebron, boxing]
+  gaming: [game, gaming, play, minecraft, roblox, fortnite, steam, nintendo, gta, playstation, xbox, pokemon]
   news: [breaking, war, court, ruling, fed, rates, cpi, strike, crash, hack]
