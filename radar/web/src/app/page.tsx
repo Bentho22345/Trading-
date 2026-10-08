@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { NarrativeRadar } from '@/components/discover';
 import { Icon } from '@/components/Icon';
 import { LiveTape } from '@/components/LiveTape';
@@ -11,7 +11,7 @@ import { VerdictBadge } from '@/components/radar';
 import { Copy, Panel, SafetyFlags, TokenIcon } from '@/components/ui';
 import { api, type Token } from '@/lib/api';
 import { ago, clock, pct, pctClass, price, short, usd } from '@/lib/format';
-import { useLive, useNow } from '@/lib/live';
+import { useLive, useNow, usePoll } from '@/lib/live';
 
 type SortKey = 'radar_score' | 'vol_m5' | 'vol_h1' | 'vol_h24' | 'liquidity_usd' | 'market_cap' | 'chg_m5' | 'chg_h1' | 'chg_h24' | 'age' | 'holders' | 'bs';
 type Preset = 'all' | 'safe' | 'fresh' | 'grad' | 'buy' | 'big';
@@ -48,31 +48,26 @@ export default function Dashboard() {
   const [f, setF] = useState<Record<string, any>>(() => { try { return JSON.parse(localStorage.getItem('radar:filters') || '{}'); } catch { return {}; } });
   const [tab, setTab] = useState('geckoterminal:trending');
   const [lastTick, setLastTick] = useState(0);
+  const qsRef = useRef('');
   const setFilter = (k: string, v: any) => setF((p) => { const n = { ...p, [k]: v }; try { localStorage.setItem('radar:filters', JSON.stringify(n)); } catch { /* */ } return n; });
   const qs = useMemo(() => {
     const p = new URLSearchParams({ limit: '300', min_liq: String(f.min_liq ?? 5000), sort: sort === 'age' || sort === 'bs' ? 'vol_h1' : sort });
     for (const [k, v] of Object.entries({ ...f, ...PRESETS[preset] })) if (k !== 'min_liq' && v !== '' && v != null && v !== false) p.set(k, String(v));
     return p.toString();
   }, [f, sort, preset]);
+  qsRef.current = qs;
 
   useEffect(() => {
     api('/api/launches').then(setLaunches); api('/api/graduated').then(setGrads); api('/api/trending').then(setTrending); api('/api/news').then(setNews);
   }, []);
-  useEffect(() => {
-    let alive = true;
-    const load = () => api<Token[]>(`/api/tokens?${qs}`).then((r) => alive && setTokens(Object.fromEntries(r.map((t) => [t.address, t])))).catch(() => {});
-    load();
-    const t = setInterval(load, 5000);
-    return () => { alive = false; clearInterval(t); };
-  }, [qs]);
+  usePoll(() => {
+    const want = qs;
+    return api<Token[]>(`/api/tokens?${want}`).then((r) => { if (want === qsRef.current) setTokens(Object.fromEntries(r.map((t) => [t.address, t]))); }).catch(() => {});
+  }, 5000, [qs]);
 
   const rows = useMemo(() => Object.values(tokens).filter((t) => t.pair_address).sort((a, b) => sortVal(b, sort) - sortVal(a, sort)).slice(0, 120), [tokens, sort]);
   const sparkKey = rows.slice(0, 60).map((r) => r.address).join(',');
-  useEffect(() => {
-    if (!sparkKey) return;
-    const load = () => api(`/api/sparks?a=${sparkKey}`).then(setSparks).catch(() => {});
-    load(); const t = setInterval(load, 30000); return () => clearInterval(t);
-  }, [sparkKey]);
+  usePoll(() => sparkKey && api(`/api/sparks?a=${sparkKey}`).then(setSparks).catch(() => {}), 30000, [sparkKey]);
 
   useLive(({ ch, data }) => {
     if (ch === 'tokens') {
@@ -95,15 +90,15 @@ export default function Dashboard() {
       <TopTradesHero />
       <div className="grid gap-3 2xl:grid-cols-[1fr_420px] xl:grid-cols-[1fr_380px]">
         <section className="glass flex min-h-[520px] min-w-0 flex-col overflow-hidden rounded-2xl xl:h-[calc(100vh-200px)]">
-          <header className="flex flex-wrap items-center gap-2 border-b border-white/5 px-3 py-2">
+          <header className="panel-head flex flex-wrap items-center gap-2 px-3.5 py-2">
             <Icon name="flame" size={15} className="text-up" />
             <h2 className="text-[12px] font-semibold">Hot tokens</h2>
             <span className="num rounded-md bg-white/5 px-1.5 text-[11px] text-mute">{rows.length}</span>
             <span className={`flex items-center gap-1 text-[11px] ${fresh ? 'text-up' : 'text-mute'}`}><span className={`h-1.5 w-1.5 rounded-full ${fresh ? 'live-dot bg-up' : 'bg-mute'}`} />{fresh ? 'streaming' : 'idle'}</span>
             <span className="flex-1" />
-            <Chips id="preset" value={preset} onChange={setPreset} options={[
+            <div className="scroll-x -mx-1 w-full px-1 sm:mx-0 sm:w-auto sm:px-0 [&>div]:flex-nowrap [&_button]:whitespace-nowrap"><Chips id="preset" value={preset} onChange={setPreset} options={[
               { value: 'all', label: 'All' }, { value: 'safe', label: '🛡 Safe' }, { value: 'fresh', label: '🌱 < 1h' },
-              { value: 'grad', label: '🎓 Graduated' }, { value: 'buy', label: '🟢 BUY' }, { value: 'big', label: '🐋 $1M+' }]} />
+              { value: 'grad', label: '🎓 Graduated' }, { value: 'buy', label: '🟢 BUY' }, { value: 'big', label: '🐋 $1M+' }]} /></div>
             <button onClick={() => setAdv(!adv)} className={`rounded-xl border px-2.5 py-1 text-[12px] transition ${adv ? 'border-accent/60 bg-accent/10 text-fg' : 'border-white/10 text-mute hover:text-fg'}`}>Filters {Object.values(f).filter((v) => v !== '' && v != null && v !== false).length ? `· ${Object.values(f).filter((v) => v !== '' && v != null && v !== false).length}` : ''}</button>
           </header>
           <AnimatePresence initial={false}>
@@ -113,9 +108,31 @@ export default function Dashboard() {
               </motion.div>
             )}
           </AnimatePresence>
-          <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full min-w-[1080px] border-collapse num text-[12.5px]">
-              <thead className="sticky top-0 z-10 bg-panel/95 text-[11px] text-mute backdrop-blur">
+          {/* phones: compact rows instead of a 14-column table */}
+          <ul className="min-h-0 flex-1 overflow-auto md:hidden">
+            {rows.map((t) => (
+              <li key={t.address} className="border-t border-white/[0.04] first:border-t-0">
+                <Link href={`/token?a=${t.address}`} className="flex items-center gap-3 px-3.5 py-2.5 active:bg-white/[0.04]">
+                  <TokenIcon src={t.image} symbol={t.symbol} size={32} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5"><b className="truncate text-[14px] tracking-tight">{t.symbol || short(t.address)}</b>
+                      <VerdictBadge v={(t as any).verdict} />
+                      {t.graduated_at ? <span className="rounded bg-accent2/15 px-1 text-[9px] text-accent2">GRAD</span> : null}</span>
+                    <span className="num mt-0.5 flex gap-2 overflow-hidden whitespace-nowrap text-[11px] text-mute"><span>MC {usd(t.market_cap ?? t.fdv)}</span><span>Liq {usd(t.liquidity_usd)}</span><span>{ago(t.launched_at || t.pair_created_at || t.first_seen, now)}</span></span>
+                  </span>
+                  <AreaSpark data={sparks[t.address]} w={56} h={26} />
+                  <span className="num w-16 shrink-0 text-right">
+                    <span className="block text-[12.5px]">{price(t.price_usd)}</span>
+                    <span className={`block text-[11px] ${pctClass(t.chg_h1)}`}>{pct(t.chg_h1)}</span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+            {!rows.length && <li className="p-10 text-center text-mute">Waiting for live market data…</li>}
+          </ul>
+          <div className="hidden min-h-0 flex-1 overflow-auto md:block">
+            <table className="data-table w-full min-w-[1080px] border-collapse num text-[12.5px]">
+              <thead className="sticky top-0 z-10 bg-panel text-[11px] text-mute shadow-[0_1px_0_rgba(255,255,255,.05)]">
                 <tr>{COLS.map((c) => (
                   <th key={c.label} onClick={() => c.key && setSort(c.key)}
                     className={`whitespace-nowrap px-2 py-2 text-left font-medium ${c.key ? 'cursor-pointer hover:text-fg' : ''} ${sort === c.key ? 'text-accent2' : ''}`}>
@@ -160,7 +177,7 @@ export default function Dashboard() {
         <div className="min-h-[520px] xl:h-[calc(100vh-200px)]"><NarrativeRadar /></div>
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
+      <div className="cv-auto mt-3 grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
         <Panel title={<span className="flex items-center gap-1.5"><span className="live-dot h-1.5 w-1.5 rounded-full bg-up" />New launches · pump.fun</span>} className="h-[380px]">
           <ul>
             <AnimatePresence initial={false}>

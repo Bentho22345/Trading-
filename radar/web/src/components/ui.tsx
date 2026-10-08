@@ -8,8 +8,8 @@ export function Panel({ title, right, children, className = '' }: {
 }) {
   return (
     <section className={`glass flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl ${className}`}>
-      <header className="flex items-center justify-between gap-2 border-b border-white/5 px-3 py-2">
-        <h2 className="text-[12px] font-semibold tracking-tight text-fg/90">{title}</h2>
+      <header className="panel-head flex min-h-10 items-center justify-between gap-2 px-3.5 py-2">
+        <h2 className="text-[12.5px] font-semibold tracking-tight text-fg/95">{title}</h2>
         <div className="flex items-center gap-2 text-[11px] text-mute">{right}</div>
       </header>
       <div className="min-h-0 flex-1 overflow-auto">{children}</div>
@@ -25,7 +25,7 @@ export function Copy({ text, label = 'Copy CA' }: { text: string; label?: string
         e.preventDefault(); e.stopPropagation();
         navigator.clipboard?.writeText(text).then(() => { setOk(true); setTimeout(() => setOk(false), 1200); });
       }}
-      className="rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] transition hover:border-accent hover:text-accent active:scale-95"
+      className={`rounded-lg border px-2 py-0.5 text-[11px] transition active:scale-95 ${ok ? 'border-up/40 bg-up/10 text-up' : 'border-white/10 bg-white/5 hover:border-accent hover:text-accent'}`}
       title={text}
     >
       {ok ? 'Copied ✓' : label}
@@ -76,7 +76,7 @@ export function TokenIcon({ src, symbol, size = 20 }: { src?: string | null; sym
       </span>
     );
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={src} alt="" width={size} height={size} onError={() => setErr(true)} className="shrink-0 rounded-full" style={{ width: size, height: size }} />;
+  return <img src={src} alt="" width={size} height={size} loading="lazy" decoding="async" onError={() => setErr(true)} className="shrink-0 rounded-full" style={{ width: size, height: size }} />;
 }
 
 export function Dot({ status }: { status: string }) {
