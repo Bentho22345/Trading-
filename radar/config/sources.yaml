@@ -20,5 +20,17 @@ rss:
     - { name: r/solana,         url: "https://www.reddit.com/r/solana/new/.rss", group: reddit, every_s: 120 }
     - { name: r/CryptoCurrency, url: "https://www.reddit.com/r/CryptoCurrency/rising/.rss", group: reddit, every_s: 120 }
     - { name: r/wallstreetbets, url: "https://www.reddit.com/r/wallstreetbets/rising/.rss", group: reddit, every_s: 180 }
+    - { name: r/CryptoMoonShots, url: "https://www.reddit.com/r/CryptoMoonShots/new/.rss", group: reddit, every_s: 180 }
+    - { name: r/SatoshiStreetBets, url: "https://www.reddit.com/r/SatoshiStreetBets/new/.rss", group: reddit, every_s: 180 }
+    # Exchange listings (catalyst #5) via Google News
+    - { name: "GNews: Binance listing",  url: "https://news.google.com/rss/search?q=%22Binance+will+list%22+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 120 }
+    - { name: "GNews: Coinbase listing", url: "https://news.google.com/rss/search?q=Coinbase+%28listing+OR+roadmap%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 120 }
+    - { name: "GNews: Robinhood listing", url: "https://news.google.com/rss/search?q=Robinhood+lists+crypto+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 300 }
+    - { name: "GNews: Upbit listing",    url: "https://news.google.com/rss/search?q=Upbit+listing+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 300 }
+    - { name: "GNews: pump.fun",         url: "https://news.google.com/rss/search?q=pump.fun+when:1d&hl=en-US&gl=US&ceid=US:en", group: crypto, every_s: 180 }
+    # Mastodon public hashtag feeds
+    - { name: "Mastodon #memecoin", url: "https://mastodon.social/tags/memecoin.rss", group: social, every_s: 120 }
+    - { name: "Mastodon #solana",   url: "https://mastodon.social/tags/solana.rss", group: social, every_s: 180 }
     # Google Trends official "trending now" RSS — is mainstream attention moving?
     - { name: Google Trends US, url: "https://trends.google.com/trending/rss?geo=US", group: trends, every_s: 300 }
+    - { name: Google Trends UK, url: "https://trends.google.com/trending/rss?geo=GB", group: trends, every_s: 600 }

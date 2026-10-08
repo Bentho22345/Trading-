@@ -49,7 +49,7 @@ def pair_for(addr: str) -> dict:
 
 @api.get("/dex/tokens/v1/{chain}/{addrs}")
 def dex_tokens(chain: str, addrs: str):
-    return [pair_for(a) for a in addrs.split(",") if a != fx.MINT_BAD]
+    return [pair_for(a) for a in addrs.split(",")]
 
 
 @api.get("/dex/token-profiles/latest/v1")
@@ -85,6 +85,21 @@ def rug(mint: str):
     rep = copy.deepcopy(fx.RUG_REPORT_MINTABLE if mint == fx.MINT_BAD else fx.RUG_REPORT)
     rep["mint"] = mint
     return rep
+
+
+TG_LOG: list[dict] = []
+
+
+@api.post("/tg/bot{token}/sendMessage")
+async def tg_send(token: str, body: dict):
+    import time
+    TG_LOG.append({"ts": time.time(), "text": body.get("text", "")})
+    return {"ok": True, "result": {"message_id": len(TG_LOG)}}
+
+
+@api.get("/tg/log")
+def tg_log():
+    return TG_LOG
 
 
 async def pump_ws(ws):

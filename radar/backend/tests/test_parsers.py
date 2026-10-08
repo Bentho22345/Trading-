@@ -59,3 +59,22 @@ def test_custom_items():
     it = to_item(1, items[0])
     assert it["title"] == "A" and it["link"] == "https://a"
     assert find_items({"a": {"b": [1, 2]}}, "a.b") == [1, 2]
+
+
+def test_goplus_mapping():
+    from radar.adapters.extra import parse_goplus
+    r = parse_goplus("0xabc", {"is_mintable": "1", "is_honeypot": "0", "holder_count": "1200",
+                               "holders": [{"address": "0x1", "percent": "0.12", "is_contract": 0},
+                                           {"address": "0x2", "percent": "0.5", "is_contract": 1}],
+                               "lp_holders": [{"address": "0x000000000000000000000000000000000000dEaD", "percent": "0.9"}],
+                               "sell_tax": "0.2"})
+    assert r["mint_authority"] == "mintable" and r["holders"] == 1200
+    assert r["top10_pct"] == 12.0 and r["lp_locked_pct"] == 90.0
+    assert any("Sell tax" in x["name"] for x in json.loads(r["risks_json"]))
+
+
+def test_heuristic_classifier():
+    from radar.social.text import heuristic_classify
+    c = heuristic_classify("Hawk Tuah girl launches $HAWK on pump.fun, the dog is going viral", ["HAWK"], [],
+                           {"animal": ["dog", "hawk"], "celebrity": ["girl"]}, ["listing"])
+    assert c["tokenizable"] and c["category"] == "animal" and "HAWK" in c["ticker_candidates"]

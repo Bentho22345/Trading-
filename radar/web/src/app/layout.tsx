@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Nav } from '@/components/Nav';
+import { FlashOverlay } from '@/components/FlashOverlay';
 
 export const metadata: Metadata = {
   title: 'Memecoin Radar',
@@ -14,6 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen">
         <Nav />
         <main className="px-2 pb-6 md:px-3">{children}</main>
+        <FlashOverlay />
       </body>
     </html>
   );

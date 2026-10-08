@@ -6,7 +6,16 @@ import { useConnected } from '@/lib/live';
 
 const LINKS = [
   { href: '/', label: 'Dashboard', key: 'd' },
+  { href: '/signals', label: 'Signals', key: 's' },
+  { href: '/narratives', label: 'Narratives', key: 'n' },
+  { href: '/social', label: 'Social', key: 'f' },
+  { href: '/smart-money', label: 'Smart money', key: 'w' },
+  { href: '/scorecard', label: 'Scorecard', key: 'p' },
+  { href: '/risk', label: 'Risk', key: 'r' },
+  { href: '/rotation', label: 'Rotation & Brief', key: 'b' },
+  { href: '/ask', label: 'Ask', key: 'a' },
   { href: '/connectors', label: 'Connectors', key: 'c' },
+  { href: '/settings', label: 'Settings', key: 'g' },
   { href: '/health', label: 'Health', key: 'h' },
 ];
 
@@ -20,10 +29,10 @@ export function Nav() {
       <Link href="/" className="flex items-center gap-2 font-bold tracking-tight">
         <span className="text-accent">◉</span> MEMECOIN RADAR
       </Link>
-      <div className="flex gap-1">
+      <div className="flex max-w-full gap-1 overflow-x-auto">
         {LINKS.map((l) => (
           <Link key={l.href} href={l.href}
-            className={`rounded px-2 py-1 ${path === l.href ? 'bg-panel2 text-fg' : 'text-mute hover:text-fg'}`}>
+            title={`shortcut: ${l.key}`} className={`shrink-0 whitespace-nowrap rounded px-2 py-1 ${path === l.href ? 'bg-panel2 text-fg' : 'text-mute hover:text-fg'}`}>
             {l.label}
           </Link>
         ))}

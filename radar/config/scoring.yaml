@@ -1,0 +1,96 @@
+# Radar Score config. Every number here is tunable (also from the Settings page; UI edits are
+# stored as overrides in the DB and win over this file). Bump `version` when you change logic.
+version: v1
+
+weights:            # sub-score weights (re-normalised to sum to 1)
+  narrative: 0.30
+  catalyst: 0.15
+  momentum: 0.20
+  smart_money: 0.15
+  safety: 0.20
+
+verdict:
+  buy_min_score: 70        # >= -> BUY SIGNAL (if no veto and confidence >= medium)
+  watch_min_score: 50      # >= -> WATCH, else AVOID
+  buy_min_confidence: medium
+
+vetoes:             # hard AVOID, regardless of score
+  mint_authority_active: true
+  freeze_authority_active: true
+  max_top10_pct: 30        # top-10 holders (excluding AMM/bonding-curve vaults)
+  min_liquidity_usd: 8000
+  deployer_rug_history: true
+  likely_fake_of_vip: true
+  rugged: true
+  max_rugcheck_score_normalised: 80   # RugCheck normalised score, higher = riskier
+  require_safety_report: true          # no report yet -> cannot be BUY (WATCH at most)
+
+momentum:
+  vol_mcap_good: 0.5       # 24h volume / mcap >= this earns full credit (20-50% healthy)
+  buy_sell_good: 1.4       # 5m buys/sells ratio for full credit
+  min_txns_5m: 20
+  liquidity_good_usd: 75000
+
+safety:
+  lp_locked_good_pct: 95
+  top10_good_pct: 15
+  insiders_bad: 3
+  boost_penalty: 10        # points off safety when paid boosts are active (often exit liquidity)
+
+narrative:
+  stage_scores: { birth: 55, ignition: 100, peak: 60, fading: -40 }
+  velocity_good_per_min: 5       # mentions/min for full velocity credit
+  cross_platform_good: 3         # distinct sources for full spread credit
+  breakout_sigma: 3.0            # velocity z-score that triggers FLASH
+  expected_life_hours: 48
+
+catalyst:
+  vip_ca: 100              # CA posted by VIP / official account
+  vip_mention: 75
+  breaking_news: 55
+  exchange_listing: 60
+  paid_promo: 10           # boosts / KOL calls: weak signal (and a risk flag)
+
+smart_money:
+  wallet_min_score: 60     # tracked wallets above this count as smart money
+  full_credit_wallets: 3   # this many distinct smart wallets buying = full credit
+  kol_sell_penalty: 50     # KOL selling into own post
+
+regime:            # multiplier applied to the final score
+  btc_down_24h_pct: -3     # below -> risk-off
+  sol_down_24h_pct: -5
+  fear_greed_low: 25
+  risk_off_multiplier: 0.8
+  risk_on_multiplier: 1.05
+
+confidence:        # how many independent inputs are present
+  high_min_inputs: 5
+  medium_min_inputs: 3
+
+plan:              # trade plan attached to every signal
+  entry_zone_pct: 8        # entry zone = price .. price * (1 + x%)
+  stop_pct: 30             # stop/invalidation below entry
+  take_profit_ladder:      # [multiple, fraction of ORIGINAL position to sell]
+    - [2.0, 0.5]           # sell half at 2x = initial stake back
+    - [4.0, 0.25]
+    - [8.0, 0.15]
+  time_stop_hours: 24      # exit if the narrative lifecycle runs out
+
+engine:
+  evaluate_every_s: 10
+  resignal_after_s: 1800   # re-emit a signal for the same token if verdict changes or after this long
+  min_score_to_log: 0      # log every evaluation that changes verdict (honest scorecard)
+  paper_trade_verdicts: [BUY, WATCH, AVOID]   # paper-trade every signal; scorecard splits by verdict
+  paper_size_usd: 100
+
+rug_shield:
+  liquidity_drop_pct: 30   # alert if liquidity falls this much between refreshes
+  dev_sell_pct_alert: 20   # alert if dev sells >= this % of their tracked buys
+  top_holder_drop_pct: 5   # alert if a top holder's share drops by >= this many points
+
+alerts:
+  buy_signal: true
+  flash: true
+  exits: true
+  rug: true
+  cooldown_mutes_buy: true

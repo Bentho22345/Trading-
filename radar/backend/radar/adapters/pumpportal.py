@@ -59,6 +59,16 @@ class PumpPortal(Stream):
         elif kind == "control" and msg.get("errors"):
             log.warning("pumpportal: %s", msg)
 
+    async def set_account_trades(self, wallets: set[str]) -> None:
+        add, drop = wallets - self.account_subs, self.account_subs - wallets
+        self.account_subs = set(wallets)
+        if self.ws is None:
+            return
+        if drop:
+            await self.send({"method": "unsubscribeAccountTrade", "keys": sorted(drop)})
+        if add:
+            await self.send({"method": "subscribeAccountTrade", "keys": sorted(add)})
+
     async def set_token_trades(self, mints: set[str]) -> None:
         """Diff-update trade subscriptions, capped by config."""
         mints = set(sorted(mints)[: settings.max_trade_subscriptions])

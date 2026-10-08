@@ -14,6 +14,7 @@ from .adapters import dexscreener as dsx
 from .adapters import feeds
 from .adapters.coinbase import Coinbase
 from .adapters.dexscreener import DexScreener
+from .adapters.extra import Extra
 from .adapters.geckoterminal import GeckoTerminal
 from .adapters.market import Market
 from .adapters.pumpportal import PumpPortal
@@ -61,6 +62,12 @@ class Tracker:
         self.rug_queue: asyncio.Queue[str] = asyncio.Queue()
         self.rug_pending: set[str] = set()
         self.tasks: list[asyncio.Task] = []
+        self.extra = Extra()
+        self.flash_tokens: dict[str, float] = {}       # address -> until (max refresh rate during FLASH)
+        # hooks wired by the app: trade(t), tokens(rows), safety(rep), social(event), custom(item)
+        self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": []}
+        self.gecko_networks = [n.strip() for n in __import__("os").environ.get("GECKO_NETWORKS", "solana,base,bsc,eth").split(",") if n.strip()]
+        self.poly_prev: dict[str, float] = {}
         for c in (self.dex.http, self.gecko.http, self.rug.http):
             c.on_request = self._usage
 
@@ -73,7 +80,9 @@ class Tracker:
                 self.every(600, self.poll_fear_greed), self.every(600, self.poll_llama, delay=5),
                 self.every(180, self.poll_cg_trending, delay=11), self.every(600, self.poll_cg_meme, delay=40),
                 self.every(60, self.poll_polymarket, delay=2), self.every(120, self.poll_kalshi, delay=9),
-                self.every(3600, self.prune, delay=60)]
+                self.every(3600, self.prune, delay=60),
+                self.every(120, self.poll_gecko_other, delay=30), self.every(300, self.poll_jupiter_recent, delay=13),
+                self.every(3 * 3600, self.poll_calendar, delay=17)]
         cfg = _sources_cfg().get("rss") or {}
         for i, f in enumerate(cfg.get("feeds") or []):
             jobs.append(self.every(float(f.get("every_s") or cfg.get("every_s") or 60),
@@ -136,6 +145,7 @@ class Tracker:
             await self.db.exec("UPDATE tokens SET pump_mcap_sol=?, pump_mcap_as_of=? WHERE address=?",
                                (m.get("marketCapSol"), now, mint))
         await hub.publish("trade", {**trade, "usd": self._usd(m.get("solAmount")), "mcap_usd": self._usd(m.get("marketCapSol"))})
+        await self._hook("trade", trade)
 
     async def on_migrate(self, m: dict[str, Any]) -> None:
         mint = m.get("mint")
@@ -149,6 +159,13 @@ class Tracker:
         self.queue_rug(mint)
         tok = await self.token_summary(mint)
         await hub.publish("graduated", tok or {"address": mint, "graduated_at": now})
+
+    async def _hook(self, name: str, arg: Any) -> None:
+        for fn in self.hooks.get(name, []):
+            try:
+                await fn(arg)
+            except Exception as e:  # noqa: BLE001 - a consumer bug must never break ingestion
+                log.warning("hook %s: %s", name, e)
 
     def _usd(self, sol: Any) -> float | None:
         try:
@@ -181,6 +198,12 @@ class Tracker:
         for r in await self.db.all("SELECT w.address, COALESCE(t.chain,'solana') chain FROM watchlist w "
                                    "LEFT JOIN tokens t ON t.address=w.address"):
             put(r["address"], 1, r["chain"])
+        for a, until in list(self.flash_tokens.items()):
+            if until < now:
+                self.flash_tokens.pop(a, None)
+                continue
+            row = await self.db.one("SELECT chain FROM tokens WHERE address=?", (a,))
+            put(a, 0, (row or {}).get("chain") or "solana")
         for a in hub.viewed_tokens():
             row = await self.db.one("SELECT chain FROM tokens WHERE address=?", (a,))
             put(a, 0, (row or {}).get("chain") or "solana")
@@ -236,6 +259,7 @@ class Tracker:
         if best:
             rows = await self.db.all(TOKEN_SUMMARY_SQL + f" WHERE t.address IN ({','.join('?' * len(best))})", list(best))
             await hub.publish("tokens", rows)
+            await self._hook("tokens", rows)
 
     # ---------- REST polls ----------
     async def _ensure_token(self, address: str, chain: str, name: str | None, symbol: str | None,
@@ -273,7 +297,17 @@ class Tracker:
 
     async def poll_dex_profiles(self) -> None:
         # rotate across the three 60 rpm endpoints
-        self._rot = (getattr(self, "_rot", -1) + 1) % 3
+        self._rot = (getattr(self, "_rot", -1) + 1) % 5
+        if self._rot in (3, 4):
+            path = "/community-takeovers/latest/v1" if self._rot == 3 else "/ads/latest/v1"
+            rows = await self.dex.http.get(path, dsx.profiles_bucket, not_found_ok=True) or []
+            for r in rows:
+                if r.get("tokenAddress"):
+                    await self._ensure_token(r["tokenAddress"], r.get("chainId") or "solana", None, None, r.get("icon"), "dexscreener")
+            await self._store_trending("dexscreener", "takeovers" if self._rot == 3 else "ads", [
+                {"token_address": r.get("tokenAddress"), "chain": r.get("chainId"), "url": r.get("url"), "icon": r.get("icon"),
+                 "description": (r.get("description") or "")[:200]} for r in rows])
+            return
         if self._rot == 0:
             rows = await self.dex.profiles_latest()
             for r in rows:
@@ -321,7 +355,42 @@ class Tracker:
         await self._store_trending("coingecko", "trending", await self.market.coingecko_trending(), key="id")
 
     async def poll_polymarket(self) -> None:
-        await self._store_trending("polymarket", "top", await self.market.polymarket_top(), key="id")
+        rows = await self.market.polymarket_top()
+        await self._store_trending("polymarket", "top", rows, key="id")
+        for m in rows:
+            px, prev = m.get("last_price"), self.poly_prev.get(m["id"])
+            if px is not None and prev is not None and abs(px - prev) >= 0.08:
+                await self._hook("social", {"id": f"poly:{m['id']}:{int(time.time() // 300)}", "source": "polymarket",
+                                            "author": "Polymarket", "text": f"Odds swing {prev * 100:.0f}% → {px * 100:.0f}%: {m['question']}",
+                                            "url": m.get("url"), "ts": time.time(), "engagement": m.get("volume_24h") or 0,
+                                            "tier_hint": "news"})
+            if px is not None:
+                self.poly_prev[m["id"]] = px
+
+    GECKO_TO_DEX = {"solana": "solana", "base": "base", "bsc": "bsc", "eth": "ethereum", "arbitrum": "arbitrum", "polygon_pos": "polygon"}
+
+    async def poll_gecko_other(self) -> None:
+        for net in self.gecko_networks:
+            if net == "solana":
+                continue
+            rows = await self.gecko.trending_pools(net)
+            chain = self.GECKO_TO_DEX.get(net, net)
+            for r in rows:
+                if r["token_address"]:
+                    await self._ensure_token(r["token_address"], chain, r["name"], r["symbol"], r["image"], "geckoterminal",
+                                             r["pool_created_at"])
+                    self.trending_set.add(r["token_address"])
+            await self._store_trending("geckoterminal", f"trending_{net}", [{**r, "chain": chain} for r in rows])
+
+    async def poll_jupiter_recent(self) -> None:
+        rows = await self.extra.jupiter_recent()
+        for r in rows:
+            if r["token_address"]:
+                await self._ensure_token(r["token_address"], "solana", r["name"], r["symbol"], r["icon"], "jupiter")
+        await self._store_trending("jupiter", "recent", rows)
+
+    async def poll_calendar(self) -> None:
+        await self._store_trending("ff_calendar", "week", await self.extra.calendar(), key="title")
 
     async def poll_kalshi(self) -> None:
         await self._store_trending("kalshi", "top", await self.market.kalshi_top(), key="ticker")
@@ -335,6 +404,10 @@ class Tracker:
             await self.db.exec("INSERT OR IGNORE INTO news (id, source, title, link, published, fetched) VALUES (?,?,?,?,?,?)",
                                (r["id"], r["source"], r["title"], r["link"], r["published"], r["fetched"]))
             fresh.append({**r, "group": f.get("group"), "detected": detect(r["title"])})
+            src = {"reddit": "reddit", "trends": "google_trends"}.get(f.get("group") or "", "rss")
+            await self._hook("social", {"id": f"rss:{r['id']}", "source": src, "author": f["name"], "text": r["title"],
+                                        "url": r["link"], "ts": r["published"] or r["fetched"], "engagement": 0,
+                                        "tier_hint": "news" if src in ("rss", "google_trends") else None, "group": f.get("group")})
         if fresh:
             await hub.publish("news", fresh)
 
@@ -353,10 +426,13 @@ class Tracker:
                 cur = await self.db.one("SELECT as_of FROM safety_reports WHERE token_address=?", (mint,))
                 fresh = cur and time.time() - cur["as_of"] < settings.rugcheck_cache_s
                 if not (fresh or (item.startswith("?") and cur)):
-                    rep = await self.rug.report(mint)
+                    tok = await self.db.one("SELECT chain FROM tokens WHERE address=?", (mint,))
+                    chain = (tok or {}).get("chain") or ("solana" if not mint.startswith("0x") else "ethereum")
+                    rep = await (self.rug.report(mint) if chain == "solana" else self.extra.evm_safety(chain, mint))
                     if rep:
                         await self.db.upsert("safety_reports", rep, "token_address")
                         await hub.publish("safety", {**rep, "risks": json.loads(rep["risks_json"])})
+                        await self._hook("safety", rep)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001

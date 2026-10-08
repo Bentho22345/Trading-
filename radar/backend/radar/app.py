@@ -27,7 +27,7 @@ logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                     format='{"t":"%(asctime)s","lvl":"%(levelname)s","log":"%(name)s","msg":"%(message)s"}')
 log = logging.getLogger("radar")
 
-SORTS = {"vol_m5", "vol_h1", "vol_h24", "liquidity_usd", "market_cap", "chg_m5", "chg_h1", "chg_h24",
+SORTS = {"radar_score", "vol_m5", "vol_h1", "vol_h24", "liquidity_usd", "market_cap", "chg_m5", "chg_h1", "chg_h24",
          "first_seen", "launched_at", "holders", "buys_h1", "as_of"}
 DISCLAIMER = "Signals are probabilistic. Most memecoins go to zero. Only risk money you can lose."
 
@@ -37,6 +37,15 @@ class State:
     tracker: Tracker
     connectors: ConnectorStore
     custom: CustomSources
+    cfg: Any
+    ai: Any
+    alerts: Any
+    social: Any
+    smart: Any
+    paper: Any
+    signals: Any
+    insights: Any
+    telegram: Any
 
 
 S = State()
@@ -45,27 +54,101 @@ STARTED = time.time()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from .ai import AI
+    from .alerts import Alerts
+    from .cfg import Config
+    from .insights import Insights
+    from .paper import Paper
+    from .signals import SignalEngine
+    from .smartmoney import SmartMoney
+    from .social import sources as soc
+    from .social.engine import SocialEngine
+
     S.db = DB(settings.db_path)
     await S.db.open()
+    S.cfg = Config(S.db)
+    await S.cfg.load()
     S.tracker = Tracker(S.db)
     S.connectors = ConnectorStore(S.db)
     S.custom = CustomSources(S.db)
+    S.ai = AI(S.db)
+    S.alerts = Alerts(S.db, S.connectors, S.cfg)
+    S.social = SocialEngine(S.db, S.cfg, S.ai, S.alerts, S.tracker)
+    S.smart = SmartMoney(S.db, S.cfg, S.tracker, S.alerts, S.connectors)
+    S.paper = Paper(S.db, S.cfg)
+    S.signals = SignalEngine(S.db, S.cfg, S.tracker, S.social, S.smart, S.paper, S.alerts, S.ai)
+    S.insights = Insights(S.db, S.cfg, S.ai, S.alerts, S.social, S.paper, S.tracker)
 
     async def on_change(cid: str, vals: dict[str, str]) -> None:
         if cid == "coingecko":
             S.tracker.market.set_coingecko_key(vals.get("api_key"))
+        elif cid == "anthropic":
+            S.ai.set_key(vals.get("api_key"))
+        elif cid == "helius":
+            S.tracker.extra.set_helius(vals.get("api_key"))
     S.connectors.listeners.append(on_change)
-    await on_change("coingecko", await S.connectors.values("coingecko"))
+    for cid in ("coingecko", "anthropic", "helius"):
+        await on_change(cid, await S.connectors.values(cid))
 
+    S.tracker.hooks["social"].append(S.social.ingest)
+    S.tracker.hooks["trade"] += [S.smart.on_trade, S.signals.rug_shield_trade]
+    S.tracker.hooks["tokens"] += [S.signals.rug_shield_tokens, watch_rules]
+    S.tracker.hooks["safety"].append(S.signals.rug_shield_safety)
+    S.custom.on_item = S.social.ingest
+    vals = S.connectors.values
+    S.telegram = soc.TelegramSource(S.social.ingest, lambda: vals("telegram_user"), S.cfg)
+    bg: list[asyncio.Task] = []
     if os.environ.get("RADAR_DISABLE_INGEST") != "1":
         S.tracker.start()
         await S.custom.start_all()
+        S.social.start()
+        await S.smart.load()
+        jobs = [S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(),
+                soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
+                soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
+                soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
+                soc.YouTubeSource(S.social.ingest, lambda: vals("youtube")).run(),
+                S.telegram.run(), periodic(600, S.smart.discover), periodic(60, S.signals.check_daily_loss)]
+        if os.environ.get("RADAR_DISABLE_FIREHOSE") != "1":
+            jobs += [soc.BlueskySource(S.social.ingest).run(), soc.FourChanBiz(S.social.ingest).run()]
+        bg = [asyncio.create_task(j) for j in jobs]
     log.info("Memecoin Radar up")
     yield
     await S.tracker.stop()
+    for t in [*bg, *S.social.tasks]:
+        t.cancel()
     for t in S.custom.tasks.values():
         t.cancel()
     await S.db.close()
+
+
+async def periodic(seconds: float, fn) -> None:
+    while True:
+        await asyncio.sleep(seconds)
+        try:
+            await fn()
+        except Exception as e:  # noqa: BLE001
+            log.warning("periodic %s: %s", getattr(fn, "__name__", fn), e)
+
+
+async def watch_rules(rows: list[dict[str, Any]]) -> None:
+    """Per-token custom alert rules on the watchlist."""
+    rules = {r["address"]: json.loads(r["rules_json"]) for r in await S.db.all(
+        "SELECT address, rules_json FROM watchlist WHERE rules_json IS NOT NULL")}
+    for t in rows:
+        r = rules.get(t["address"])
+        if not r:
+            continue
+        px, sym = t.get("price_usd"), t.get("symbol")
+        checks = [("price_above", px, lambda v, x: v >= x, "price ≥"), ("price_below", px, lambda v, x: v <= x, "price ≤"),
+                  ("chg_h1_above", t.get("chg_h1"), lambda v, x: v >= x, "1h change ≥"),
+                  ("chg_h1_below", t.get("chg_h1"), lambda v, x: v <= x, "1h change ≤"),
+                  ("liq_below", t.get("liquidity_usd"), lambda v, x: v <= x, "liquidity ≤"),
+                  ("vol_h1_above", t.get("vol_h1"), lambda v, x: v >= x, "1h volume ≥")]
+        for key, val, fn, label in checks:
+            if r.get(key) not in (None, "") and val is not None and fn(val, float(r[key])):
+                await S.alerts.send("info", f"🔔 {sym}: {label} {r[key]}", f"now {val}", token=t["address"],
+                                    dedupe=f"rule:{t['address']}:{key}", ttl=3600)
 
 
 app = FastAPI(title="Memecoin Radar", lifespan=lifespan)
@@ -92,11 +175,51 @@ async def health() -> dict[str, Any]:
 
 # ---------------- dashboard data ----------------
 @app.get("/api/tokens")
-async def tokens(sort: str = "vol_h1", limit: int = 150, min_liq: float = 0) -> list[dict[str, Any]]:
+async def tokens(sort: str = "vol_h1", limit: int = 200, min_liq: float = 0, q: str = "", chain: str = "",
+                 min_mcap: float = 0, max_mcap: float = 0, min_vol_h1: float = 0, max_age_min: float = 0,
+                 min_age_min: float = 0, safe_only: bool = False, graduated_only: bool = False, hide_boosted: bool = False,
+                 verdict: str = "", max_stale_s: float = 0) -> list[dict[str, Any]]:
     col = sort if sort in SORTS else "vol_h1"
     prefix = "s." if col == "holders" else ("t." if col in ("first_seen", "launched_at") else "p.")
-    return await S.db.all(TOKEN_SUMMARY_SQL + f" WHERE t.best_pair IS NOT NULL AND COALESCE(p.liquidity_usd,0) >= ? "
-                          f"ORDER BY {prefix}{col} DESC NULLS LAST LIMIT ?", (min_liq, min(limit, 500)))
+    where, args = ["t.best_pair IS NOT NULL", "COALESCE(p.liquidity_usd,0) >= ?"], [min_liq]
+    now = time.time()
+    if q:
+        where.append("(t.symbol LIKE ? OR t.name LIKE ? OR t.address = ?)")
+        args += [f"%{q.lstrip('$')}%", f"%{q}%", q]
+    if chain:
+        where.append("t.chain = ?")
+        args.append(chain)
+    if min_mcap:
+        where.append("COALESCE(p.market_cap, p.fdv, 0) >= ?")
+        args.append(min_mcap)
+    if max_mcap:
+        where.append("COALESCE(p.market_cap, p.fdv, 0) <= ?")
+        args.append(max_mcap)
+    if min_vol_h1:
+        where.append("COALESCE(p.vol_h1,0) >= ?")
+        args.append(min_vol_h1)
+    age = "COALESCE(t.launched_at, p.pair_created_at, t.first_seen)"
+    if max_age_min:
+        where.append(f"{age} >= ?")
+        args.append(now - max_age_min * 60)
+    if min_age_min:
+        where.append(f"{age} <= ?")
+        args.append(now - min_age_min * 60)
+    if safe_only:
+        where.append("s.as_of IS NOT NULL AND COALESCE(s.mint_authority,'')='' AND COALESCE(s.freeze_authority,'')='' AND COALESCE(s.rugged,0)=0")
+    if graduated_only:
+        where.append("t.graduated_at IS NOT NULL")
+    if hide_boosted:
+        where.append("COALESCE(t.boost_amount,0) = 0")
+    if max_stale_s:
+        where.append("p.as_of >= ?")
+        args.append(now - max_stale_s)
+    sql = TOKEN_SUMMARY_SQL.replace("FROM tokens t", ", (SELECT verdict FROM signals sg WHERE sg.token_address=t.address ORDER BY sg.ts DESC LIMIT 1) AS verdict, "
+                                    "(SELECT score FROM signals sg WHERE sg.token_address=t.address ORDER BY sg.ts DESC LIMIT 1) AS radar_score FROM tokens t")
+    if verdict:
+        sql = f"SELECT * FROM ({sql} WHERE {' AND '.join(where)}) WHERE verdict = ? ORDER BY {col if col not in ('holders',) else 'holders'} DESC NULLS LAST LIMIT ?"
+        return await S.db.all(sql, [*args, verdict.upper(), min(limit, 1000)])
+    return await S.db.all(sql + f" WHERE {' AND '.join(where)} ORDER BY {prefix}{col} DESC NULLS LAST LIMIT ?", [*args, min(limit, 1000)])
 
 
 @app.get("/api/launches")
@@ -162,9 +285,30 @@ async def token(address: str) -> dict[str, Any]:
         "ticks": await S.db.all("SELECT ts, price_usd, market_cap, liquidity_usd, vol_h1 FROM price_ticks "
                                 "WHERE token_address=? ORDER BY ts DESC LIMIT 500", (address,)),
         "watched": bool(await S.db.one("SELECT 1 FROM watchlist WHERE address=?", (address,))),
+        "rules": json.loads((await S.db.one("SELECT rules_json FROM watchlist WHERE address=?", (address,)) or {}).get("rules_json") or "null"),
+        "signals": await S.db.all("SELECT id, ts, verdict, score, confidence, risk_grade, subscores_json, vetoes_json, reasons_json, plan_json, "
+                                  "writeup, category FROM signals WHERE token_address=? ORDER BY ts DESC LIMIT 20", (address,)),
+        "narrative": await S.social.narrative_for_token(address),
+        "social": await token_social(address, (summary or {}).get("symbol")),
+        "smart_trades": await S.db.all("SELECT wt.*, w.label, w.kind, w.score FROM wallet_trades wt JOIN wallets w ON w.address=wt.wallet "
+                                       "WHERE wt.mint=? ORDER BY wt.ts DESC LIMIT 50", (address,)),
+        "flash": await S.db.all("SELECT * FROM flash_events WHERE token_address=? ORDER BY id DESC LIMIT 5", (address,)),
         "sol_usd": S.tracker.sol_usd,
         "disclaimer": DISCLAIMER,
     }
+
+
+async def token_social(address: str, symbol: str | None) -> list[dict[str, Any]]:
+    """Social timeline for the chart overlay: posts with the CA, the $ticker, or in the linked narrative."""
+    args: list[Any] = [f"%{address}%"]
+    cond = "cas_json LIKE ?"
+    if symbol and len(symbol) >= 3:
+        cond += " OR cashtags_json LIKE ?"
+        args.append(f'%"{symbol.upper()}"%')
+    cond += " OR narrative_id IN (SELECT narrative_id FROM narrative_tokens WHERE token_address=? AND match_score >= 0.7)"
+    args.append(address)
+    return await S.db.all(f"SELECT id, source, author_id, author_tier, text, url, ts, engagement FROM social_events WHERE ({cond}) "
+                          "AND ts > ? ORDER BY ts DESC LIMIT 200", [*args, time.time() - 3 * 86400])
 
 
 _ohlcv_cache: dict[tuple[str, str], tuple[float, list]] = {}
@@ -219,6 +363,20 @@ async def unwatch(address: str) -> dict[str, bool]:
 @app.get("/api/connectors")
 async def connectors() -> dict[str, Any]:
     return {"connectors": await S.connectors.list(), "custom": await S.custom.list()}
+
+
+class WatchBody(BaseModel):
+    rules: dict[str, Any] | None = None
+    note: str | None = None
+
+
+@app.put("/api/watchlist/{address}")
+async def watch_rules_set(address: str, body: WatchBody) -> dict[str, Any]:
+    await S.tracker._ensure_token(address, "solana", None, None, None, "watchlist")
+    await S.db.exec("INSERT INTO watchlist (address, added, note, rules_json) VALUES (?,?,?,?) ON CONFLICT(address) DO UPDATE SET "
+                    "rules_json=excluded.rules_json, note=COALESCE(excluded.note, note)",
+                    (address, time.time(), body.note, json.dumps(body.rules) if body.rules else None))
+    return {"watched": True, "rules": body.rules}
 
 
 class SaveBody(BaseModel):
@@ -286,6 +444,11 @@ async def source_items(source_id: int | None = None, limit: int = 100) -> list[d
                               "ON s.id=i.source_id WHERE i.source_id=? ORDER BY i.ts DESC LIMIT ?", (source_id, limit))
     return await S.db.all("SELECT i.id, i.ts, i.title, i.link, s.name source FROM custom_items i JOIN custom_sources s "
                           "ON s.id=i.source_id ORDER BY i.ts DESC LIMIT ?", (limit,))
+
+
+from .api2 import router as _router2  # noqa: E402
+
+app.include_router(_router2)
 
 
 # ---------------- live socket ----------------

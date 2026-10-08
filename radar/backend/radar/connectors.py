@@ -77,7 +77,7 @@ async def t_x(v: dict[str, str]) -> str:
 
 
 async def t_telegram_bot(v: dict[str, str]) -> str:
-    r = await _post(f"https://api.telegram.org/bot{v['bot_token']}/sendMessage",
+    r = await _post(f"{os.environ.get('TELEGRAM_API_URL', 'https://api.telegram.org')}/bot{v['bot_token']}/sendMessage",
                     json={"chat_id": v["chat_id"], "text": "✅ Memecoin Radar connected. Alerts will arrive here."})
     return _need(r, "Test message sent to your Telegram chat")
 
@@ -172,22 +172,35 @@ CATALOG: list[Connector] = [
     Connector("rss", "News, Reddit & Google Trends RSS", "News", "keyless",
               "CoinDesk, Cointelegraph, Decrypt, The Block, Bloomberg, Reuters/AP via Google News, Reddit subreddit RSS, Google Trends trending-now. Edit radar/config/sources.yaml.",
               "News feed, mainstream-attention check", 1, None, health_name="rss"),
+    Connector("bluesky", "Bluesky firehose (Jetstream)", "Social", "keyless",
+              "Every public Bluesky post in real time, filtered for $cashtags, contract addresses and memecoin talk.",
+              "Narratives, CA detection, mention velocity", 3, "https://docs.bsky.app/blog/jetstream", health_name="bluesky"),
+    Connector("4chan", "4chan /biz/", "Social", "keyless", "Official read-only catalog API (1 req/s rule respected) — where many memecoin calls start.",
+              "Narratives, CA detection", 3, "https://github.com/4chan/4chan-API", health_name="4chan_biz"),
+    Connector("goplus", "GoPlus Security", "Safety", "keyless", "Token security for EVM chains (Base, BSC, Ethereum…): mintable, honeypot, taxes, holders, LP lock.",
+              "Safety report + vetoes for non-Solana tokens", 2, "https://docs.gopluslabs.io", health_name="goplus"),
+    Connector("ff_calendar", "Macro calendar (ForexFactory)", "News", "keyless", "This week's high/medium-impact macro events (FOMC, CPI, NFP…).",
+              "Upcoming catalysts in the daily brief", 6, None, health_name="ff_calendar"),
+    Connector("solana_rpc", "Solana RPC", "On-chain", "keyless", "Public mainnet RPC (or Helius if connected) for read-only wallet holdings.",
+              "Your holdings + Rug Shield on them", 6, "https://solana.com/docs/rpc", health_name="solana_rpc"),
+    Connector("jupiter_recent", "Jupiter new tokens", "On-chain", "keyless", "Newest tokens with organic score, holder count and audit flags.",
+              "Discovery, trending panel", 1, "https://dev.jup.ag/docs/token-api", health_name="jupiter_recent"),
     # ---- need you ----
     Connector("anthropic", "Anthropic (Claude API)", "AI", "key", "Claude Haiku classifies posts into narratives; Sonnet writes signal reasons and the daily brief.",
               "Narrative extraction, signal write-ups, AI brief, Ask Radar", 3, "https://console.anthropic.com/settings/keys",
               "Console → API Keys → Create key. Set a monthly spend limit in the console too.", "pay per use (cents/day at Haiku rates)",
-              [Field("api_key", "API key", env="ANTHROPIC_API_KEY", placeholder="sk-ant-...")], t_anthropic),
+              [Field("api_key", "API key", env="ANTHROPIC_API_KEY", placeholder="sk-ant-...")], t_anthropic, "anthropic"),
     Connector("x", "X (Twitter) API", "Social", "key", "VIP watchlist (Trump, Musk, CZ, KOLs, news outlets) + cashtag/keyword search. The #1 catalyst source.",
               "FLASH alerts, narrative detection", 3, "https://developer.x.com/en/portal/dashboard",
               "Developer portal → create a Project & App → Keys and tokens → Bearer Token. Buy pay-per-use credits; Radar shows $ spent today and enforces your daily cap.",
               "paid (pay-per-use credits)", [Field("bearer_token", "Bearer token", env="X_BEARER_TOKEN"),
-                                              Field("daily_budget_usd", "Daily budget cap (USD)", secret=False, placeholder="5", optional=True)], t_x),
+                                              Field("daily_budget_usd", "Daily budget cap (USD)", secret=False, placeholder="5", optional=True)], t_x, "x"),
     Connector("telegram_user", "Telegram channels (reader)", "Social", "key", "Reads PUBLIC alpha/call/news/launch channels with your own Telegram account (Telethon). Free.",
               "Mention velocity of CAs and tickers", 3, "https://my.telegram.org/apps",
               "Log in at my.telegram.org → API development tools → create app → copy api_id and api_hash. Phone number is used once for the login code.",
               "free", [Field("api_id", "api_id", secret=False, env="TELEGRAM_API_ID"), Field("api_hash", "api_hash", env="TELEGRAM_API_HASH"),
                        Field("phone", "Phone (+country code)", env="TELEGRAM_PHONE"),
-                       Field("channels", "Channels to watch (comma separated @names)", secret=False, optional=True)], t_telegram_user),
+                       Field("channels", "Channels to watch (comma separated @names)", secret=False, optional=True)], t_telegram_user, "telegram"),
     Connector("telegram_bot", "Telegram alert bot", "Alerts", "key", "Sends FLASH / BUY / rug alerts to your phone.",
               "Alerts", 2, "https://t.me/BotFather",
               "Message @BotFather → /newbot → copy token. Then message your bot once and open https://api.telegram.org/bot<TOKEN>/getUpdates to read your chat id.",
@@ -200,23 +213,23 @@ CATALOG: list[Connector] = [
               "free", [Field("webhook_url", "Webhook URL", env="DISCORD_WEBHOOK_URL")], t_discord),
     Connector("helius", "Helius (Solana RPC)", "On-chain", "key", "Holder lists, wallet & deployer history, account webhooks.",
               "Deployer reputation, smart-money wallets, holder growth", 2, "https://dashboard.helius.dev/signup",
-              "Sign up → Dashboard → API Keys → copy.", "free tier", [Field("api_key", "API key", env="HELIUS_API_KEY")], t_helius),
+              "Sign up → Dashboard → API Keys → copy.", "free tier", [Field("api_key", "API key", env="HELIUS_API_KEY")], t_helius, "helius"),
     Connector("birdeye", "Birdeye", "On-chain", "key", "Token overview, top traders, holders.",
               "Smart-money discovery, holder data", 4, "https://bds.birdeye.so", "Sign up → API keys.", "free tier (limited)",
               [Field("api_key", "API key", env="BIRDEYE_API_KEY")], t_birdeye),
     Connector("coingecko", "CoinGecko demo key", "Market", "key", "Raises CoinGecko from ~5 to 30 req/min; categories for rotation heatmap.",
               "Trending, rotation heatmap", 1, "https://www.coingecko.com/en/developers/dashboard", "Developer dashboard → create Demo API key.",
               "free", [Field("api_key", "Demo API key", env="COINGECKO_API_KEY")], t_coingecko),
-    Connector("reddit", "Reddit API (OAuth)", "Social", "key", "Upgrades Reddit RSS to comment velocity and rising posts at higher limits.",
+    Connector("reddit", "Reddit API (OAuth)", "Social", "key", "Upgrades Reddit RSS to the API: new + rising posts across 8 subs with scores and comment counts.",
               "Social buzz", 3, "https://www.reddit.com/prefs/apps", "Create app → type 'script' → copy client id (under the name) and secret.",
-              "free", [Field("client_id", "Client id", secret=False, env="REDDIT_CLIENT_ID"), Field("client_secret", "Client secret", env="REDDIT_CLIENT_SECRET")], t_reddit),
+              "free", [Field("client_id", "Client id", secret=False, env="REDDIT_CLIENT_ID"), Field("client_secret", "Client secret", env="REDDIT_CLIENT_SECRET")], t_reddit, "reddit_api"),
     Connector("neynar", "Farcaster via Neynar", "Social", "key", "Farcaster casts and trending feed (Base meme culture).",
               "Social buzz", 3, "https://dev.neynar.com", "Sign up → copy API key.", "free tier",
-              [Field("api_key", "API key", env="NEYNAR_API_KEY")], t_neynar),
+              [Field("api_key", "API key", env="NEYNAR_API_KEY")], t_neynar, "farcaster"),
     Connector("youtube", "YouTube Data API", "Social", "key", "Trending videos — confirms a meme is going mainstream.",
               "Mainstream confirmation", 3, "https://console.cloud.google.com/apis/library/youtube.googleapis.com",
               "Google Cloud → enable YouTube Data API v3 → Credentials → API key.", "free quota",
-              [Field("api_key", "API key", env="YOUTUBE_API_KEY")], t_youtube),
+              [Field("api_key", "API key", env="YOUTUBE_API_KEY")], t_youtube, "youtube"),
     Connector("wallet", "Your wallet (read-only)", "You", "key", "Your PUBLIC address so Radar can watch your holdings for rug warnings and exits. Never a private key or seed.",
               "Rug Shield on holdings, P&L", 6, None, "Copy the public address from Phantom/Axiom.", "free",
               [Field("address", "Public Solana address", secret=False, env="WALLET_ADDRESS")], t_wallet),
@@ -307,6 +320,8 @@ class ConnectorStore:
                 state = "needs_key"
             else:
                 state = {"ok": "connected", "error": "error"}.get(row.get("status") or "", "saved")
+                if h and state == "connected" and h.status() in ("degraded", "down"):
+                    state = "error"
             out.append({
                 "id": c.id, "name": c.name, "category": c.category, "kind": c.kind, "what": c.what,
                 "used_for": c.used_for, "phase": c.phase, "signup_url": c.signup_url, "how": c.how, "cost": c.cost,

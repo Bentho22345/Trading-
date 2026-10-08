@@ -6,3 +6,5 @@ aiosqlite==0.22.1
 PyYAML==6.0.3
 feedparser==6.0.14
 cryptography==50.0.2
+anthropic==1.12.1
+telethon==1.45.0

@@ -100,7 +100,91 @@ CREATE TABLE IF NOT EXISTS custom_items (
 );
 CREATE INDEX IF NOT EXISTS custom_items_ts ON custom_items(source_id, ts DESC);
 
-CREATE TABLE IF NOT EXISTS watchlist (address TEXT PRIMARY KEY, added REAL NOT NULL, note TEXT);
+CREATE TABLE IF NOT EXISTS watchlist (address TEXT PRIMARY KEY, added REAL NOT NULL, note TEXT, rules_json TEXT);
+
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT, updated REAL);
+
+CREATE TABLE IF NOT EXISTS authors (
+  id TEXT PRIMARY KEY,          -- source:handle
+  source TEXT, handle TEXT, name TEXT, followers INTEGER, created_at REAL,
+  tier TEXT,                    -- vip | kol | news | verified | normal | new
+  bot_score REAL DEFAULT 0, posts INTEGER DEFAULT 0, last_seen REAL
+);
+
+CREATE TABLE IF NOT EXISTS social_events (
+  id TEXT PRIMARY KEY, source TEXT NOT NULL, author_id TEXT, author_tier TEXT, followers INTEGER,
+  text TEXT, url TEXT, media_json TEXT, ts REAL NOT NULL, ingested REAL NOT NULL,
+  engagement REAL DEFAULT 0, cas_json TEXT, cashtags_json TEXT, narrative_id INTEGER,
+  ai_json TEXT, is_fixture INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS social_ts ON social_events(ts DESC);
+CREATE INDEX IF NOT EXISTS social_narr ON social_events(narrative_id, ts DESC);
+
+CREATE TABLE IF NOT EXISTS narratives (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT, category TEXT, keywords_json TEXT, tickers_json TEXT,
+  first_seen REAL, last_seen REAL, stage TEXT, posts INTEGER DEFAULT 0, authors INTEGER DEFAULT 0,
+  sources_json TEXT, vel_1m REAL, vel_5m REAL, vel_1h REAL, accel REAL, reach REAL, bot_share REAL,
+  sentiment REAL, strength REAL, flash_until REAL, expected_life_h REAL, updated REAL, flags_json TEXT, zscore REAL
+);
+
+CREATE TABLE IF NOT EXISTS narrative_tokens (
+  narrative_id INTEGER, token_address TEXT, match_score REAL, legit_score REAL, is_likely_fake INTEGER,
+  reasons_json TEXT, updated REAL, PRIMARY KEY (narrative_id, token_address)
+);
+
+CREATE TABLE IF NOT EXISTS flash_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, narrative_id INTEGER, token_address TEXT,
+  social_event_id TEXT, author TEXT, text TEXT, post_ts REAL, detected_ts REAL, pushed_ts REAL,
+  latency_ms REAL, safety_json TEXT, is_fixture INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS signals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, token_address TEXT NOT NULL, symbol TEXT,
+  verdict TEXT, score REAL, confidence TEXT, risk_grade TEXT, subscores_json TEXT, vetoes_json TEXT,
+  reasons_json TEXT, plan_json TEXT, inputs_json TEXT, narrative_id INTEGER, category TEXT,
+  writeup TEXT, config_version TEXT
+);
+CREATE INDEX IF NOT EXISTS signals_ts ON signals(ts DESC);
+CREATE INDEX IF NOT EXISTS signals_token ON signals(token_address, ts DESC);
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, severity TEXT, title TEXT, body TEXT,
+  token_address TEXT, dedupe TEXT, delivered_json TEXT, acked INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts DESC);
+
+CREATE TABLE IF NOT EXISTS paper_trades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, signal_id INTEGER, token_address TEXT, symbol TEXT, verdict TEXT,
+  category TEXT, score REAL, opened REAL, entry_price REAL, size_usd REAL, remaining REAL DEFAULT 1.0,
+  realized_usd REAL DEFAULT 0, stop_price REAL, time_stop REAL, ladder_json TEXT, fills_json TEXT,
+  peak_price REAL, trough_price REAL, last_price REAL, last_ts REAL, closed REAL, exit_reason TEXT,
+  return_pct REAL, max_dd_pct REAL, is_backtest INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS paper_open ON paper_trades(closed);
+
+CREATE TABLE IF NOT EXISTS positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, token_address TEXT, symbol TEXT, opened REAL, entry_price REAL,
+  size_usd REAL, qty REAL, stop_price REAL, ladder_json TEXT, fills_json TEXT, closed REAL,
+  exit_price REAL, realized_usd REAL, notes TEXT, source TEXT DEFAULT 'manual', signal_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS wallets (
+  address TEXT PRIMARY KEY, label TEXT, kind TEXT,      -- smart | kol | dev | mine
+  handle TEXT, score REAL, wins INTEGER, losses INTEGER, avg_multiple REAL, avg_hold_s REAL,
+  tokens INTEGER, tracked INTEGER DEFAULT 0, updated REAL
+);
+
+CREATE TABLE IF NOT EXISTS wallet_trades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, wallet TEXT, mint TEXT, ts REAL, side TEXT, sol REAL, tokens REAL,
+  mcap_sol REAL, signature TEXT UNIQUE
+);
+CREATE INDEX IF NOT EXISTS wt_wallet ON wallet_trades(wallet, ts DESC);
+CREATE INDEX IF NOT EXISTS wt_mint ON wallet_trades(mint, ts DESC);
+
+CREATE TABLE IF NOT EXISTS briefs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, body TEXT, model TEXT, context_json TEXT
+);
 """
 
 

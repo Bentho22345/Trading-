@@ -2,7 +2,8 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useState } from 'react';
-import { Chart } from '@/components/Chart';
+import { Chart, type ChartMarker } from '@/components/Chart';
+import { SignalCard, useAction } from '@/components/radar';
 import { AsOf, Copy, DISCLAIMER, Panel, SafetyFlags, safetyFlags, TokenIcon } from '@/components/ui';
 import { api } from '@/lib/api';
 import { ago, clock, pct, pctClass, price, short, usd } from '@/lib/format';
@@ -37,8 +38,10 @@ function TokenInner() {
       if (t) setD((p: any) => ({ ...p, token: { ...p.token, ...t } }));
     } else if (ch === 'trade' && data.mint === a) {
       setD((p: any) => ({ ...p, trades: [data, ...p.trades].slice(0, 200) }));
-    } else if (ch === 'safety' && data.token_address === a) {
+    } else if ((ch === 'safety' && data.token_address === a) || (ch === 'signal' && data.token_address === a)) {
       load();
+    } else if (ch === 'social' && (data.cas || []).includes(a)) {
+      setD((p: any) => ({ ...p, social: [data, ...(p.social || [])] }));
     }
   });
 
@@ -62,13 +65,13 @@ function TokenInner() {
     <div className="space-y-2">
       <header className="flex flex-wrap items-center gap-3 rounded border border-line bg-panel px-3 py-2">
         <TokenIcon src={t.image} symbol={t.symbol} size={36} />
-        <div>
+        <div className="min-w-0">
           <h1 className="text-lg font-bold">{t.symbol || short(a)} <span className="text-sm font-normal text-mute">{t.name}</span>
             {t.graduated_at && <span className="ml-2 rounded bg-accent/15 px-1 text-[11px] text-accent">GRADUATED {ago(t.graduated_at, now)} ago</span>}
             {t.boost_amount ? <span className="ml-2 rounded bg-warn/15 px-1 text-[11px] text-warn" title="Paid promotion is a risk flag">⚡ {t.boost_amount} paid boosts</span> : null}
           </h1>
-          <div className="flex items-center gap-2 text-[11px] text-mute">
-            <span className="num">{a}</span><Copy text={a} />
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-mute">
+            <span className="num break-all">{a}</span><Copy text={a} />
             {t.deployer && <span>dev <a className="hover:text-accent" href={`https://solscan.io/account/${t.deployer}`} target="_blank" rel="noreferrer">{short(t.deployer)}</a></span>}
           </div>
         </div>
@@ -91,11 +94,41 @@ function TokenInner() {
       <p className="text-[11px]"><AsOf ts={t.as_of} now={now} staleAfter={30} source={`DexScreener ${t.dex || ''}`} /></p>
 
       <div className="grid gap-2 xl:grid-cols-[1fr_380px]">
-        <Panel title="Chart" className="h-[460px]"><Chart address={a} /></Panel>
+        <Panel title="Chart · social timeline overlay" className="h-[460px]" right={<span><span className="text-flash">●</span> VIP <span className="text-accent">●</span> post <span className="text-warn">▲</span> signal <span className="text-up">●</span> smart $</span>}>
+          <Chart address={a} markers={markers(d)} />
+        </Panel>
         <Panel title="Safety report" className="h-[460px]" right={<>
           {s && <AsOf ts={s.as_of} now={now} staleAfter={600} source="RugCheck" />}
           <button onClick={() => api(`/api/token/${a}/safety`, { method: 'POST' })} className="rounded border border-line px-1 hover:text-accent">↻</button></>}>
           <SafetyPanel s={s} t={t} />
+        </Panel>
+      </div>
+
+      <SignalSection d={d} a={a} now={now} reload={load} />
+
+      <div className="grid gap-2 lg:grid-cols-2">
+        <Panel title={`Social timeline · ${(d.social || []).length} posts`} className="h-[360px]" right={d.narrative ? <Link href="/narratives" className="text-accent">{d.narrative.title} · {d.narrative.stage}</Link> : null}>
+          <ul>
+            {(d.social || []).map((p: any) => (
+              <li key={p.id} className="border-b border-line/50 px-2 py-1 text-[12px]">
+                <span className="text-[11px] text-mute">{p.source} · {p.author_id?.split(':').slice(1).join(':')} · <span className={p.author_tier === 'vip' ? 'text-flash' : ''}>{p.author_tier}</span> · {ago(p.ts, now)}</span>
+                <div>{p.url ? <a href={p.url} target="_blank" rel="noreferrer" className="hover:text-accent">{p.text}</a> : p.text}</div>
+              </li>
+            ))}
+            {!(d.social || []).length && <li className="p-4 text-center text-mute">No posts mention this token or its ticker yet.</li>}
+          </ul>
+        </Panel>
+        <Panel title="Smart-money & KOL activity" className="h-[360px]">
+          <ul>
+            {(d.smart_trades || []).map((t: any) => (
+              <li key={t.id} className="flex gap-2 border-b border-line/50 px-2 py-1 text-[12px] num">
+                <span className="text-mute">{clock(t.ts)}</span><span className={t.side === 'buy' ? 'text-up' : 'text-down'}>{t.side}</span>
+                <span className={t.kind === 'kol' ? 'text-flash' : ''}>{t.label || short(t.wallet)}</span><span className="text-mute">score {t.score ?? '—'}</span>
+                <span className="ml-auto">{t.sol != null ? `${(+t.sol).toFixed(2)} SOL` : ''}</span>
+              </li>
+            ))}
+            {!(d.smart_trades || []).length && <li className="p-4 text-center text-mute">No tracked wallets have traded this token.</li>}
+          </ul>
         </Panel>
       </div>
 
@@ -191,6 +224,56 @@ function SafetyPanel({ s, t }: { s: any; t: any }) {
         </div>
       )}
       <SafetyFlags t={{ ...t, safety_as_of: s.as_of }} />
+    </div>
+  );
+}
+
+function markers(d: any): ChartMarker[] {
+  const out: ChartMarker[] = [];
+  for (const p of d.social || []) out.push({ ts: p.ts, kind: p.author_tier === 'vip' ? 'vip' : 'post', label: p.author_tier === 'vip' ? `VIP ${p.author_id?.split(':')[1] || ''}` : p.source });
+  for (const s of d.signals || []) out.push({ ts: s.ts, kind: 'signal', label: `${s.verdict} ${s.score}` });
+  for (const t of d.smart_trades || []) out.push({ ts: t.ts, kind: 'smart', label: `${t.side} ${t.label || 'smart'}` });
+  return out.slice(0, 300);
+}
+
+function SignalSection({ d, a, now, reload }: { d: any; a: string; now: number; reload: () => void }) {
+  const { run, Msg } = useAction();
+  const [rules, setRules] = useState<Record<string, string>>(d.rules || {});
+  const [pos, setPos] = useState({ entry_price: '', size_usd: '' });
+  const sigs = (d.signals || []).map((s: any) => ({
+    ...s, token_address: a, symbol: d.token?.symbol, subscores: JSON.parse(s.subscores_json || '{}'), vetoes: JSON.parse(s.vetoes_json || '[]'),
+    reasons: JSON.parse(s.reasons_json || '{}'), plan: JSON.parse(s.plan_json || 'null'),
+  }));
+  const inp = 'w-24 rounded border border-line bg-panel2 px-1 py-0.5';
+  return (
+    <div className="grid gap-2 xl:grid-cols-[1fr_380px]">
+      <div className="space-y-2">
+        {sigs[0] ? <SignalCard s={sigs[0]} now={now} /> : <p className="rounded border border-line bg-panel p-3 text-mute">No signal yet for this token.</p>}
+        {sigs.length > 1 && <p className="text-[11px] text-mute">History: {sigs.slice(1).map((s: any) => `${s.verdict} ${s.score} (${ago(s.ts, now)} ago)`).join(' · ')}</p>}
+      </div>
+      <Panel title="Actions">
+        <div className="space-y-3 p-2 text-[12px]">
+          <div className="flex items-center gap-2">
+            <button onClick={() => run(() => api(`/api/token/${a}/evaluate`, { method: 'POST' }), 'Re-scored').then(reload)} className="rounded bg-accent/20 px-2 py-1 text-accent">Score now</button><Msg />
+          </div>
+          <div>
+            <h3 className="text-[10px] uppercase text-mute">Watch alert rules</h3>
+            {[['price_above', 'price ≥ $'], ['price_below', 'price ≤ $'], ['chg_h1_above', '1h change ≥ %'], ['chg_h1_below', '1h change ≤ %'], ['liq_below', 'liquidity ≤ $'], ['vol_h1_above', '1h volume ≥ $']].map(([k, l]) => (
+              <label key={k} className="flex items-center gap-2"><span className="w-28 text-mute">{l}</span>
+                <input value={rules[k] ?? ''} onChange={(e) => setRules({ ...rules, [k]: e.target.value })} className={inp} /></label>
+            ))}
+            <button onClick={() => run(() => api(`/api/watchlist/${a}`, { method: 'PUT', body: JSON.stringify({ rules: Object.fromEntries(Object.entries(rules).filter(([, v]) => v !== '')) }) }), 'Rules saved')} className="mt-1 rounded border border-line px-2 py-0.5">Save rules</button>
+          </div>
+          <div>
+            <h3 className="text-[10px] uppercase text-mute">I bought this (manual position)</h3>
+            <div className="flex flex-wrap gap-1">
+              <input placeholder="entry $" value={pos.entry_price} onChange={(e) => setPos({ ...pos, entry_price: e.target.value })} className={inp} />
+              <input placeholder="size $" value={pos.size_usd} onChange={(e) => setPos({ ...pos, size_usd: e.target.value })} className={inp} />
+              <button onClick={() => run(() => api('/api/positions', { method: 'POST', body: JSON.stringify({ token_address: a, entry_price: +pos.entry_price || d.token?.price_usd, size_usd: +pos.size_usd, signal_id: sigs[0]?.id }) }), 'Tracking position — TP/stop alerts on')} className="rounded border border-line px-2">Track</button>
+            </div>
+          </div>
+        </div>
+      </Panel>
     </div>
   );
 }

@@ -2,15 +2,16 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { MarketBar } from '@/components/MarketBar';
+import { VerdictBadge } from '@/components/radar';
 import { Copy, Panel, SafetyFlags, TokenIcon } from '@/components/ui';
 import { api, type Token } from '@/lib/api';
 import { ago, clock, pct, pctClass, price, short, usd } from '@/lib/format';
 import { useLive, useNow } from '@/lib/live';
 
-type SortKey = 'vol_m5' | 'vol_h1' | 'vol_h24' | 'liquidity_usd' | 'market_cap' | 'chg_m5' | 'chg_h1' | 'chg_h24' | 'age' | 'holders' | 'bs';
+type SortKey = 'radar_score' | 'vol_m5' | 'vol_h1' | 'vol_h24' | 'liquidity_usd' | 'market_cap' | 'chg_m5' | 'chg_h1' | 'chg_h24' | 'age' | 'holders' | 'bs';
 
 const COLS: { key: SortKey | null; label: string; cls?: string }[] = [
-  { key: null, label: 'Token' }, { key: 'age', label: 'Age' }, { key: null, label: 'Price' },
+  { key: null, label: 'Token' }, { key: 'radar_score', label: 'Radar' }, { key: 'age', label: 'Age' }, { key: null, label: 'Price' },
   { key: 'market_cap', label: 'MCap' }, { key: 'liquidity_usd', label: 'Liq' },
   { key: 'vol_m5', label: 'Vol 5m' }, { key: 'vol_h1', label: 'Vol 1h' }, { key: 'vol_h24', label: 'Vol 24h' },
   { key: 'chg_m5', label: '5m' }, { key: 'chg_h1', label: '1h' }, { key: 'chg_h24', label: '24h' },
@@ -34,20 +35,36 @@ export default function Dashboard() {
   const [news, setNews] = useState<any[]>([]);
   const [sort, setSort] = useState<SortKey>('vol_h1');
   const [minLiq, setMinLiq] = useState(5000);
+  const [f, setF] = useState<Record<string, any>>(() => {
+    try { return JSON.parse(localStorage.getItem('radar:filters') || '{}'); } catch { return {}; }
+  });
+  const setFilter = (k: string, v: any) => setF((p) => { const n = { ...p, [k]: v }; try { localStorage.setItem('radar:filters', JSON.stringify(n)); } catch { /* */ } return n; });
+  const qs = useMemo(() => {
+    const p = new URLSearchParams({ limit: '400', min_liq: String(minLiq), sort: sort === 'age' || sort === 'bs' ? 'vol_h1' : sort });
+    for (const [k, v] of Object.entries(f)) if (v !== '' && v != null && v !== false) p.set(k, String(v));
+    return p.toString();
+  }, [f, minLiq, sort]);
   const [tab, setTab] = useState('geckoterminal:trending');
   const [fresh, setFresh] = useState<Record<string, number>>({});
 
   useEffect(() => {
-    api<Token[]>('/api/tokens?limit=300').then((r) => setTokens(Object.fromEntries(r.map((t) => [t.address, t]))));
     api('/api/launches').then(setLaunches);
     api('/api/graduated').then(setGrads);
     api('/api/trending').then(setTrending);
     api('/api/news').then(setNews);
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    const load = () => api<Token[]>(`/api/tokens?${qs}`).then((r) => alive && setTokens(Object.fromEntries(r.map((t) => [t.address, t])))).catch(() => {});
+    load();
+    const t = setInterval(load, 5000);   // membership refresh; prices stream in live below
+    return () => { alive = false; clearInterval(t); };
+  }, [qs]);
+
   useLive(({ ch, data }) => {
     if (ch === 'tokens') {
-      setTokens((p) => { const n = { ...p }; for (const t of data as Token[]) n[t.address] = { ...p[t.address], ...t }; return n; });
+      setTokens((p) => { const n = { ...p }; for (const t of data as Token[]) if (p[t.address]) n[t.address] = { ...p[t.address], ...t }; return n; });
       setFresh((p) => { const n = { ...p }; for (const t of data) n[t.address] = Date.now(); return n; });
     } else if (ch === 'launch') setLaunches((p) => [data, ...p].slice(0, 120));
     else if (ch === 'graduated') setGrads((p) => [data, ...p.filter((g) => g.address !== data.address)].slice(0, 60));
@@ -58,13 +75,14 @@ export default function Dashboard() {
   });
 
   const rows = useMemo(() => Object.values(tokens)
-    .filter((t) => t.pair_address && (t.liquidity_usd || 0) >= minLiq)
+    .filter((t) => t.pair_address)
     .sort((a, b) => sortVal(b, sort) - sortVal(a, sort))
-    .slice(0, 150), [tokens, sort, minLiq]);
+    .slice(0, 400), [tokens, sort]);
 
   return (
     <div>
       <MarketBar />
+      <FilterBar f={f} set={setFilter} reset={() => { setF({}); try { localStorage.removeItem('radar:filters'); } catch { /* */ } }} />
       <div className="grid gap-2 xl:grid-cols-[1fr_380px]">
         <Panel title={`Hot tokens · ${rows.length}`} className="max-h-[calc(100vh-110px)] min-h-[420px]"
           right={<label className="flex items-center gap-1">min liq
@@ -92,6 +110,7 @@ export default function Dashboard() {
                       {t.boost_amount ? <span className="rounded bg-warn/15 px-1 text-[10px] text-warn" title="Paid DexScreener boost — often exit liquidity">⚡{t.boost_amount}</span> : null}
                     </Link>
                   </td>
+                  <td className="px-2"><span className="flex items-center gap-1"><VerdictBadge v={(t as any).verdict} /><span className="num">{(t as any).radar_score ?? ''}</span></span></td>
                   <td className="px-2 text-mute">{ago(t.launched_at || t.pair_created_at || t.first_seen, now)}</td>
                   <td className="px-2">{price(t.price_usd)}</td>
                   <td className="px-2">{usd(t.market_cap ?? t.fdv)}</td>
@@ -217,6 +236,35 @@ function TrendingList({ data, now }: { data?: any; now: number }) {
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+function FilterBar({ f, set, reset }: { f: Record<string, any>; set: (k: string, v: any) => void; reset: () => void }) {
+  const inp = 'w-24 rounded border border-line bg-panel2 px-1.5 py-0.5 outline-none focus:border-accent';
+  const num = (k: string, ph: string, title: string) => (
+    <input title={title} placeholder={ph} value={f[k] ?? ''} onChange={(e) => set(k, e.target.value.replace(/[^0-9.]/g, ''))} className={inp} />
+  );
+  const chk = (k: string, label: string) => (
+    <label className="flex items-center gap-1 whitespace-nowrap"><input type="checkbox" checked={!!f[k]} onChange={(e) => set(k, e.target.checked)} />{label}</label>
+  );
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2 rounded border border-line bg-panel px-2 py-1.5 text-[11px]">
+      <input placeholder="Filter $ticker / name / CA" value={f.q ?? ''} onChange={(e) => set('q', e.target.value)} className={`${inp} w-44`} />
+      <select value={f.chain ?? ''} onChange={(e) => set('chain', e.target.value)} className={inp}>
+        <option value="">all chains</option>{['solana', 'base', 'bsc', 'ethereum'].map((c) => <option key={c}>{c}</option>)}
+      </select>
+      <select value={f.verdict ?? ''} onChange={(e) => set('verdict', e.target.value)} className={inp}>
+        <option value="">any verdict</option><option value="BUY">BUY</option><option value="WATCH">WATCH</option><option value="AVOID">AVOID</option>
+      </select>
+      {num('min_mcap', 'min mcap $', 'Minimum market cap (USD)')}
+      {num('max_mcap', 'max mcap $', 'Maximum market cap (USD)')}
+      {num('min_vol_h1', 'min vol 1h $', 'Minimum 1h volume (USD)')}
+      {num('max_age_min', 'max age (min)', 'Only tokens younger than N minutes')}
+      {num('min_age_min', 'min age (min)', 'Only tokens older than N minutes')}
+      {num('max_stale_s', 'fresh ≤ s', 'Only rows refreshed within N seconds')}
+      {chk('safe_only', 'safe only')}{chk('graduated_only', 'graduated')}{chk('hide_boosted', 'hide paid boosts')}
+      <button onClick={reset} className="ml-auto text-mute hover:text-fg">reset</button>
     </div>
   );
 }

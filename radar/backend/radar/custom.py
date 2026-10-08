@@ -50,6 +50,7 @@ class CustomSources:
     def __init__(self, db: DB) -> None:
         self.db = db
         self.tasks: dict[int, asyncio.Task] = {}
+        self.on_item = None  # social ingest hook
 
     async def add(self, name: str, url: str, kind: str | None, headers: dict[str, str] | None,
                   items_path: str | None, interval_s: float, subscribe: str | None) -> dict[str, Any]:
@@ -107,6 +108,9 @@ class CustomSources:
             await self.db.upsert("custom_items", it, "id")
             new += 1
             hits = detect(it["title"] or "")
+            if self.on_item:
+                await self.on_item({"id": f"custom:{it['id']}", "source": "custom", "author": name, "text": it["title"] or "",
+                                    "url": it.get("link"), "ts": it["ts"], "engagement": 0})
             await hub.publish("custom", {**{k: it[k] for k in ("id", "ts", "title", "link")}, "source": name, "detected": hits})
         return new
 

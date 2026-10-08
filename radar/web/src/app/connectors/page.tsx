@@ -121,6 +121,7 @@ function KeyCard({ c, onChange }: { c: Conn; onChange: () => void }) {
           {busy && <span className="text-mute">…</span>}
         </div>
       </form>
+      {c.id === 'telegram_user' && c.state !== 'needs_key' && <TelegramLogin />}
       {(msg || c.last_msg) && <p className={`mt-1 break-words text-[11px] ${(msg ? msg.ok : c.state === 'connected') ? 'text-up' : 'text-down'}`}>
         {msg ? msg.text : `${c.last_msg} · ${ago(c.last_test)} ago`}</p>}
     </div>
@@ -206,5 +207,24 @@ function AddYourOwn({ onAdded, custom }: { onAdded: () => void; custom: any[] })
         )}
       </div>
     </Panel>
+  );
+}
+
+function TelegramLogin() {
+  const [code, setCode] = useState('');
+  const [pw, setPw] = useState('');
+  const [msg, setMsg] = useState('');
+  const call = (path: string, body?: any) => api(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }).then((r) => setMsg(r.message)).catch((e) => setMsg(String(e.message)));
+  return (
+    <div className="mt-2 rounded border border-line p-2 text-[11px]">
+      <b>Sign in once</b> (Telegram sends a login code to your app):
+      <div className="mt-1 flex flex-wrap gap-1">
+        <button onClick={() => call('/api/telegram/send-code')} className="rounded border border-line px-2">1. Send code</button>
+        <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="code" className="w-20 rounded border border-line bg-panel2 px-1" />
+        <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="2FA password (if set)" className="w-36 rounded border border-line bg-panel2 px-1" />
+        <button onClick={() => call('/api/telegram/sign-in', { code, password: pw || null })} className="rounded border border-line px-2">2. Sign in</button>
+      </div>
+      {msg && <p className="mt-1">{msg}</p>}
+    </div>
   );
 }

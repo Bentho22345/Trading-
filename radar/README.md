@@ -25,39 +25,55 @@ For UI development with hot reload, run the backend as above and `cd web && npm 
 
 Then open **Connectors** (press `c`) to add keys or plug in your own sources. Open **Health** (press `h`) to see every adapter's status, latency and rate-limit headroom.
 
-## What's in Phase 1 (live data spine)
+## What it does
 
-| Screen | What you get |
+**Real coins only.** Every token, price, post and number on screen comes from a live source and shows its age. There is no demo mode. When a source is down, its fields show "—" or STALE, never a guess. The only simulated input in the codebase is the FLASH latency test fixture. It is off unless `RADAR_ENABLE_FIXTURES=1` is set, and it is labelled TEST wherever it appears.
+
+| Page (shortcut) | What you get |
 |---|---|
-| **Dashboard** | Hot tokens table, sortable by volume (5m/1h/24h), liquidity, market cap, % change, age, buy/sell and holders. Each row shows safety chips (MINT / FRZ / LP / T10, plus RUGGED), a GRAD badge for pump.fun graduates and a ⚡ badge for paid boosts. Also: a live **new launches** feed, a **graduated** feed, **trending** (GeckoTerminal trending/new, DexScreener boosts/profiles, CoinGecko), **breaking news & social** (contract addresses and $cashtags detected) and **prediction markets**. A market bar shows BTC/ETH/SOL live, Fear & Greed, Solana DEX volume and meme-sector market cap. |
-| **Token page** (`/token?a=<CA>`) | Copy-CA button and deep links to DexScreener, RugCheck, Axiom, Photon, GMGN, BullX, Solscan and pump.fun. Stat tiles, a GeckoTerminal candle chart (1m–1d), a full RugCheck safety report (authorities, LP lock, top-10 holders excluding AMM vaults, insiders, risks), live trades, pairs and a watch button. Opening a token promotes it to the fastest refresh tier and subscribes to its live trades. |
-| **Connectors** | Every source: what it is, whether it's running, and, for those that need you, where to get the key, a paste box and a real **Test** call. **Add your own** accepts any RSS/Atom feed, JSON API or WebSocket link, or a website homepage (its RSS feed is found automatically). |
-| **Health** | Per-adapter status, p50/p95 latency, requests in the last hour, errors, 429s and token-bucket headroom. |
+| **Dashboard** (`d`) | Hot tokens with a live **Radar Score + verdict**. Server-side filters: ticker/name/CA, chain, verdict, market cap min/max, 1h volume, age, freshness, safe-only, graduated-only, hide paid boosts. Also: new pump.fun launches (live), graduations, trending (GeckoTerminal on Solana/Base/BSC/ETH, DexScreener boosts/profiles/takeovers/ads, CoinGecko, Jupiter new tokens), breaking news & social, prediction markets, and a market-regime bar. |
+| **Signals** (`s`) | Chronological BUY / WATCH / AVOID cards. Each has the score breakdown, confidence, risk grade A–F, reasons and risks, hard vetoes, entry zone, position size from your risk settings, take-profit ladder, stop, time stop, links, a Claude write-up and its paper-trade outcome. |
+| **Narratives** (`n`) | Active narratives with lifecycle (BIRTH → IGNITION → PEAK → FADING), a velocity sparkline, z-score, sources, bot share and VIP/breaking/listing flags. Matched tokens are shown with **real vs copycat** ranking. Detail view: buzz by platform, top voices, posts. |
+| **Social** (`f`) | The live stream of every ingested post (X, Telegram, Bluesky, 4chan, Reddit, Farcaster, YouTube, news, Google Trends, Polymarket swings, your custom sources), plus per-source rates and the FLASH log with measured post-to-screen latency. |
+| **Smart money** (`w`) | Auto-discovered profitable early wallets (win rate, average multiple, hold time), KOL wallets you add, and the live trades of followed wallets. Shill-and-dump alerts fire when a KOL sells a token they are posting about. |
+| **Scorecard** (`p`) | Shows **whether the strategy is profitable on paper** before you risk money. Hit rate, average/median return, expectancy and max drawdown, split by verdict, score bucket and category. Also: a BUY equity curve, a backtest replay with any config override, and auto-tuning of the weights with one-click apply. |
+| **Risk** (`r`) | Bankroll, max % per trade, max open positions, daily loss limit and **cooldown lock**. Track your manual positions with TP/stop alerts and P&L, keep a trade journal, and see your read-only wallet holdings (the held tokens are added to Rug Shield). |
+| **Rotation & Brief** (`b`) | A heatmap of capital and attention by category over 1h/6h/24h, and an AI brief (morning + evening, or on demand), sent to your alert channels. |
+| **Ask** (`a`) | Claude answers questions using tools that query Radar's own database. |
+| **Token page** | Candles with **social posts, signals and smart-money trades drawn as chart markers**. Also: RugCheck/GoPlus safety, the signal card, live trades, smart-money activity, the social timeline, custom alert rules, "I bought this" position tracking and deep links. |
+| **Connectors** (`c`) | Every source with its live status. Key entry with a real test call (keys encrypted at rest), Telegram sign-in, and **Add your own**: any RSS/JSON/WebSocket link. |
+| **Settings** (`g`) / **Health** (`h`) | Scoring weights, thresholds and vetoes; VIP/search/channel lists; the API cost meter; a test-alert button. Health shows per-adapter status, latency and rate-limit headroom. |
 
-**Rules the code enforces.** Every number on screen comes from a named source and carries an "as of" age that turns amber, then red and STALE, as it ages. Nothing is estimated or made up: a source that is down shows as down and its fields show "—". Rate budgets sit below each API's published free limits. Hitting a 429 pauses that bucket, and retries back off exponentially. The DexScreener budget goes to the hottest tokens first: viewed > watchlist > graduated/trending/boosted > fresh launches.
+**Alerts** go to a full-screen FLASH overlay, browser notifications and in-app toasts, plus Telegram, ntfy (phone push) and Discord when those are connected. Alert kinds: FLASH (a VIP posts a CA, or a narrative velocity breakout), BUY SIGNAL, take-profit/stop/time exits, Rug Shield (liquidity pulled, dev selling, a top holder dumping, authorities re-enabled, rugged), smart-money clusters, shill-and-dump, and your custom rules.
+
+**Scoring** is configured in `config/scoring.yaml`, editable live in Settings. Sub-scores: narrative 30%, catalyst 15%, momentum 20%, smart money 15%, safety 20%, multiplied by a market-regime factor. **Hard vetoes always give AVOID:** active mint authority, active freeze authority, top-10 holders above the threshold, liquidity below the minimum, a deployer linked to past rugs, a likely fake of a VIP coin, rugged, or RugCheck risk too high. Every signal is stored with the exact inputs that produced it, so backtests replay the real data.
 
 ## Sources
 
-**Running automatically, no key needed:** PumpPortal WebSocket (one connection), DexScreener, GeckoTerminal, RugCheck, Coinbase ticker WS, Jupiter price, Alternative.me Fear & Greed, DeFiLlama, CoinGecko public, Polymarket, Kalshi, and RSS feeds. The RSS set covers CoinDesk, Cointelegraph, Decrypt, The Block, Bloomberg, Reuters/AP via Google News, topic searches, Reddit subreddit RSS and Google Trends "trending now". Edit `config/sources.yaml` to change the feeds.
+**Running automatically, no key needed:** PumpPortal WebSocket (launches, trades, migrations, wallet trades). DexScreener (pairs, profiles, boosts, community takeovers, ads, search). GeckoTerminal (trending/new pools on four chains, OHLCV). RugCheck (Solana safety) and GoPlus (EVM safety). Coinbase ticker WS, Jupiter price and new tokens, Fear & Greed, DeFiLlama, CoinGecko, Polymarket (including odds-swing detection), Kalshi, the ForexFactory macro calendar and Solana RPC. On the social side: the **Bluesky Jetstream firehose** (every public post in real time, filtered for crypto), the **4chan /biz/** official API, and RSS. The RSS set covers CoinDesk, Cointelegraph, Decrypt, The Block, Bloomberg, Reuters/AP via Google News, exchange-listing searches (Binance, Coinbase, Robinhood, Upbit), six subreddits, Mastodon hashtags and Google Trends (US, UK). Edit `config/sources.yaml` to change the feeds.
 
 **Needs you** (paste on the Connectors page or in `.env`):
 
 | Connector | Why | Cost |
 |---|---|---|
-| Anthropic | Narrative extraction (Haiku), signal write-ups and daily brief (Sonnet) | pay-per-use |
-| X API bearer token | VIP watchlist + cashtag search (the #1 catalyst source), with a daily $ cap | pay-per-use credits |
-| Telegram api_id/api_hash | Read public alpha/news/launch channels | free |
+| X API bearer token | VIP watchlist (one batched search with `since_id`) + keyword search. The #1 catalyst source. Cost meter + daily cap. | pay-per-use credits |
+| Anthropic | Haiku classifies posts into narratives; Sonnet writes signal write-ups, the brief and Ask Radar answers. Daily $ cap. | pay-per-use |
+| Telegram api_id/api_hash + phone | Reads public alpha/news/launch channels as you (sign in once on the Connectors page) | free |
 | Telegram bot token + chat id | Phone alerts | free |
 | ntfy topic / Discord webhook | Phone push / Discord alerts | free |
-| Helius | Holders, deployer history, wallet webhooks | free tier |
-| Birdeye | Top traders / holders | free tier |
+| Helius | Swap history of followed wallets (beyond pump.fun); faster RPC | free tier |
 | CoinGecko demo key | 30 req/min instead of ~5 | free |
-| Reddit OAuth app | Comment velocity at higher limits | free |
-| Neynar | Farcaster | free tier |
+| Reddit app | API access to new + rising posts in 8 subs | free |
+| Neynar | Farcaster trending | free tier |
 | YouTube Data API | Mainstream confirmation | free quota |
-| Wallet public address | Rug Shield on your holdings (read-only) | free |
+| Birdeye | Reserved for top-trader data | free tier |
+| Wallet public address | Your holdings + Rug Shield on them (read-only) | free |
 
-**Not connectable:** Truth Social has no public API and its terms forbid automated access, so watch X/Telegram mirror accounts instead. TikTok only offers a Research API that needs approval. Axiom, Photon, GMGN and BullX have no data APIs, so Radar gives you deep links only.
+**Not connectable:** Truth Social has no public API and its terms forbid automated access, so add X accounts that mirror Trump's posts instead. TikTok only offers a Research API that needs approval. Axiom, Photon, GMGN and BullX have no data APIs, so Radar uses deep links only.
+
+## FLASH latency test (definition of done)
+
+`cd backend && .venv/bin/python -m pytest tests/test_e2e.py -k flash` starts the app against local fake upstreams with `RADAR_ENABLE_FIXTURES=1`. It posts a simulated VIP message containing a CA, then asserts that the FLASH reaches the UI WebSocket **and** the Telegram bot API in under 5 seconds. In the live app, every real FLASH logs its actual post-to-screen latency on the Social page.
 
 ## Layout
 
@@ -75,11 +91,6 @@ Tests: `cd backend && .venv/bin/python -m pytest`
 
 The app has no login. Docker binds it to `127.0.0.1` only. If you host it remotely, put it behind authentication (for example Cloudflare Access or Tailscale). Saved keys are encrypted with AES-256-GCM using `RADAR_SECRET` or an auto-generated `data/secret.key`.
 
-## Roadmap
+## Status
 
-1. ✅ Live data spine + Connectors
-2. Safety gate & Radar Score v1, hard vetoes (an active mint authority is always AVOID), signal cards, Telegram/browser/ntfy alerts
-3. Social engine: X VIP + search with cost meter, Telegram, Reddit, Claude narrative extraction, clustering, token matching, real-vs-fake detection, FLASH mode with latency logging
-4. Smart money & KOL wallets, shill-and-dump detection
-5. Paper trading, scorecard, backtest replay, weight tuning
-6. Risk & Exit Manager, rotation heatmap, AI daily brief, Ask Radar
+All six phases are built: the data spine, safety + scoring + alerts, the social engine with FLASH, smart money, paper trading/scorecard/backtest/tuning, and the trader tools (risk manager, rotation, brief, Ask Radar).
