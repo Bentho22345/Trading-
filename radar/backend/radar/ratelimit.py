@@ -30,8 +30,10 @@ class TokenBucket:
         self.paused_until = max(self.paused_until, time.monotonic() + seconds)
         self.tokens = 0.0
 
-    async def acquire(self) -> None:
-        async with self._lock:
+    async def acquire(self, priority: bool = False) -> None:
+        """Background callers leave a small reserve in the bucket; `priority` callers (a person waiting on a chart or
+        a page) may spend it, and skip the background queue, so interactive requests never wait behind pollers."""
+        if priority:
             while True:
                 now = time.monotonic()
                 if now < self.paused_until:
@@ -41,4 +43,16 @@ class TokenBucket:
                 if self.tokens >= 1:
                     self.tokens -= 1
                     return
-                await asyncio.sleep((1 - self.tokens) / self.rate)
+                await asyncio.sleep(max(0.05, (1 - self.tokens) / self.rate))
+        reserve = min(2.0, max(0.0, self.capacity - 1))
+        async with self._lock:
+            while True:
+                now = time.monotonic()
+                if now < self.paused_until:
+                    await asyncio.sleep(self.paused_until - now)
+                    continue
+                self._refill()
+                if self.tokens >= 1 + reserve:
+                    self.tokens -= 1
+                    return
+                await asyncio.sleep((1 + reserve - self.tokens) / self.rate)

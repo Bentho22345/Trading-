@@ -134,6 +134,24 @@ async def pump_ws(ws):
                 subs.update(m.get("keys") or [])
             await ws.send(json.dumps({"message": f"Successfully subscribed to {m.get('method')}"}))
 
+    async def rocket(mint: str, n: int, bundled: bool) -> None:
+        """A launch that behaves like a real runner (distinct buyers, rising curve, a top wallet in early) or a bundle."""
+        vsol = 31.0
+        if bundled:
+            for i in range(7):
+                vsol += 3
+                await ws.send(json.dumps({**fx.PUMP_TRADE, "mint": mint, "signature": f"b{n}{i}", "txType": "buy",
+                                          "traderPublicKey": f"Bundle{i}{'y' * 33}"[:40], "solAmount": 2.0, "tokenAmount": 5e7,
+                                          "vSolInBondingCurve": vsol, "marketCapSol": vsol * 0.97}))
+            return
+        for i in range(30):
+            await asyncio.sleep(0.9)
+            vsol += random.uniform(0.6, 1.6)
+            who = WALLETS[0] if i == 3 else f"Fan{n}x{i}{'z' * 32}"[:40]
+            await ws.send(json.dumps({**fx.PUMP_TRADE, "mint": mint, "signature": f"r{n}{i}", "txType": "buy" if i % 6 else "sell",
+                                      "traderPublicKey": who, "solAmount": round(random.uniform(0.1, 1.8), 3),
+                                      "tokenAmount": random.uniform(1e6, 2e7), "vSolInBondingCurve": vsol, "marketCapSol": vsol * 0.97}))
+
     async def writer():
         n = 0
         while True:
@@ -143,8 +161,11 @@ async def pump_ws(ws):
             if mint not in created:
                 created.append(mint)
             ev = {**fx.PUMP_CREATE, "mint": mint, "signature": f"sig{n}",
-                  "name": fx.PUMP_CREATE["name"] if n == 1 else f"Fake {mint[:4]}", "symbol": fx.PUMP_CREATE["symbol"] if n == 1 else mint[:5].upper()}
+                  "name": fx.PUMP_CREATE["name"] if n == 1 else f"Fake {mint[:4]}", "symbol": fx.PUMP_CREATE["symbol"] if n == 1 else mint[:5].upper(),
+                  **({} if n == 1 else {"traderPublicKey": f"Dev{n % 7}{'d' * 36}"[:40]})}
             await ws.send(json.dumps(ev))
+            if n > 1 and n % 5 in (2, 4):
+                asyncio.get_running_loop().create_task(rocket(mint, n, bundled=n % 5 == 4))
             for s in [fx.MINT, *random.sample(sorted(subs), min(4, len(subs)))] if fx.MINT in subs else random.sample(sorted(subs), min(4, len(subs))):
                 await ws.send(json.dumps({**fx.PUMP_TRADE, "mint": s, "signature": f"t{n}{s[:6]}",
                                           "txType": random.choice(["buy", "sell"]), "solAmount": random.uniform(0.05, 3)}))

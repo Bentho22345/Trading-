@@ -476,13 +476,36 @@ async def tg_sign(b: CodeBody) -> dict[str, str]:
 _cache: dict[str, tuple[float, Any]] = {}
 
 
+_inflight: dict[str, Any] = {}
+
+
 async def _cached(key: str, ttl: float, fn):
+    """Fresh hit: instant. Stale hit (up to 10× ttl): instant, recomputed in the background. Concurrent misses share one
+    computation, so a burst of page loads never runs the same heavy query twice."""
+    import asyncio
+    now = time.time()
     hit = _cache.get(key)
-    if hit and time.time() - hit[0] < ttl:
+    if hit and now - hit[0] < ttl:
         return hit[1]
-    val = await fn()
-    _cache[key] = (time.time(), val)
-    return val
+
+    async def run():
+        try:
+            val = await fn()
+            _cache[key] = (time.time(), val)
+            if len(_cache) > 400:
+                for k in sorted(_cache, key=lambda k: _cache[k][0])[:100]:
+                    _cache.pop(k, None)
+            return val
+        finally:
+            _inflight.pop(key, None)
+
+    task = _inflight.get(key)
+    if task is None:
+        task = _inflight[key] = asyncio.create_task(run())
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    if hit and now - hit[0] < ttl * 10:
+        return hit[1]
+    return await asyncio.shield(task)
 
 
 @router.get("/discover/climbers")
@@ -640,3 +663,24 @@ async def pulse() -> dict[str, Any]:
             r["narratives"] = nar.get(r["address"], [])[:2]
         return {"as_of": now, "new": new, "final_stretch": stretch, "migrated": migrated, "sol_usd": sol}
     return await _cached("pulse", 2, build)
+
+
+# ---------------- Snipe engine ----------------
+@router.get("/snipe")
+async def snipe_board(min_score: float = 0, tiers: str = "", max_age_min: float = 30, limit: int = 100,
+                      hide_bundled: bool = False, alpha_only: bool = False, proven_dev: bool = False) -> dict[str, Any]:
+    t = {x.strip().upper() for x in tiers.split(",") if x.strip()} or None
+    return S.sniper.board(min_score, t, max_age_min, min(limit, 300), hide_bundled, alpha_only, proven_dev)
+
+
+@router.get("/snipe/proof")
+async def snipe_proof(hours: float = 168) -> dict[str, Any]:
+    return await _cached(f"proof:{hours}", 10, lambda: S.sniper.proof(min(hours, 24 * 90)))
+
+
+@router.get("/snipe/{mint}")
+async def snipe_one(mint: str) -> dict[str, Any]:
+    r = S.sniper.one(mint)
+    if r is None:
+        raise HTTPException(404, "not being tracked (the Snipe board follows pump.fun launches for their first 30 minutes)")
+    return r

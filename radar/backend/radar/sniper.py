@@ -1,0 +1,609 @@
+"""Snipe engine: scores every pump.fun launch in real time, from its first trade, and proves itself.
+
+Runs entirely in memory on the PumpPortal stream (no DB read on the hot path), so a launch is scored and pushed to
+the UI within milliseconds of each trade. Six detectors, all measured from real data Radar observes:
+
+  alpha     Alpha entry — Top Traders (ranked from real P&L) or followed / smart wallets buying in the first minutes
+  velocity  Curve velocity — SOL flowing into the bonding curve per minute, buyer acceleration, and the projected
+            time to graduation (ETA) from the curve's actual trajectory
+  organic   Organic flow — distinct buyers vs bundles: same-second multi-wallet buys, identical bot-sized buys,
+            and how concentrated the buy volume is
+  dev       Dev track record — every launch by this deployer that Radar saw in the last 30 days: how many
+            graduated and how high they went; plus whether the dev is dumping right now
+  meta      Meta match & clones — the name fits a meta that is hot right now, or copies a ticker that is trending
+  social    Social spread — distinct authors / sources posting the contract or $ticker, and whether a VIP did
+
+The first time a launch reaches SNIPE it is logged to `snipe_calls` with every input, then its real outcome is tracked
+(peak, value 5m / 15m / 1h later, graduation, first appearance on public trending lists) for the Proof page.
+Nothing here trades: Radar never holds keys.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import statistics
+import time
+from collections import Counter, deque
+from dataclasses import dataclass, field
+from typing import Any
+
+from .hub import hub
+from .tracker import CURVE_END_SOL, CURVE_START_SOL, curve_progress
+
+log = logging.getLogger("radar.sniper")
+
+TRACK_S = 30 * 60          # keep scoring a launch for 30 minutes (longer once it is called)
+CALL_TRACK_S = 24 * 3600   # follow a called coin's outcome for 24h
+MIN_TRADES_FOR_CALL = 8
+MIN_BUYERS_FOR_CALL = 5
+MIN_AGE_FOR_CALL = 12.0
+SNIPE_AT, WATCH_AT = 60.0, 35.0
+COMMON_TICKERS = {"SOL", "USDC", "USDT", "BTC", "ETH", "PUMP", "MEME", "AI", "CTO", "DEV", "THE", "CAT", "DOG"}
+
+
+@dataclass
+class Launch:
+    mint: str
+    created: float
+    symbol: str | None = None
+    name: str | None = None
+    deployer: str | None = None
+    dev_buy_sol: float = 0.0
+    dev_buy_pct: float | None = None
+    dev_tokens: float = 0.0
+    dev_sold_tokens: float = 0.0
+    vsol: float | None = None
+    mcap_sol: float | None = None
+    peak_mcap_sol: float = 0.0
+    graduated_at: float | None = None
+    trades: deque = field(default_factory=lambda: deque(maxlen=4000))   # (ts, side, sol, tokens, trader, vsol)
+    buyers: dict[str, float] = field(default_factory=dict)             # trader -> first buy ts
+    buy_sol: dict[str, float] = field(default_factory=dict)            # trader -> SOL bought
+    alpha: list[dict[str, Any]] = field(default_factory=list)
+    meta: list[dict[str, Any]] = field(default_factory=list)
+    clone_of: dict[str, Any] | None = None
+    dev: dict[str, Any] | None = None
+    result: dict[str, Any] = field(default_factory=dict)
+    last_eval: float = 0.0
+    last_pub: float = 0.0
+    dirty: bool = True
+    until: float = 0.0
+
+
+def _slope(pts: list[tuple[float, float]]) -> float:
+    """Least-squares slope (units per second)."""
+    if len(pts) < 2:
+        return 0.0
+    n = len(pts)
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    den = sum((p[0] - mx) ** 2 for p in pts)
+    return sum((p[0] - mx) * (p[1] - my) for p in pts) / den if den else 0.0
+
+
+def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
+    """Pure scoring of one launch. `ctx` carries the live context: social spread, ranked wallets, etc."""
+    det: list[dict[str, Any]] = []
+    flags: list[str] = []
+    trades = list(L.trades)
+    buys = [t for t in trades if t[1] == "buy" and t[4] != L.deployer]
+    sells = [t for t in trades if t[1] == "sell"]
+    age = max(0.0, now - L.created)
+
+    # 1 · alpha entry -------------------------------------------------------------------------------------------
+    pts = 0.0
+    if L.alpha:
+        ranks = sorted(a["rank"] for a in L.alpha if a.get("rank"))
+        best = ranks[0] if ranks else None
+        pts = (25 if best and best <= 100 else 18 if best and best <= 500 else 12 if best else 10) + 6 * (len(L.alpha) - 1)
+        first = min(a["ts"] for a in L.alpha) - L.created
+        who = ", ".join(f"#{a['rank']}" if a.get("rank") else (a.get("label") or "smart wallet") for a in L.alpha[:4])
+        det.append({"key": "alpha", "label": "Alpha entry", "points": min(35.0, pts), "good": True,
+                    "detail": f"{len(L.alpha)} top wallet{'s' if len(L.alpha) > 1 else ''} in ({who}); first {first:.0f}s after launch",
+                    "value": len(L.alpha)})
+
+    # 2 · curve velocity & graduation ETA ------------------------------------------------------------------------
+    win = [t for t in trades if t[0] >= now - 120 and t[5]]
+    vs = [(t[0], t[5]) for t in win]
+    slope = _slope(vs) * 60 if len(vs) >= 4 else 0.0              # virtual SOL per minute
+    net_flow = sum(t[2] or 0 for t in trades if t[0] >= now - 60 and t[1] == "buy") - \
+        sum(t[2] or 0 for t in trades if t[0] >= now - 60 and t[1] == "sell")
+    new_60 = sum(1 for ts in L.buyers.values() if ts >= now - 60)
+    new_prev = sum(1 for ts in L.buyers.values() if now - 120 <= ts < now - 60)
+    accel = (new_60 + 1) / (new_prev + 1)
+    eta_min = None
+    if L.vsol and slope > 0.05 and L.graduated_at is None:
+        eta_min = max(0.0, (CURVE_END_SOL - L.vsol) / slope)
+    vpts = 0.0
+    if L.graduated_at:
+        vpts = 20
+    elif eta_min is not None:
+        vpts = 30 if eta_min <= 5 else 22 if eta_min <= 10 else 14 if eta_min <= 20 else 6 if eta_min <= 45 else 0
+    vpts += min(8.0, max(0.0, accel - 1) * 4) if new_60 >= 3 else 0
+    if vpts or slope:
+        det.append({"key": "velocity", "label": "Curve velocity", "points": round(vpts, 1), "good": vpts > 0,
+                    "detail": ("graduated" if L.graduated_at else
+                               f"+{slope:.1f} SOL/min into the curve · {new_60} new buyers/min (×{accel:.1f})"
+                               + (f" · graduation in ~{eta_min:.0f} min" if eta_min is not None else "")),
+                    "value": round(slope, 2), "eta_min": round(eta_min, 1) if eta_min is not None else None})
+
+    # 3 · organic flow vs bundles ----------------------------------------------------------------------------------
+    early = [t for t in buys if t[0] - L.created <= 2.5]
+    early_wallets = {t[4] for t in early}
+    by_sec = Counter(int(t[0]) for t in buys if t[0] - L.created <= 10)
+    burst = max(by_sec.values()) if by_sec else 0
+    amounts = Counter(round(t[2] or 0, 3) for t in buys if t[2])
+    same_amt = (amounts.most_common(1)[0][1] / len(buys)) if buys and amounts else 0.0
+    vol_by = sorted(L.buy_sol.values(), reverse=True)
+    tot = sum(vol_by) or 0.0
+    top3 = sum(vol_by[:3]) / tot if tot else 0.0
+    uniq_ratio = len(L.buyers) / max(1, len(buys))
+    early_supply = sum(t[3] or 0 for t in early) / 1e9 * 100           # % of the 1B supply taken in the first 2.5s
+    organic = 100.0
+    # sniper bots in block 0 are normal on pump.fun; a *bundle* is several wallets taking a big slice of supply at once
+    organic -= min(40.0, max(0.0, early_supply - 5) * 2) if len(early_wallets) >= 3 else 0
+    organic -= min(25.0, max(0.0, same_amt - 0.25) * 60)            # identical buy sizes = bots
+    organic -= min(25.0, max(0.0, top3 - 0.5) * 60)                 # three wallets hold most of the flow
+    organic -= min(10.0, max(0.0, 0.5 - uniq_ratio) * 20)
+    organic = max(0.0, organic)
+    bundled = (len(early_wallets) >= 3 and early_supply >= 20) or (burst >= 6 and top3 > 0.6)
+    if bundled:
+        flags.append("bundled launch")
+    if len(buys) >= 5:
+        opts = -20.0 if bundled else (organic - 60) / 3                 # -20 … +13
+        det.append({"key": "organic", "label": "Organic flow", "points": round(max(-20.0, min(15.0, opts)), 1),
+                    "good": organic >= 60 and not bundled, "value": round(organic),
+                    "detail": f"{len(L.buyers)} distinct buyers · top 3 = {top3 * 100:.0f}% of buys · "
+                              f"{len(early_wallets)} wallets took {early_supply:.0f}% of supply in the first 2.5s" + (" · BUNDLED" if bundled else "")})
+
+    # 4 · dev track record (+ live dev selling) ---------------------------------------------------------------------
+    d = L.dev or {}
+    dpts = 0.0
+    parts = []
+    if d.get("launches") is not None:
+        n, g = d.get("launches") or 0, d.get("graduated") or 0
+        if g:
+            dpts += min(20.0, 12 + 4 * (g - 1))
+            parts.append(f"{g}/{n} past coins graduated")
+        elif n >= 5:
+            dpts -= 12
+            flags.append("serial launcher, nothing graduated")
+            parts.append(f"{n} coins in 30d, none graduated")
+        elif n:
+            parts.append(f"{n} past coin{'s' if n > 1 else ''}, none graduated")
+        else:
+            parts.append("first coin Radar has seen from this dev")
+        if d.get("best_peak_usd"):
+            parts.append(f"best peak ${d['best_peak_usd']:,.0f}")
+    if L.dev_tokens > 0:
+        sold = L.dev_sold_tokens / L.dev_tokens
+        if sold >= 0.5:
+            dpts -= 20
+            flags.append("dev dumped")
+            parts.append(f"dev sold {sold * 100:.0f}% of their buy")
+        elif sold > 0:
+            parts.append(f"dev sold {sold * 100:.0f}%")
+    if L.dev_buy_pct is not None and L.dev_buy_pct >= 15:
+        dpts -= 6
+        parts.append(f"dev bought {L.dev_buy_pct:.0f}% at launch")
+    if parts:
+        det.append({"key": "dev", "label": "Dev track record", "points": dpts, "good": dpts > 0, "detail": " · ".join(parts),
+                    "value": d.get("graduated")})
+
+    # 5 · meta match & clones -----------------------------------------------------------------------------------------
+    mpts = 0.0
+    mparts = []
+    for m in L.meta[:2]:
+        p = 12 if m.get("status") in ("hot", "heating") else 6 if m.get("status") == "active" else 2
+        mpts = max(mpts, p)
+        mparts.append(f"{m.get('emoji') or ''}{m['name']} ({m.get('status')})")
+    if L.clone_of:
+        mpts += 4
+        mparts.append(f"copies trending ${L.clone_of['symbol']}")
+    if mparts:
+        det.append({"key": "meta", "label": "Meta match", "points": mpts, "good": mpts >= 6, "detail": " · ".join(mparts)})
+
+    # 6 · social spread ---------------------------------------------------------------------------------------------------
+    soc = ctx.get("social", {}).get(L.mint) or (ctx.get("cashtags", {}).get((L.symbol or "").upper())
+                                                  if (L.symbol or "").upper() not in COMMON_TICKERS and len(L.symbol or "") >= 3 else None)
+    if soc:
+        a = soc["authors"]
+        spts = (18 if a >= 6 else 12 if a >= 3 else 6) + (8 if soc.get("vip") else 0)
+        det.append({"key": "social", "label": "Social spread", "points": float(spts), "good": True, "value": a,
+                    "detail": f"{a} author{'s' if a > 1 else ''} on {', '.join(sorted(soc['sources'])[:3])}" + (" · VIP posted" if soc.get("vip") else "")})
+
+    score = max(0.0, min(100.0, sum(x["points"] for x in det)))
+    hard = {"bundled launch", "dev dumped", "serial launcher, nothing graduated"} & set(flags)
+    enough = len(trades) >= MIN_TRADES_FOR_CALL and len(L.buyers) >= MIN_BUYERS_FOR_CALL and age >= MIN_AGE_FOR_CALL
+    tier = "TRAP" if hard else "SNIPE" if score >= SNIPE_AT and enough else "WATCH" if score >= WATCH_AT else "PASS"
+    sol_usd = ctx.get("sol_usd")
+    return {
+        "mint": L.mint, "symbol": L.symbol, "name": L.name, "deployer": L.deployer, "created": L.created, "age_s": round(age),
+        "score": round(score, 1), "tier": tier, "flags": flags, "detectors": det,
+        "mcap_sol": L.mcap_sol, "mcap_usd": round(L.mcap_sol * sol_usd) if L.mcap_sol and sol_usd else None,
+        "peak_mcap_usd": round(L.peak_mcap_sol * sol_usd) if L.peak_mcap_sol and sol_usd else None,
+        "progress": 100.0 if L.graduated_at else curve_progress(L.vsol), "graduated_at": L.graduated_at,
+        "eta_min": round(eta_min, 1) if eta_min is not None else None, "sol_per_min": round(slope, 2),
+        "buys": len(buys), "sells": len(sells), "buyers": len(L.buyers), "net_sol_1m": round(net_flow, 2),
+        "dev_buy_pct": L.dev_buy_pct, "organic": round(organic) if len(buys) >= 5 else None, "bundled": bundled,
+        "early_supply_pct": round(early_supply, 1),
+        "alpha": L.alpha[:6],
+    }
+
+
+class Sniper:
+    def __init__(self, db: Any, tracker: Any, alerts: Any) -> None:
+        self.db, self.tracker, self.alerts = db, tracker, alerts
+        self.traders: Any = None
+        self.smart: Any = None
+        self.metas: Any = None
+        self.launches: dict[str, Launch] = {}
+        self.calls: dict[str, dict[str, Any]] = {}           # mint -> outcome row being tracked
+        self.dirty_calls: set[str] = set()
+        self.dev_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.ctx: dict[str, Any] = {"social": {}, "cashtags": {}}
+        self.clones: dict[str, dict[str, Any]] = {}
+        self.seen_launches = 0
+
+    # ---------------- stream hooks (hot path: memory only) ----------------
+    async def on_launch(self, row: dict[str, Any]) -> None:
+        now = time.time()
+        mint = row["address"]
+        L = Launch(mint=mint, created=row.get("launched_at") or now, symbol=row.get("symbol"), name=row.get("name"),
+                   deployer=row.get("deployer"), dev_buy_sol=float(row.get("initial_buy_sol") or 0),
+                   dev_buy_pct=row.get("dev_initial_buy_pct"), dev_tokens=float(row.get("initial_buy_tokens") or 0),
+                   vsol=row.get("vsol") or row.get("curve_sol"), mcap_sol=row.get("pump_mcap_sol"), until=now + TRACK_S)
+        L.peak_mcap_sol = L.mcap_sol or 0.0
+        if self.metas:
+            for mid in self.metas.match_coin(L.name, L.symbol)[:3]:
+                m = next((r for r in self.metas.rows if r["id"] == mid), None)
+                if m:
+                    L.meta.append({"id": mid, "name": m.get("name"), "emoji": m.get("emoji"), "status": m.get("status"), "heat": m.get("heat")})
+        c = self.clones.get((L.symbol or "").upper())
+        if c and c["address"] != mint:
+            L.clone_of = c
+        self.launches[mint] = L
+        self.seen_launches += 1
+        await self.db.exec("INSERT OR IGNORE INTO dev_launches (mint, deployer, symbol, name, ts, peak_mcap_sol) VALUES (?,?,?,?,?,?)",
+                           (mint, L.deployer, L.symbol, L.name, L.created, L.mcap_sol))
+        asyncio.get_running_loop().create_task(self._load_dev(L))
+        await self._evaluate(L, now, force=True)
+
+    async def on_trade(self, t: dict[str, Any]) -> None:
+        mint = t.get("mint")
+        L = self.launches.get(mint)
+        call = self.calls.get(mint)
+        if call and t.get("mcap_sol"):
+            self._call_mark(call, t["mcap_sol"], t["ts"])
+        if L is None:
+            return
+        now = t["ts"]
+        side, sol, tokens, trader = t.get("side"), float(t.get("sol") or 0), float(t.get("tokens") or 0), t.get("trader")
+        vsol = t.get("vsol")
+        L.trades.append((now, side, sol, tokens, trader, float(vsol) if vsol else None))
+        if vsol:
+            L.vsol = float(vsol)
+        if t.get("mcap_sol"):
+            L.mcap_sol = float(t["mcap_sol"])
+            L.peak_mcap_sol = max(L.peak_mcap_sol, L.mcap_sol)
+        if trader == L.deployer:
+            if side == "sell":
+                L.dev_sold_tokens += tokens
+            elif side == "buy" and not L.dev_tokens:
+                L.dev_tokens = tokens
+        elif side == "buy" and trader:
+            L.buyers.setdefault(trader, now)
+            L.buy_sol[trader] = L.buy_sol.get(trader, 0.0) + sol
+            if trader not in {a["wallet"] for a in L.alpha}:
+                hit = self._alpha(trader)
+                if hit:
+                    L.alpha.append({**hit, "wallet": trader, "ts": now, "sol": round(sol, 3)})
+        L.dirty = True
+        await self._evaluate(L, now)
+
+    async def on_graduated(self, ev: dict[str, Any]) -> None:
+        L = self.launches.get(ev["mint"])
+        if L:
+            L.graduated_at = ev["ts"]
+            L.dirty = True
+            await self._evaluate(L, ev["ts"], force=True)
+        call = self.calls.get(ev["mint"])
+        if call and not call.get("graduated_at"):
+            call["graduated_at"] = ev["ts"]
+            self.dirty_calls.add(ev["mint"])
+        await self.db.exec("UPDATE dev_launches SET graduated_at=COALESCE(graduated_at, ?) WHERE mint=?", (ev["ts"], ev["mint"]))
+
+    async def on_trending_first(self, ev: dict[str, Any]) -> None:
+        for a in ev["addresses"]:
+            call = self.calls.get(a)
+            if call and not call.get("first_trending_at"):
+                call["first_trending_at"] = ev["ts"]
+                self.dirty_calls.add(a)
+
+    async def on_tokens(self, rows: list[dict[str, Any]]) -> None:
+        """DexScreener refreshes keep tracking a called coin's value after it leaves the bonding curve."""
+        sol = self.tracker.sol_usd
+        if not sol:
+            return
+        for r in rows:
+            call = self.calls.get(r.get("address"))
+            mc = r.get("market_cap") or r.get("fdv")
+            if call and mc:
+                self._call_mark(call, mc / sol, r.get("as_of") or time.time())
+
+    def _alpha(self, wallet: str) -> dict[str, Any] | None:
+        r = (self.traders.ranked.get(wallet) if self.traders else None)
+        if r:
+            return {"rank": r["rank"], "label": r.get("label")}
+        if self.traders and wallet in self.traders.followed:
+            return {"rank": None, "label": "followed"}
+        w = (self.smart.tracked.get(wallet) if self.smart else None)
+        if w:
+            return {"rank": None, "label": w.get("label") or "smart wallet"}
+        return None
+
+    async def _evaluate(self, L: Launch, now: float, force: bool = False) -> None:
+        # coalesce: at most ~4 scorings and 2 pushes per second per coin, however fast it trades
+        if not force and now - L.last_eval < 0.25:
+            return
+        L.last_eval = now
+        prev = L.result.get("tier")
+        self.ctx["sol_usd"] = self.tracker.sol_usd
+        L.result = analyze(L, now, self.ctx)
+        L.dirty = False
+        tier = L.result["tier"]
+        if tier in ("SNIPE", "WATCH"):
+            # keep its trades streaming past the 90s launch window
+            self.tracker.launch_watch[L.mint] = max(self.tracker.launch_watch.get(L.mint, 0), now + (3600 if tier == "SNIPE" else 300))
+            L.until = max(L.until, now + (6 * 3600 if tier == "SNIPE" else TRACK_S))
+        if tier == "SNIPE" and L.mint not in self.calls:
+            await self._call(L, now)
+        if force or tier != prev or now - L.last_pub >= 0.5:
+            L.last_pub = now
+            await hub.publish("snipe", L.result)
+
+    # ---------------- calls & proof ----------------
+    async def _call(self, L: Launch, now: float) -> None:
+        r = L.result
+        sol = self.tracker.sol_usd
+        tok = await self.db.one("SELECT image FROM tokens WHERE address=?", (L.mint,)) or {}
+        call = {"mint": L.mint, "symbol": L.symbol, "name": L.name, "image": tok.get("image"), "launched_at": L.created,
+                "call_ts": now, "score": r["score"], "tier": r["tier"],
+                "detectors_json": json.dumps(r["detectors"]),
+                "inputs_json": json.dumps({k: r[k] for k in ("age_s", "buys", "sells", "buyers", "net_sol_1m", "sol_per_min", "eta_min",
+                                                             "organic", "bundled", "dev_buy_pct", "flags", "alpha")}),
+                "mcap_sol_at_call": L.mcap_sol, "mcap_usd_at_call": round(L.mcap_sol * sol, 2) if L.mcap_sol and sol else None,
+                "progress_at_call": r["progress"], "sol_usd_at_call": sol, "peak_mcap_sol": L.mcap_sol, "peak_ts": now,
+                "last_mcap_sol": L.mcap_sol, "last_ts": now, "graduated_at": L.graduated_at, "updated": now}
+        if not L.mcap_sol:
+            return
+        self.calls[L.mint] = call
+        await self.db.upsert("snipe_calls", call, "mint")
+        await hub.publish("snipe_call", {**r, "call_ts": now})
+        top = max(r["detectors"], key=lambda x: x["points"], default=None)
+        await self.alerts.send("info", f"🎯 SNIPE {L.symbol or L.mint[:6]} · score {r['score']:.0f}",
+                               f"{top['label']}: {top['detail']}" if top else "", token=L.mint, dedupe=f"snipe:{L.mint}", ttl=86400)
+
+    def _call_mark(self, call: dict[str, Any], mcap_sol: float, ts: float) -> None:
+        call["last_mcap_sol"], call["last_ts"] = mcap_sol, ts
+        if mcap_sol > (call.get("peak_mcap_sol") or 0):
+            call["peak_mcap_sol"], call["peak_ts"] = mcap_sol, ts
+        self.dirty_calls.add(call["mint"])
+
+    async def outcome_loop(self) -> None:
+        """Checkpoints (value 5m / 15m / 1h after the call), persistence, and eviction."""
+        while True:
+            await asyncio.sleep(5)
+            try:
+                now = time.time()
+                for mint, c in list(self.calls.items()):
+                    for col, dt in (("mcap_sol_5m", 300), ("mcap_sol_15m", 900), ("mcap_sol_1h", 3600)):
+                        if c.get(col) is None and now - c["call_ts"] >= dt:
+                            c[col] = c.get("last_mcap_sol")
+                            self.dirty_calls.add(mint)
+                    if now - c["call_ts"] > CALL_TRACK_S:
+                        self.calls.pop(mint, None)
+                    elif now - c["call_ts"] < 6 * 3600:   # keep its trades streaming for 6h so the outcome is exact
+                        self.tracker.launch_watch[mint] = max(self.tracker.launch_watch.get(mint, 0), now + 60)
+                if self.dirty_calls:
+                    rows = [self.calls[m] for m in self.dirty_calls if m in self.calls]
+                    self.dirty_calls.clear()
+                    await self.db.many(
+                        "UPDATE snipe_calls SET peak_mcap_sol=?, peak_ts=?, last_mcap_sol=?, last_ts=?, mcap_sol_5m=?, mcap_sol_15m=?, "
+                        "mcap_sol_1h=?, graduated_at=?, first_trending_at=?, updated=? WHERE mint=?",
+                        [(c.get("peak_mcap_sol"), c.get("peak_ts"), c.get("last_mcap_sol"), c.get("last_ts"), c.get("mcap_sol_5m"),
+                          c.get("mcap_sol_15m"), c.get("mcap_sol_1h"), c.get("graduated_at"), c.get("first_trending_at"), now, c["mint"])
+                         for c in rows])
+                stale = [m for m, L in self.launches.items() if L.until < now]
+                if stale:
+                    await self.db.many("UPDATE dev_launches SET peak_mcap_sol=MAX(COALESCE(peak_mcap_sol,0), ?), last_trade_ts=? WHERE mint=?",
+                                       [(self.launches[m].peak_mcap_sol, self.launches[m].trades[-1][0] if self.launches[m].trades else None, m)
+                                        for m in stale])
+                    for m in stale:
+                        self.launches.pop(m, None)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                log.warning("snipe outcomes: %s", e)
+
+    async def flush_peaks_loop(self) -> None:
+        while True:
+            await asyncio.sleep(30)
+            try:
+                rows = [(L.peak_mcap_sol, L.trades[-1][0] if L.trades else None, m) for m, L in self.launches.items() if L.peak_mcap_sol]
+                await self.db.many("UPDATE dev_launches SET peak_mcap_sol=MAX(COALESCE(peak_mcap_sol,0), ?), last_trade_ts=? WHERE mint=?", rows)
+                await self.db.exec("DELETE FROM dev_launches WHERE ts < ?", (time.time() - 30 * 86400,))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                log.debug("dev peaks: %s", e)
+
+    # ---------------- slow context (off the hot path) ----------------
+    async def _load_dev(self, L: Launch) -> None:
+        if not L.deployer:
+            return
+        hit = self.dev_cache.get(L.deployer)
+        if hit and time.time() - hit[0] < 120:
+            L.dev = hit[1]
+        else:
+            r = await self.db.one("SELECT COUNT(*) n, SUM(graduated_at IS NOT NULL) g, MAX(peak_mcap_sol) best FROM dev_launches "
+                                  "WHERE deployer=? AND mint != ? AND ts > ?", (L.deployer, L.mint, time.time() - 30 * 86400)) or {}
+            sol = self.tracker.sol_usd
+            d = {"launches": r.get("n") or 0, "graduated": r.get("g") or 0,
+                 "best_peak_usd": round(r["best"] * sol) if r.get("best") and sol else None}
+            self.dev_cache[L.deployer] = (time.time(), d)
+            if len(self.dev_cache) > 20000:
+                self.dev_cache.clear()
+            L.dev = d
+        await self._evaluate(L, time.time(), force=True)
+
+    async def context_loop(self) -> None:
+        """Every 15s: who is posting which contract / $ticker, and which tickers are trending (for clone detection)."""
+        while True:
+            try:
+                now = time.time()
+                social: dict[str, dict[str, Any]] = {}
+                tags: dict[str, dict[str, Any]] = {}
+                for r in await self.db.all("SELECT source, author_id, author_tier, cas_json, cashtags_json FROM social_events "
+                                           "WHERE ingested > ? AND is_fixture=0 AND (cas_json NOT IN ('[]','') OR cashtags_json NOT IN ('[]',''))",
+                                           (now - 1800,)):
+                    for key, target in (("cas_json", social), ("cashtags_json", tags)):
+                        try:
+                            vals = json.loads(r[key] or "[]")
+                        except ValueError:
+                            continue
+                        for v in vals:
+                            k = v if key == "cas_json" else str(v).upper().lstrip("$")
+                            e = target.setdefault(k, {"authors_set": set(), "sources": set(), "vip": False})
+                            e["authors_set"].add(r["author_id"])
+                            e["sources"].add(r["source"])
+                            e["vip"] = e["vip"] or r["author_tier"] == "vip"
+                for d in (social, tags):
+                    for e in d.values():
+                        e["authors"] = len(e.pop("authors_set"))
+                self.ctx["social"], self.ctx["cashtags"] = social, tags
+                clones: dict[str, dict[str, Any]] = {}
+                for r in await self.db.all(
+                        "SELECT t.address, UPPER(t.symbol) sym, p.vol_h1 FROM tokens t JOIN pairs p ON p.pair_address=t.best_pair "
+                        "WHERE t.symbol IS NOT NULL AND p.vol_h1 > 50000 AND p.as_of > ? ORDER BY p.vol_h1 DESC LIMIT 300", (now - 3600,)):
+                    if r["sym"] and r["sym"] not in clones and r["sym"] not in COMMON_TICKERS:
+                        clones[r["sym"]] = {"address": r["address"], "symbol": r["sym"], "vol_h1": r["vol_h1"]}
+                self.clones = clones
+                for L in list(self.launches.values()):
+                    if now - L.last_eval > 5:
+                        await self._evaluate(L, now)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                log.warning("snipe context: %s", e)
+            await asyncio.sleep(15)
+
+    async def warm(self) -> None:
+        """After a restart, rebuild the last 30 minutes of launches from the database."""
+        now = time.time()
+        toks = await self.db.all("SELECT address, symbol, name, deployer, launched_at, first_seen, dev_initial_buy_pct, curve_sol, "
+                                 "pump_mcap_sol, graduated_at FROM tokens WHERE source='pumpportal' AND first_seen > ?", (now - TRACK_S,))
+        for t in toks:
+            L = Launch(mint=t["address"], created=t["launched_at"] or t["first_seen"], symbol=t["symbol"], name=t["name"],
+                       deployer=t["deployer"], dev_buy_pct=t["dev_initial_buy_pct"], vsol=t["curve_sol"], mcap_sol=t["pump_mcap_sol"],
+                       graduated_at=t["graduated_at"], until=(t["launched_at"] or t["first_seen"]) + TRACK_S)
+            for r in await self.db.all("SELECT ts, side, sol, tokens, trader, mcap_sol FROM pump_trades WHERE mint=? ORDER BY ts", (L.mint,)):
+                L.trades.append((r["ts"], r["side"], r["sol"] or 0, r["tokens"] or 0, r["trader"], None))
+                if r["trader"] == L.deployer:
+                    if r["side"] == "sell":
+                        L.dev_sold_tokens += r["tokens"] or 0
+                    elif not L.dev_tokens:
+                        L.dev_tokens = r["tokens"] or 0
+                elif r["side"] == "buy" and r["trader"]:
+                    L.buyers.setdefault(r["trader"], r["ts"])
+                    L.buy_sol[r["trader"]] = L.buy_sol.get(r["trader"], 0) + (r["sol"] or 0)
+                if r["mcap_sol"]:
+                    L.peak_mcap_sol = max(L.peak_mcap_sol, r["mcap_sol"])
+            self.launches[L.mint] = L
+            L.result = analyze(L, now, self.ctx)
+        for c in await self.db.all("SELECT * FROM snipe_calls WHERE call_ts > ?", (now - CALL_TRACK_S,)):
+            self.calls[c["mint"]] = dict(c)
+
+    # ---------------- reads ----------------
+    def board(self, min_score: float = 0, tiers: set[str] | None = None, max_age_min: float = 30, limit: int = 100,
+              hide_bundled: bool = False, alpha_only: bool = False, proven_dev: bool = False) -> dict[str, Any]:
+        now = time.time()
+        rows = []
+        for L in self.launches.values():
+            r = L.result
+            if not r or r["score"] < min_score or now - L.created > max_age_min * 60:
+                continue
+            if tiers and r["tier"] not in tiers:
+                continue
+            if hide_bundled and r["bundled"]:
+                continue
+            if alpha_only and not r["alpha"]:
+                continue
+            if proven_dev and not ((L.dev or {}).get("graduated")):
+                continue
+            rows.append({**r, "age_s": round(now - L.created), "called": L.mint in self.calls})
+        order = {"SNIPE": 0, "WATCH": 1, "PASS": 2, "TRAP": 3}
+        rows.sort(key=lambda r: (order.get(r["tier"], 9), -r["score"], -r["created"]))
+        return {"rows": rows[:limit], "tracking": len(self.launches), "seen": self.seen_launches, "as_of": now,
+                "thresholds": {"snipe": SNIPE_AT, "watch": WATCH_AT}}
+
+    def one(self, mint: str) -> dict[str, Any] | None:
+        L = self.launches.get(mint)
+        return {**L.result, "dev": L.dev, "meta": L.meta, "clone_of": L.clone_of} if L and L.result else None
+
+    async def proof(self, hours: float = 24 * 7) -> dict[str, Any]:
+        """Real outcomes of every call, against the base rate of all launches Radar saw in the same window."""
+        now = time.time()
+        since = now - hours * 3600
+        calls = await self.db.all("SELECT * FROM snipe_calls WHERE call_ts > ? ORDER BY call_ts DESC", (since,))
+        base = await self.db.one("SELECT COUNT(*) n, SUM(graduated_at IS NOT NULL) g FROM dev_launches WHERE ts > ?", (since,)) or {}
+
+        def x(c: dict[str, Any], col: str) -> float | None:
+            return c[col] / c["mcap_sol_at_call"] if c.get(col) and c.get("mcap_sol_at_call") else None
+
+        rows = []
+        for c in calls:
+            rows.append({k: c[k] for k in ("mint", "symbol", "name", "image", "call_ts", "score", "mcap_usd_at_call", "progress_at_call",
+                                           "graduated_at", "first_trending_at", "launched_at")} | {
+                "detectors": json.loads(c["detectors_json"] or "[]"),
+                "peak_x": x(c, "peak_mcap_sol"), "x_5m": x(c, "mcap_sol_5m"), "x_15m": x(c, "mcap_sol_15m"), "x_1h": x(c, "mcap_sol_1h"),
+                "now_x": x(c, "last_mcap_sol"), "peak_after_s": (c["peak_ts"] - c["call_ts"]) if c.get("peak_ts") else None,
+                "secs_after_launch": c["call_ts"] - c["launched_at"] if c.get("launched_at") else None,
+                "lead_to_graduation_s": (c["graduated_at"] - c["call_ts"]) if c.get("graduated_at") and c["graduated_at"] > c["call_ts"] else None,
+                "lead_to_trending_s": (c["first_trending_at"] - c["call_ts"]) if c.get("first_trending_at") else None,
+            })
+        n = len(rows)
+
+        def pct(f) -> float | None:
+            return round(sum(1 for r in rows if f(r)) / n * 100, 1) if n else None
+
+        def med(vals: list[float]) -> float | None:
+            v = [x for x in vals if x is not None]
+            return round(statistics.median(v), 2) if v else None
+
+        settled = [r for r in rows if r["x_1h"] is not None]
+        stats = {
+            "calls": n, "window_h": hours, "launches_seen": base.get("n") or 0,
+            "base_graduation_pct": round((base.get("g") or 0) / base["n"] * 100, 2) if base.get("n") else None,
+            "call_graduation_pct": pct(lambda r: r["graduated_at"] and r["graduated_at"] >= r["call_ts"] - 1),
+            "hit_2x_pct": pct(lambda r: (r["peak_x"] or 0) >= 2), "hit_5x_pct": pct(lambda r: (r["peak_x"] or 0) >= 5),
+            "hit_10x_pct": pct(lambda r: (r["peak_x"] or 0) >= 10),
+            "median_peak_x": med([r["peak_x"] for r in rows]),
+            "median_x_1h": med([r["x_1h"] for r in settled]), "settled_1h": len(settled),
+            "up_after_1h_pct": round(sum(1 for r in settled if (r["x_1h"] or 0) > 1) / len(settled) * 100, 1) if settled else None,
+            "median_secs_after_launch": med([r["secs_after_launch"] for r in rows]),
+            "median_lead_to_graduation_min": med([r["lead_to_graduation_s"] / 60 for r in rows if r["lead_to_graduation_s"]]),
+            "median_lead_to_trending_min": med([r["lead_to_trending_s"] / 60 for r in rows if r["lead_to_trending_s"] and r["lead_to_trending_s"] > 0]),
+            "before_trending_pct": round(sum(1 for r in rows if r["first_trending_at"] and r["first_trending_at"] > r["call_ts"]) /
+                                         max(1, sum(1 for r in rows if r["first_trending_at"])) * 100, 1)
+            if any(r["first_trending_at"] for r in rows) else None,
+        }
+        by_det: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            for d in r["detectors"]:
+                if d.get("points", 0) > 0:
+                    by_det.setdefault(d["key"], []).append(r)
+        stats["by_detector"] = {k: {"calls": len(v), "hit_2x_pct": round(sum(1 for r in v if (r["peak_x"] or 0) >= 2) / len(v) * 100, 1),
+                                    "median_peak_x": med([r["peak_x"] for r in v])} for k, v in by_det.items()}
+        return {"stats": stats, "calls": rows[:500], "as_of": now}

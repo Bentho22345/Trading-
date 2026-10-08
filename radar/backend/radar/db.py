@@ -1,6 +1,7 @@
 """SQLite storage (WAL). One shared connection; every row carries an as_of / ts timestamp."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   best_pair TEXT, last_refresh REAL,
   dev_initial_buy_pct REAL,   -- % of supply the deployer bought in the create tx
   curve_sol REAL, curve_progress REAL,   -- pump.fun bonding curve: virtual SOL and % of the way to graduation
+  first_trending_at REAL,     -- first time it appeared on GeckoTerminal trending / DexScreener boosts (lead-time proof)
   image_hash TEXT,            -- perceptual dHash of the token image (copycat detection)
   updated REAL
 );
@@ -61,7 +63,8 @@ CREATE TABLE IF NOT EXISTS safety_reports (
 CREATE TABLE IF NOT EXISTS pump_trades (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   mint TEXT NOT NULL, ts REAL NOT NULL, side TEXT, sol REAL, tokens REAL,
-  trader TEXT, mcap_sol REAL, signature TEXT UNIQUE
+  trader TEXT, mcap_sol REAL, signature TEXT UNIQUE,
+  sol_usd REAL               -- SOL/USD at the moment of the trade, so candles are valued at the time, not today
 );
 CREATE INDEX IF NOT EXISTS trades_mint_ts ON pump_trades(mint, ts DESC);
 
@@ -232,6 +235,26 @@ CREATE INDEX IF NOT EXISTS nt_token ON narrative_tokens(token_address);
 CREATE INDEX IF NOT EXISTS social_source ON social_events(source, ts DESC);
 CREATE INDEX IF NOT EXISTS trades_trader ON pump_trades(trader);
 
+-- every pump.fun launch Radar saw, kept 30 days (tokens rows for dead coins are pruned after 24h) so a deployer's
+-- track record survives: how many coins, how many graduated, how high they went
+CREATE TABLE IF NOT EXISTS dev_launches (
+  mint TEXT PRIMARY KEY, deployer TEXT, symbol TEXT, name TEXT, ts REAL NOT NULL,
+  peak_mcap_sol REAL, graduated_at REAL, last_trade_ts REAL
+);
+CREATE INDEX IF NOT EXISTS dev_launches_dev ON dev_launches(deployer, ts DESC);
+CREATE INDEX IF NOT EXISTS dev_launches_ts ON dev_launches(ts DESC);
+
+-- Snipe engine calls: the first time a launch crosses the call threshold, with every input, then its real outcome
+CREATE TABLE IF NOT EXISTS snipe_calls (
+  mint TEXT PRIMARY KEY, symbol TEXT, name TEXT, image TEXT, launched_at REAL, call_ts REAL NOT NULL,
+  score REAL, tier TEXT, detectors_json TEXT, inputs_json TEXT,
+  mcap_sol_at_call REAL, mcap_usd_at_call REAL, progress_at_call REAL, sol_usd_at_call REAL,
+  peak_mcap_sol REAL, peak_ts REAL, last_mcap_sol REAL, last_ts REAL,
+  mcap_sol_5m REAL, mcap_sol_15m REAL, mcap_sol_1h REAL,
+  graduated_at REAL, first_trending_at REAL, updated REAL
+);
+CREATE INDEX IF NOT EXISTS snipe_calls_ts ON snipe_calls(call_ts DESC);
+
 CREATE TABLE IF NOT EXISTS token_stories (
   token_address TEXT PRIMARY KEY, ts REAL NOT NULL, story_json TEXT, method TEXT
 );
@@ -283,13 +306,16 @@ class DB:
     async def open(self) -> None:
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = await aiosqlite.connect(self.path)
+        # autocommit: each write is its own (cheap, WAL + synchronous=NORMAL) transaction, so a write is one
+        # thread hop instead of two (execute + commit). Bulk writes wrap themselves in BEGIN/COMMIT (see many()).
+        self.conn = await aiosqlite.connect(self.path, isolation_level=None)
         self.conn.row_factory = aiosqlite.Row
-        await self.conn.execute("PRAGMA journal_mode=WAL")
-        await self.conn.execute("PRAGMA synchronous=NORMAL")
+        for pragma in ("journal_mode=WAL", "synchronous=NORMAL", "temp_store=MEMORY", "cache_size=-65536",
+                       "mmap_size=268435456", "busy_timeout=5000"):
+            await self.conn.execute(f"PRAGMA {pragma}")
+        self._bulk = asyncio.Lock()
         await self.migrate()
         await self.conn.executescript(SCHEMA)
-        await self.conn.commit()
 
     async def migrate(self) -> None:
         """Add columns that newer versions introduced to tables created by older versions (SQLite can't do it in CREATE)."""
@@ -316,7 +342,6 @@ class DB:
                     continue
                 ddl = re.sub(r"\bPRIMARY KEY\b|\bAUTOINCREMENT\b|\bUNIQUE\b|\bNOT NULL\b", "", part)
                 await self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
-        await self.conn.commit()
 
     async def close(self) -> None:
         if self.conn:
@@ -325,14 +350,20 @@ class DB:
     async def exec(self, sql: str, params: Iterable[Any] = ()) -> int:
         assert self.conn
         cur = await self.conn.execute(sql, tuple(params))
-        await self.conn.commit()
         return cur.lastrowid or cur.rowcount
 
     async def many(self, sql: str, rows: list[Iterable[Any]]) -> None:
         assert self.conn
-        if rows:
-            await self.conn.executemany(sql, [tuple(r) for r in rows])
-            await self.conn.commit()
+        if not rows:
+            return
+        async with self._bulk:   # one transaction for the whole batch; the lock keeps two batches from nesting BEGINs
+            await self.conn.execute("BEGIN")
+            try:
+                await self.conn.executemany(sql, [tuple(r) for r in rows])
+            except BaseException:
+                await self.conn.execute("ROLLBACK")
+                raise
+            await self.conn.execute("COMMIT")
 
     async def all(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         assert self.conn

@@ -276,3 +276,43 @@ def test_top_wallet_trade_reaches_ui_and_chart(stack):
     assert any(t["signature"] == data["signature"] for t in httpx.get(f"http://{stack}/api/top-trades").json())
     smart = httpx.get(f"http://{stack}/api/token/{MINT}").json()["smart_trades"]
     assert any(t["wallet"] == "TopW1" for t in smart)  # drawn as a chart marker on the token page
+
+
+def test_snipe_board_scores_launches_live_and_logs_calls(stack):
+    """Runner launches (distinct buyers, rising curve, a ranked wallet early) climb the board; bundles are flagged TRAP."""
+    async def run():
+        got: list[dict] = []
+        async with websockets.connect(f"ws://{stack}/ws") as ws:
+            t0 = time.time()
+            while time.time() - t0 < 40:
+                msg = json.loads(await asyncio.wait_for(ws.recv(), 30))
+                if msg["ch"] == "snipe":
+                    got.append(msg["data"])
+                    tiers = {g["tier"] for g in got}
+                    if "TRAP" in tiers and any(g["tier"] in ("SNIPE", "WATCH") and g["buyers"] >= 8 for g in got):
+                        break
+        return got
+    got = asyncio.run(run())
+    tiers = {g["tier"] for g in got}
+    assert "TRAP" in tiers and tiers & {"SNIPE", "WATCH"}
+    trap = next(g for g in got if g["tier"] == "TRAP")
+    assert trap["bundled"] and "bundled launch" in trap["flags"]
+    hot = max((g for g in got if g["tier"] in ("SNIPE", "WATCH") and g["buyers"] >= 8), key=lambda g: g["score"])
+    assert {d["key"] for d in hot["detectors"]} >= {"velocity", "organic"} and hot["buyers"] >= 5
+
+    board = httpx.get(f"http://{stack}/api/snipe").json()
+    assert board["rows"] and board["tracking"] >= 1 and board["seen"] >= 1
+    assert httpx.get(f"http://{stack}/api/snipe?hide_bundled=true").json()["rows"]
+    assert not any(r["bundled"] for r in httpx.get(f"http://{stack}/api/snipe?hide_bundled=true").json()["rows"])
+    one = httpx.get(f"http://{stack}/api/snipe/{hot['mint']}").json()
+    assert one["mint"] == hot["mint"] and "dev" in one
+
+    # charts merge GeckoTerminal history with Radar's own trade stream; bars strictly ascending, supply known for MCAP view
+    c = httpx.get(f"http://{stack}/api/token/{hot['mint']}/ohlcv?tf=1m").json()
+    assert c["candles"] and c["source"] and c["supply"] > 0
+    assert all(a["time"] < b["time"] for a, b in zip(c["candles"], c["candles"][1:]))
+
+    proof = httpx.get(f"http://{stack}/api/snipe/proof?hours=1").json()
+    assert proof["stats"]["launches_seen"] >= 1
+    for r in proof["calls"]:
+        assert r["peak_x"] is None or r["peak_x"] >= 0.0

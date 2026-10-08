@@ -67,9 +67,18 @@ def parse_pools(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def parse_ohlcv(payload: dict[str, Any]) -> list[dict[str, float]]:
+    """Ascending, one candle per timestamp (the chart library rejects duplicates and out-of-order bars), invalid rows dropped."""
     lst = (((payload or {}).get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
-    candles = [{"time": int(r[0]), "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5]} for r in lst]
-    return sorted(candles, key=lambda c: c["time"])
+    by_time: dict[int, dict[str, float]] = {}
+    for r in lst:
+        try:
+            t, o, h, l, c, v = int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5] or 0)
+        except (TypeError, ValueError, IndexError):
+            continue
+        if min(o, h, l, c) <= 0:
+            continue
+        by_time[t] = {"time": t, "open": o, "high": max(h, o, c), "low": min(l, o, c), "close": c, "volume": v}
+    return [by_time[t] for t in sorted(by_time)]
 
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
@@ -107,10 +116,16 @@ class GeckoTerminal:
         return parse_pools(await self.http.get(f"/networks/{network}/new_pools", bucket,
                                                params={"include": "base_token", "page": 1}) or {})
 
-    async def ohlcv(self, pool: str, tf: str = "5m", network: str = "solana", limit: int = 300) -> list[dict[str, float]]:
+    async def ohlcv(self, pool: str, tf: str = "5m", network: str = "solana", limit: int = 300,
+                    token: str | None = None, priority: bool = True) -> list[dict[str, float]]:
+        """USD candles for `token` in `pool`. Without `token`, GeckoTerminal charts the pool's *base* token, which is the
+        wrong coin whenever the memecoin is the quote side (e.g. a SOL/MEME pool) — so we always name it."""
         unit, agg = TIMEFRAMES.get(tf, TIMEFRAMES["5m"])
+        params: dict[str, Any] = {"aggregate": agg, "limit": limit, "currency": "usd"}
+        if token:
+            params["token"] = token
         data = await self.http.get(f"/networks/{network}/pools/{pool}/ohlcv/{unit}", bucket,
-                                   params={"aggregate": agg, "limit": limit, "currency": "usd"}, not_found_ok=True)
+                                   params=params, not_found_ok=True, priority=priority)
         return parse_ohlcv(data or {})
 
     async def trades(self, pool: str, token: str, network: str = "solana") -> list[dict[str, Any]]:

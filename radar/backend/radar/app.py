@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi import Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -52,6 +53,8 @@ class State:
     traders: Any
     metas: Any
     news: Any
+    charts: Any
+    sniper: Any
 
 
 S = State()
@@ -101,6 +104,17 @@ async def lifespan(app: FastAPI):
     await S.news.load()
     S.tracker.news_enricher = S.news.enrich
     S.tracker.hooks["news"].append(S.news.on_fresh)
+    from .charts import Charts
+    from .sniper import Sniper
+    S.charts = Charts(S.db, S.tracker)
+    S.sniper = Sniper(S.db, S.tracker, S.alerts)
+    S.sniper.traders, S.sniper.smart, S.sniper.metas = S.traders, S.smart, S.metas
+    S.tracker.hooks["launch"].append(S.sniper.on_launch)
+    S.tracker.hooks["trade"].insert(0, S.sniper.on_trade)        # first: the snipe board is the latency-critical consumer
+    S.tracker.hooks["graduated"].append(S.sniper.on_graduated)
+    S.tracker.hooks["trending_first"].append(S.sniper.on_trending_first)
+    S.tracker.hooks["tokens"].append(S.sniper.on_tokens)
+    await S.sniper.warm()
 
     async def on_change(cid: str, vals: dict[str, str]) -> None:
         if cid == "coingecko":
@@ -126,7 +140,7 @@ async def lifespan(app: FastAPI):
         await S.custom.start_all()
         S.social.start()
         await S.smart.load()
-        jobs = [S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
+        jobs = [S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
@@ -177,6 +191,7 @@ async def watch_rules(rows: list[dict[str, Any]]) -> None:
 
 
 app = FastAPI(title="Memecoin Radar", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=800, compresslevel=5)   # JSON shrinks 5-10× on the wire
 app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"],
                    allow_credentials=True)
 
@@ -385,26 +400,12 @@ async def token_social(address: str, symbol: str | None) -> list[dict[str, Any]]
                           "AND ts > ? ORDER BY ts DESC LIMIT 200", [*args, time.time() - 3 * 86400])
 
 
-_ohlcv_cache: dict[tuple[str, str], tuple[float, list]] = {}
-
-
 @app.get("/api/token/{address}/ohlcv")
 async def ohlcv(address: str, tf: str = "5m") -> dict[str, Any]:
-    tok = await S.db.one("SELECT best_pair, chain FROM tokens WHERE address=?", (address,))
-    if not tok or not tok["best_pair"]:
-        return {"candles": [], "pool": None, "as_of": None, "source": None}
-    key = (tok["best_pair"], tf)
-    hit = _ohlcv_cache.get(key)
-    if hit and time.time() - hit[0] < 20:
-        return {"candles": hit[1], "pool": key[0], "as_of": hit[0], "source": "geckoterminal"}
     try:
-        candles = await S.tracker.gecko.ohlcv(tok["best_pair"], tf, network=tok["chain"] or "solana")
+        return await S.charts.ohlcv(address, tf)
     except UpstreamError as e:
-        if hit:
-            return {"candles": hit[1], "pool": key[0], "as_of": hit[0], "source": "geckoterminal", "stale": True}
         raise HTTPException(502, f"GeckoTerminal unavailable: {e}") from e
-    _ohlcv_cache[key] = (time.time(), candles)
-    return {"candles": candles, "pool": key[0], "as_of": time.time(), "source": "geckoterminal"}
 
 
 @app.post("/api/token/{address}/safety")
@@ -542,6 +543,7 @@ async def ws(socket: WebSocket) -> None:
                 hub.viewing[socket] = {str(a) for a in msg["view"][:20]}
                 for a in hub.viewing[socket]:
                     S.tracker.queue_rug(a)
+                S.tracker.subs_kick.set()
             elif msg.get("ping"):
                 await socket.send_text(json.dumps({"ch": "pong", "ts": time.time()}))
     except (WebSocketDisconnect, ValueError, RuntimeError):
@@ -553,11 +555,36 @@ async def ws(socket: WebSocket) -> None:
 # ---------------- static UI ----------------
 if settings.web_dir.exists():
     @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def spa(path: str):
+    async def spa(path: str, request: Request):
         if path.startswith(("api/", "ws")):
             raise HTTPException(404)
         base = settings.web_dir.resolve()
         for cand in (base / path, base / f"{path}.html", base / path / "index.html"):
             if cand.is_file() and base in cand.resolve().parents:
-                return FileResponse(cand)
-        return FileResponse(base / "index.html")
+                return _static(cand, path, request)
+        return _static(base / "index.html", "index.html", request)
+
+
+_GZ: dict[str, tuple[float, bytes, bytes]] = {}
+_TYPES = {".js": "text/javascript", ".css": "text/css", ".html": "text/html; charset=utf-8", ".json": "application/json",
+          ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2", ".png": "image/png", ".ico": "image/x-icon"}
+
+
+def _static(f, path: str, request: Request) -> Response:
+    """Static UI with long-lived caching for content-hashed assets and in-memory pre-compressed text files."""
+    import gzip
+    suffix = f.suffix.lower()
+    immutable = path.startswith("_next/static/") or "/media/" in path
+    headers = {"Cache-Control": "public, max-age=31536000, immutable" if immutable else "no-cache"}
+    if suffix not in (".js", ".css", ".html", ".json", ".svg", ".txt"):
+        return FileResponse(f, headers=headers)
+    mtime = f.stat().st_mtime
+    hit = _GZ.get(str(f))
+    if not hit or hit[0] != mtime:
+        raw = f.read_bytes()
+        hit = _GZ[str(f)] = (mtime, raw, gzip.compress(raw, 7))
+    headers["Vary"] = "Accept-Encoding"
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        headers["Content-Encoding"] = "gzip"
+        return Response(hit[2], media_type=_TYPES.get(suffix), headers=headers)
+    return Response(hit[1], media_type=_TYPES.get(suffix), headers=headers)

@@ -77,11 +77,14 @@ class Tracker:
         self.flash_tokens: dict[str, float] = {}
         self.launch_watch: dict[str, float] = {}       # mint -> until (first-90s trade capture)       # address -> until (max refresh rate during FLASH)
         # hooks wired by the app: trade(t), tokens(rows), safety(rep), social(event), custom(item)
-        self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": [], "new_token": [], "news": []}
+        self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": [], "new_token": [], "news": [],
+                                         "launch": [], "graduated": [], "trending_first": []}
         self.news_enricher: Any = None                 # NewsIntel.enrich(row, feed) -> tagged row; wired by the app
         self.feed_backoff: dict[str, tuple[int, float]] = {}   # feed name -> (consecutive failures, retry after)
         self.gecko_networks = [n.strip() for n in __import__("os").environ.get("GECKO_NETWORKS", "solana,base,bsc,eth").split(",") if n.strip()]
         self.poly_prev: dict[str, float] = {}
+        self.subs_kick = asyncio.Event()               # set to re-evaluate trade subscriptions now (someone opened a token)
+        self.trending_seen: set[str] = set()
         for c in (self.dex.http, self.gecko.http, self.rug.http):
             c.on_request = self._usage
 
@@ -150,6 +153,8 @@ class Tracker:
                "curve_sol": m.get("vSolInBondingCurve"), "curve_progress": curve_progress(m.get("vSolInBondingCurve"))}
         await self.db.upsert("tokens", row, "address")
         await self._hook("new_token", row)
+        await self._hook("launch", {**row, "initial_buy_sol": m.get("solAmount"), "initial_buy_tokens": m.get("initialBuy"),
+                                    "vsol": m.get("vSolInBondingCurve"), "signature": m.get("signature")})
         # watch every launch's first 90s of trades (sniper / bundle detection), on the one shared socket
         self.launch_watch[mint] = now + 90
         if self.pump.ws is not None and mint not in self.pump.token_subs:
@@ -163,14 +168,19 @@ class Tracker:
         mint = m.get("mint")
         trade = {"mint": mint, "ts": now, "side": m.get("txType"), "sol": m.get("solAmount"),
                  "tokens": m.get("tokenAmount"), "trader": m.get("traderPublicKey"),
-                 "mcap_sol": m.get("marketCapSol"), "signature": m.get("signature")}
-        await self.db.exec("INSERT OR IGNORE INTO pump_trades (mint, ts, side, sol, tokens, trader, mcap_sol, signature) "
-                           "VALUES (?,?,?,?,?,?,?,?)", list(trade.values()))
+                 "mcap_sol": m.get("marketCapSol"), "signature": m.get("signature"), "sol_usd": self.sol_usd}
+        await self.db.exec("INSERT OR IGNORE INTO pump_trades (mint, ts, side, sol, tokens, trader, mcap_sol, signature, sol_usd) "
+                           "VALUES (?,?,?,?,?,?,?,?,?)", list(trade.values()))
+        trade["vsol"] = m.get("vSolInBondingCurve")
+        trade["pool"] = m.get("pool")
         if m.get("marketCapSol") is not None:
             await self.db.exec("UPDATE tokens SET pump_mcap_sol=?, pump_mcap_as_of=?, curve_sol=COALESCE(?, curve_sol), "
                                "curve_progress=CASE WHEN graduated_at IS NOT NULL THEN 100 ELSE COALESCE(?, curve_progress) END WHERE address=?",
                                (m.get("marketCapSol"), now, m.get("vSolInBondingCurve"), curve_progress(m.get("vSolInBondingCurve")), mint))
-        await hub.publish("trade", {**trade, "usd": self._usd(m.get("solAmount")), "mcap_usd": self._usd(m.get("marketCapSol"))})
+        mc_usd = self._usd(m.get("marketCapSol"))
+        # pump.fun supply is fixed at 1B, so price = market cap / 1e9 (lets open charts update on every trade)
+        await hub.publish("trade", {**trade, "usd": self._usd(m.get("solAmount")), "mcap_usd": mc_usd,
+                                    "price_usd": mc_usd / 1e9 if mc_usd else None})
         await self._hook("trade", trade)
 
     async def on_migrate(self, m: dict[str, Any]) -> None:
@@ -185,6 +195,7 @@ class Tracker:
         self.queue_rug(mint)
         tok = await self.token_summary(mint)
         await hub.publish("graduated", tok or {"address": mint, "graduated_at": now})
+        await self._hook("graduated", {"mint": mint, "ts": now, "pool": m.get("pool")})
 
     async def _hook(self, name: str, arg: Any) -> None:
         for fn in self.hooks.get(name, []):
@@ -313,6 +324,7 @@ class Tracker:
     async def poll_gecko_trending(self) -> None:
         rows = await self.gecko.trending_pools()
         self.trending_set = {r["token_address"] for r in rows if r["token_address"]}
+        await self.mark_trending(self.trending_set)
         for r in rows:
             if r["token_address"]:
                 await self._ensure_token(r["token_address"], "solana", r["name"], r["symbol"], r["image"],
@@ -356,9 +368,20 @@ class Tracker:
                     await self.db.exec("UPDATE tokens SET boost_amount=? WHERE address=?",
                                        (r.get("totalAmount") or r.get("amount"), r["tokenAddress"]))
             self.boosted_set = {r["tokenAddress"] for r in rows if r.get("tokenAddress")} | (self.boosted_set if self._rot == 2 else set())
+            await self.mark_trending(self.boosted_set)
             await self._store_trending("dexscreener", lst, [
                 {"token_address": r.get("tokenAddress"), "chain": r.get("chainId"), "url": r.get("url"),
                  "amount": r.get("amount"), "total_amount": r.get("totalAmount")} for r in rows])
+
+    async def mark_trending(self, addrs: set[str]) -> None:
+        """Remember the first time each coin reached a public trending/boost list — the yardstick for 'Radar saw it first'."""
+        new = [a for a in addrs if a and a not in self.trending_seen]
+        if not new:
+            return
+        self.trending_seen.update(new)
+        now = time.time()
+        await self.db.many("UPDATE tokens SET first_trending_at=COALESCE(first_trending_at, ?) WHERE address=?", [(now, a) for a in new])
+        await self._hook("trending_first", {"addresses": new, "ts": now})
 
     async def _market(self, key: str, value: float | None, data: dict[str, Any] | None) -> None:
         if data is None:
@@ -509,7 +532,11 @@ class Tracker:
                 raise
             except Exception as e:  # noqa: BLE001
                 log.debug("trade subs: %s", e)
-            await asyncio.sleep(10)
+            self.subs_kick.clear()
+            try:   # wake early when someone opens a token, so its chart goes live within a second
+                await asyncio.wait_for(self.subs_kick.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                pass
 
     async def prune(self) -> None:
         cut = time.time() - settings.retention_hours * 3600

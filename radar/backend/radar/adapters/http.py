@@ -35,11 +35,11 @@ class RestClient:
         await self.client.aclose()
 
     async def get(self, path: str, bucket: TokenBucket, params: dict[str, Any] | None = None,
-                  retries: int = 3, not_found_ok: bool = False) -> Any:
+                  retries: int = 3, not_found_ok: bool = False, priority: bool = False) -> Any:
         url = f"{self.base_url}{path}"
         delay = 1.0
         for attempt in range(retries + 1):
-            await bucket.acquire()
+            await bucket.acquire(priority)
             t0 = time.perf_counter()
             try:
                 r = await self.client.get(url, params=params)

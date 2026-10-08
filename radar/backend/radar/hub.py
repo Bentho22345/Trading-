@@ -35,15 +35,21 @@ class Hub:
     async def publish(self, channel: str, data: Any) -> None:
         if not self.clients:
             return
-        msg = json.dumps({"ch": channel, "ts": time.time(), "data": data}, default=str)
-        dead = []
-        for ws in list(self.clients):
+        msg = json.dumps({"ch": channel, "ts": time.time(), "data": data}, default=str, separators=(",", ":"))
+        clients = list(self.clients)
+
+        async def send(ws: WebSocket) -> WebSocket | None:
             try:
                 await asyncio.wait_for(ws.send_text(msg), timeout=2)
+                return None
             except Exception:  # noqa: BLE001 - a slow or closed client must not stall the feed
-                dead.append(ws)
+                return ws
+
+        # every client in parallel: one slow phone can't delay everyone else's tick
+        dead = [await send(clients[0])] if len(clients) == 1 else await asyncio.gather(*(send(ws) for ws in clients))
         for ws in dead:
-            self.disconnect(ws)
+            if ws is not None:
+                self.disconnect(ws)
 
 
 hub = Hub()

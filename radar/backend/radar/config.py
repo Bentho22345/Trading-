@@ -54,7 +54,7 @@ class Settings:
     })
     launch_track_minutes: float = field(default_factory=lambda: _f("LAUNCH_TRACK_MINUTES", 30))
     hot_track_hours: float = field(default_factory=lambda: _f("HOT_TRACK_HOURS", 6))
-    max_trade_subscriptions: int = field(default_factory=lambda: _i("MAX_TRADE_SUBS", 60))
+    max_trade_subscriptions: int = field(default_factory=lambda: _i("MAX_TRADE_SUBS", 150))
     retention_hours: float = field(default_factory=lambda: _f("RETENTION_HOURS", 72))
 
 
