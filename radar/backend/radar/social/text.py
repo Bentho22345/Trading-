@@ -55,7 +55,7 @@ def heuristic_classify(text: str, cashtags: list[str], cas: list[str], cats: dic
     listing = any(w in low for w in listing_words) and any(x in low for x in ("binance", "coinbase", "robinhood", "upbit", "okx", "bybit"))
     return {
         "method": "heuristic",
-        "tokenizable": bool(cashtags or cas) or cat in ("animal", "celebrity", "politifi", "ai"),
+        "tokenizable": bool(cashtags or cas) or cat in ("animal", "celebrity", "politifi", "ai", "meme"),
         "category": cat, "title": " ".join(kws[:4]) or (text or "")[:60],
         "ticker_candidates": ticker_guesses(text, cashtags), "name_candidates": [],
         "keywords": kws, "sentiment": 0.0, "expected_life_hours": 48,

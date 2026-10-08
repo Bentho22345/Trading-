@@ -12,6 +12,7 @@ export const LINKS = [
   { href: '/trending', label: 'Trending', key: 't', icon: 'trending' },
   { href: '/launching', label: 'Launching', key: 'l', icon: 'rocket' },
   { href: '/narratives', label: 'Narratives', key: 'n', icon: 'narrative' },
+  { href: '/news', label: 'News', key: 'e', icon: 'news' },
   { href: '/signals', label: 'Signals', key: 's', icon: 'signal' },
   { href: '/social', label: 'Social', key: 'f', icon: 'social' },
   { href: '/smart-money', label: 'Smart money', key: 'w', icon: 'wallet' },

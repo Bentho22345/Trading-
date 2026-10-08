@@ -71,9 +71,13 @@ CREATE TABLE IF NOT EXISTS trending (
 );
 
 CREATE TABLE IF NOT EXISTS news (
-  id TEXT PRIMARY KEY, source TEXT, title TEXT, link TEXT, published REAL, fetched REAL NOT NULL
+  id TEXT PRIMARY KEY, source TEXT, title TEXT, link TEXT, published REAL, fetched REAL NOT NULL,
+  grp TEXT, publisher TEXT, story_id TEXT, tags_json TEXT, metas_json TEXT, tickers_json TEXT,
+  sentiment REAL, impact REAL
 );
 CREATE INDEX IF NOT EXISTS news_pub ON news(published DESC);
+CREATE INDEX IF NOT EXISTS news_fetched ON news(fetched DESC);
+CREATE INDEX IF NOT EXISTS news_story ON news(story_id);
 
 CREATE TABLE IF NOT EXISTS market (
   key TEXT PRIMARY KEY, value REAL, source TEXT, as_of REAL NOT NULL, data_json TEXT
@@ -121,6 +125,7 @@ CREATE TABLE IF NOT EXISTS social_events (
 );
 CREATE INDEX IF NOT EXISTS social_ts ON social_events(ts DESC);
 CREATE INDEX IF NOT EXISTS social_narr ON social_events(narrative_id, ts DESC);
+CREATE INDEX IF NOT EXISTS social_ingested ON social_events(ingested);
 
 CREATE TABLE IF NOT EXISTS narratives (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

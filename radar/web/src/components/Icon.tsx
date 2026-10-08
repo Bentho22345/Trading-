@@ -21,6 +21,7 @@ const P: Record<string, string> = {
   grad: 'M2 10l10-5 10 5-10 5zM6 12v5c3 2 9 2 12 0v-5',
   x: 'M18 6L6 18M6 6l12 12',
   plus: 'M12 5v14M5 12h14',
+  news: 'M4 5h13v14H6a2 2 0 0 1-2-2zM17 9h3v8a2 2 0 0 1-2 2M8 9h5M8 13h5M8 16h3',
   link: 'M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1',
 };
 
