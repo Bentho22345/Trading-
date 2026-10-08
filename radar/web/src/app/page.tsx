@@ -213,7 +213,7 @@ export default function Dashboard() {
           </select>}>
           <TrendingList data={trending[tab]} now={now} />
         </Panel>
-        <Panel title="Breaking news & social" className="h-[380px]">
+        <Panel title="Breaking news & social" className="h-[380px]" right={<Link href="/news" className="hover:text-fg">Newsroom →</Link>}>
           <ul>
             {news.map((n) => (
               <li key={n.id} className="border-b border-white/[0.04] px-3 py-1.5">

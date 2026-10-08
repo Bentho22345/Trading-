@@ -16,7 +16,7 @@ from .http import USER_AGENT
 
 health = register(Health("rss", "rest", "News RSS, Reddit RSS, Google News & Google Trends feeds"))
 health.stale_after = 600
-bucket = TokenBucket(60, burst=10)
+bucket = TokenBucket(240, burst=20)
 health.headroom_fn = bucket.headroom
 
 _client: httpx.AsyncClient | None = None
@@ -49,17 +49,34 @@ def parse_feed(text: str, source: str) -> list[dict[str, Any]]:
     return out
 
 
-async def fetch(url: str, source: str, headers: dict[str, str] | None = None, h: Health | None = None) -> list[dict[str, Any]]:
+# url -> (etag, last-modified): conditional GETs make fast polling cheap for us and polite to publishers
+_validators: dict[str, tuple[str | None, str | None]] = {}
+
+
+async def fetch(url: str, source: str, headers: dict[str, str] | None = None, h: Health | None = None,
+                conditional: bool = False) -> list[dict[str, Any]]:
+    """conditional=True sends ETag/Last-Modified validators and returns [] when the feed hasn't changed (304)."""
     h = h or health
     await bucket.acquire()
     t0 = time.perf_counter()
+    hdrs = dict(headers or {})
+    etag, modified = _validators.get(url, (None, None)) if conditional else (None, None)
+    if etag:
+        hdrs["If-None-Match"] = etag
+    if modified:
+        hdrs["If-Modified-Since"] = modified
     try:
-        r = await client().get(url, headers=headers or {})
+        r = await client().get(url, headers=hdrs)
+        if r.status_code == 304:
+            h.ok((time.perf_counter() - t0) * 1000)
+            return []
         r.raise_for_status()
     except httpx.HTTPError as e:
         h.fail(f"{source}: {e}")
         raise
     h.ok((time.perf_counter() - t0) * 1000)
+    if conditional and (r.headers.get("etag") or r.headers.get("last-modified")):
+        _validators[url] = (r.headers.get("etag"), r.headers.get("last-modified"))
     return parse_feed(r.text, source)
 
 

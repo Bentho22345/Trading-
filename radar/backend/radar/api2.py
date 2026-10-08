@@ -83,6 +83,8 @@ async def narratives(hours: float = 24, limit: int = 60, category: str = "") -> 
         rows = [r for r in rows if r.get("category") == category]
     for r in rows:
         r["spark"] = await S.social.sparkline(r["id"], 60)
+        r["metas"] = S.metas.match_text(" ".join([r.get("title") or "", *r.get("keywords", [])]) + " " +
+                                        " ".join(f"${t}" for t in r.get("tickers", [])))
         r["tokens"] = await S.db.all(
             "SELECT nt.token_address, nt.match_score, nt.legit_score, nt.is_likely_fake, t.symbol, t.name, p.price_usd, p.vol_h1, "
             "p.liquidity_usd, p.chg_h1 FROM narrative_tokens nt LEFT JOIN tokens t ON t.address=nt.token_address "

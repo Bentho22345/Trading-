@@ -51,6 +51,8 @@ class State:
     telegram: Any
     discover: Any
     story: Any
+    metas: Any
+    news: Any
 
 
 S = State()
@@ -93,6 +95,13 @@ async def lifespan(app: FastAPI):
     from .toptraders import TopTraders
     S.toptraders = TopTraders(S.db, S.cfg, S.tracker, S.board, S.connectors)
     S.board.sources = S.toptraders
+    from .metas import MetaBoard
+    from .newsintel import NewsIntel
+    S.metas = MetaBoard(S.db, S.alerts)
+    S.news = NewsIntel(S.metas, S.alerts, S.db)
+    await S.news.load()
+    S.tracker.news_enricher = S.news.enrich
+    S.tracker.hooks["news"].append(S.news.on_fresh)
 
     async def on_change(cid: str, vals: dict[str, str]) -> None:
         if cid == "coingecko":
@@ -118,7 +127,8 @@ async def lifespan(app: FastAPI):
         await S.custom.start_all()
         S.social.start()
         await S.smart.load()
-        jobs = [S.story.loop(), S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(), S.board.loop(), S.toptraders.run(),
+        jobs = [S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
+                S.insights.brief_scheduler(), S.smart.helius_loop(), S.board.loop(), S.toptraders.run(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
@@ -511,8 +521,10 @@ async def source_items(source_id: int | None = None, limit: int = 100) -> list[d
 
 
 from .api2 import router as _router2  # noqa: E402
+from .api_news import router as _router_news  # noqa: E402
 
 app.include_router(_router2)
+app.include_router(_router_news)
 
 
 # ---------------- live socket ----------------
