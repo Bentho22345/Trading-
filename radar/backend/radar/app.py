@@ -49,6 +49,7 @@ class State:
     telegram: Any
     discover: Any
     story: Any
+    traders: Any
 
 
 S = State()
@@ -86,6 +87,10 @@ async def lifespan(app: FastAPI):
     S.discover = Discover(S.db, S.tracker, S.social, S.signals, S.alerts)
     S.story = StoryEngine(S.db, S.ai, S.social, S.connectors, S.discover, S.cfg)
     S.tracker.hooks["new_token"].append(S.discover.check_launch)
+    from .traders import Traders
+    S.traders = Traders(S.db, S.tracker, S.connectors, S.alerts, S.cfg)
+    S.smart.traders = S.traders
+    S.tracker.hooks["trade"].append(S.traders.on_pump_trade)
 
     async def on_change(cid: str, vals: dict[str, str]) -> None:
         if cid == "coingecko":
@@ -111,7 +116,8 @@ async def lifespan(app: FastAPI):
         await S.custom.start_all()
         S.social.start()
         await S.smart.load()
-        jobs = [S.story.loop(), S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(),
+        jobs = [S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
+                S.story.loop(), S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),

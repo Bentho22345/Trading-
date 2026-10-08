@@ -511,3 +511,90 @@ async def add_launch_watch(b: WatchTermsBody) -> dict[str, Any]:
 async def del_launch_watch(wid: int) -> dict[str, bool]:
     await S.db.exec("DELETE FROM launch_watches WHERE id=?", (wid,))
     return {"ok": True}
+
+
+# ---------------- Top Traders ----------------
+@router.get("/traders")
+async def traders(win: str = "30d", sort: str = "rank", limit: int = 100, offset: int = 0, q: str = "",
+                  followed: bool = False, min_tokens: int = 0) -> dict[str, Any]:
+    return await S.traders.leaderboard(win, sort, limit, offset, q, followed, min_tokens)
+
+
+@router.get("/traders/summary")
+async def traders_summary() -> dict[str, Any]:
+    return await _cached("traders:summary", 5, S.traders.summary)
+
+
+@router.get("/traders/status")
+async def traders_status() -> dict[str, Any]:
+    by_src = await S.db.all("SELECT source, COUNT(*) trades, COUNT(DISTINCT wallet) wallets, MIN(ts) oldest FROM trader_trades GROUP BY source")
+    bf = await S.db.one("SELECT SUM(backfill_done) done, COUNT(*) n, MIN(backfill_oldest) oldest, SUM(pinned) pinned, SUM(followed) followed FROM traders")
+    return {"sources": by_src, "backfill": bf, "helius_calls_today": S.traders.helius_calls_today, "cap": S.traders.cap,
+            "top_n": S.traders.top_n, "live_subscribed": len(S.tracker.pump.account_subs)}
+
+
+@router.get("/traders/{address}")
+async def trader(address: str) -> dict[str, Any]:
+    return await S.traders.wallet(address)
+
+
+class FollowBody(BaseModel):
+    on: bool = True
+    label: str | None = None
+
+
+@router.post("/traders/{address}/follow")
+async def follow(address: str, b: FollowBody) -> dict[str, Any]:
+    await S.traders.follow(address, b.on, b.label)
+    return {"followed": b.on}
+
+
+class ImportBody(BaseModel):
+    text: str | None = None
+    query_id: str | None = None
+
+
+@router.post("/traders/import")
+async def import_traders(b: ImportBody) -> dict[str, Any]:
+    try:
+        n = await S.traders.import_dune(b.query_id) if b.query_id else await S.traders.import_text(b.text or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"imported": n}
+
+
+@router.get("/wallet/{address}/holdings")
+async def wallet_holdings(address: str) -> dict[str, Any]:
+    rows = await S.tracker.extra.holdings(address)
+    out = []
+    for r in rows[:120]:
+        tok = await S.tracker.token_summary(r["mint"]) or {}
+        out.append({**r, "symbol": tok.get("symbol"), "name": tok.get("name"), "image": tok.get("image"), "price_usd": tok.get("price_usd"),
+                    "value_usd": round(r["amount"] * tok["price_usd"], 2) if tok.get("price_usd") else None})
+    return {"address": address, "holdings": sorted(out, key=lambda x: -(x["value_usd"] or 0)), "as_of": time.time()}
+
+
+# ---------------- Pulse: new → final stretch → migrated ----------------
+@router.get("/pulse")
+async def pulse() -> dict[str, Any]:
+    async def build():
+        now = time.time()
+        base = ("SELECT t.address, t.name, t.symbol, t.image, t.launched_at, t.first_seen, t.graduated_at, t.curve_progress, t.pump_mcap_sol, "
+                "t.dev_initial_buy_pct, t.deployer, p.market_cap, p.liquidity_usd, p.vol_h1, p.chg_h1, p.price_usd, s.holders, s.mint_authority, "
+                "s.freeze_authority, s.top10_pct, s.as_of safety_as_of, s.rugged, "
+                "(SELECT COUNT(*) FROM pump_trades pt WHERE pt.mint=t.address AND pt.ts > ?) trades_5m, "
+                "(SELECT COUNT(DISTINCT trader) FROM pump_trades pt WHERE pt.mint=t.address AND pt.side='buy' AND pt.ts > ?) buyers_5m "
+                "FROM tokens t LEFT JOIN pairs p ON p.pair_address=t.best_pair LEFT JOIN safety_reports s ON s.token_address=t.address ")
+        a = [now - 300, now - 300]
+        new = await S.db.all(base + "WHERE t.source='pumpportal' AND t.graduated_at IS NULL AND COALESCE(t.curve_progress,0) < 60 "
+                             "AND t.first_seen > ? ORDER BY t.first_seen DESC LIMIT 40", [*a, now - 1800])
+        stretch = await S.db.all(base + "WHERE t.graduated_at IS NULL AND t.curve_progress >= 60 AND t.first_seen > ? "
+                                 "ORDER BY t.curve_progress DESC LIMIT 40", [*a, now - 6 * 3600])
+        migrated = await S.db.all(base + "WHERE t.graduated_at > ? ORDER BY t.graduated_at DESC LIMIT 40", [*a, now - 6 * 3600])
+        sol = S.tracker.sol_usd
+        nar = await S.discover._narr([r["address"] for r in [*new, *stretch, *migrated]])
+        for r in [*new, *stretch, *migrated]:
+            r["mcap_usd"] = r["market_cap"] or (round(r["pump_mcap_sol"] * sol, 0) if r["pump_mcap_sol"] and sol else None)
+            r["narratives"] = nar.get(r["address"], [])[:2]
+        return {"as_of": now, "new": new, "final_stretch": stretch, "migrated": migrated, "sol_usd": sol}
+    return await _cached("pulse", 2, build)

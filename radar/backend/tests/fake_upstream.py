@@ -80,6 +80,28 @@ def gecko_ohlcv(net: str, pool: str, unit: str):
     return {"data": {"attributes": {"ohlcv_list": out[::-1]}}}
 
 
+WALLETS = [f"Trader{i}{'x' * 30}"[:40] for i in range(8)]
+
+
+@api.get("/gecko/networks/{net}/pools/{pool}/trades")
+def gecko_trades(net: str, pool: str):
+    """Deterministic round trips: wallets 0-5 win (sell 2-4x higher), 6-7 lose."""
+    import time
+    now = time.time()
+    rows = []
+    for i, w in enumerate(WALLETS):
+        mult = [3.0, 2.5, 4.0, 2.0, 1.6, 3.2, 0.4, 0.5][i]
+        buy_usd = 500 + i * 100
+        tokens = 1_000_000.0
+        for kind, usd, ago in (("buy", buy_usd, 3000), ("sell", buy_usd * mult, 600)):
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - ago))
+            rows.append({"id": f"t{pool[:6]}{i}{kind}", "type": "trade", "attributes": {
+                "tx_hash": f"{pool[:8]}-{i}-{kind}", "tx_from_address": w, "kind": kind, "volume_in_usd": str(usd),
+                "from_token_amount": str(tokens) if kind == "sell" else "1.0", "to_token_amount": str(tokens) if kind == "buy" else "1.0",
+                "block_timestamp": ts}})
+    return {"data": rows}
+
+
 @api.get("/rug/tokens/{mint}/report")
 def rug(mint: str):
     rep = copy.deepcopy(fx.RUG_REPORT_MINTABLE if mint == fx.MINT_BAD else fx.RUG_REPORT)

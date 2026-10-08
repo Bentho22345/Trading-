@@ -53,7 +53,8 @@ def stack(tmp_path_factory):
            "DEXSCREENER_URL": f"http://127.0.0.1:{up_http}/dex", "GECKOTERMINAL_URL": f"http://127.0.0.1:{up_http}/gecko",
            "RUGCHECK_URL": f"http://127.0.0.1:{up_http}/rug", "TIER3_EVERY": "1", "LOG_LEVEL": "WARNING",
            "RADAR_WEB_DIR": "/nonexistent", "HTTPS_PROXY": "", "https_proxy": "", "RADAR_ENABLE_FIXTURES": "1",
-           "RADAR_DISABLE_FIREHOSE": "1", "TELEGRAM_API_URL": f"http://127.0.0.1:{up_http}/tg", "SIGNAL_EVERY": "2"}
+           "RADAR_DISABLE_FIREHOSE": "1", "TELEGRAM_API_URL": f"http://127.0.0.1:{up_http}/tg", "SIGNAL_EVERY": "2",
+           "TRADER_COMPUTE_EVERY": "2", "TRADER_HARVEST_EVERY": "0.3", "TRADER_GECKO_RPM": "600"}
     app = subprocess.Popen([sys.executable, "-m", "radar"], cwd=ROOT, env=env)
     wait_http(f"http://127.0.0.1:{up_http}/dex/token-profiles/latest/v1")
     _UPSTREAM.append(f"127.0.0.1:{up_http}")
@@ -235,3 +236,27 @@ def test_discovery_endpoints(stack):
         time.sleep(0.25)
     assert hits[0]["hits"] >= 1
     assert any("Launch Watch" in a["title"] for a in httpx.get(f"http://{stack}/api/alerts").json())
+
+
+def test_top_traders_pipeline(stack):
+    for _ in range(60):
+        lb = httpx.get(f"http://{stack}/api/traders?win=7d").json()
+        if lb["total"] >= 6:
+            break
+        time.sleep(0.5)
+    assert lb["total"] >= 6, lb
+    top = lb["rows"][0]
+    assert top["rank"] == 1 and top["pnl_usd"] > 0 and top["tokens"] >= 3 and "geckoterminal" in top["sources"]
+    assert lb["rows"][-1]["pnl_usd"] < top["pnl_usd"]
+    s = httpx.get(f"http://{stack}/api/traders/summary").json()
+    assert s["ranked"] >= 6 and s["pool"] >= 6 and s["cap"] == 5000 and s["top"]
+    w = httpx.get(f"http://{stack}/api/traders/{top['address']}").json()
+    assert w["stats"]["7d"]["rank"] == 1 and w["positions"] and w["trades"]
+    assert httpx.post(f"http://{stack}/api/traders/{top['address']}/follow", json={"on": True, "label": "whale"}).json()["followed"]
+    assert httpx.get(f"http://{stack}/api/traders?followed=true&win=7d").json()["rows"][0]["label"] == "whale"
+    imp = httpx.post(f"http://{stack}/api/traders/import", json={"text": "GJR1111111111111111111111111111111111111 my kol"}).json()
+    assert imp["imported"] == 1
+    st = httpx.get(f"http://{stack}/api/traders/status").json()
+    assert st["backfill"]["pinned"] >= 1 and any(x["source"] == "geckoterminal" for x in st["sources"])
+    p = httpx.get(f"http://{stack}/api/pulse").json()
+    assert {"new", "final_stretch", "migrated"} <= p.keys() and p["new"]

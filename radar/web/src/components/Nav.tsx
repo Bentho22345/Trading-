@@ -5,16 +5,17 @@ import { useEffect, useState } from 'react';
 import { useConnected } from '@/lib/live';
 import { CommandPalette } from './CommandPalette';
 import { Icon } from './Icon';
-import { motion } from './motion';
+import { AnimatePresence, motion } from './motion';
 
 export const LINKS = [
-  { href: '/', label: 'Dashboard', key: 'd', icon: 'dashboard' },
-  { href: '/trending', label: 'Trending', key: 't', icon: 'trending' },
-  { href: '/launching', label: 'Launching', key: 'l', icon: 'rocket' },
-  { href: '/narratives', label: 'Narratives', key: 'n', icon: 'narrative' },
-  { href: '/signals', label: 'Signals', key: 's', icon: 'signal' },
+  { href: '/', label: 'Home', key: 'd', icon: 'dashboard', primary: true },
+  { href: '/traders', label: 'Top Traders', key: 'w', icon: 'trophy', primary: true },
+  { href: '/pulse', label: 'Pulse', key: 'u', icon: 'pulse', primary: true },
+  { href: '/trending', label: 'Trending', key: 't', icon: 'trending', primary: true },
+  { href: '/launching', label: 'Launching', key: 'l', icon: 'rocket', primary: true },
+  { href: '/narratives', label: 'Narratives', key: 'n', icon: 'narrative', primary: true },
+  { href: '/signals', label: 'Signals', key: 's', icon: 'signal', primary: true },
   { href: '/social', label: 'Social', key: 'f', icon: 'social' },
-  { href: '/smart-money', label: 'Smart money', key: 'w', icon: 'wallet' },
   { href: '/scorecard', label: 'Scorecard', key: 'p', icon: 'score' },
   { href: '/risk', label: 'Risk', key: 'r', icon: 'risk' },
   { href: '/rotation', label: 'Rotation & Brief', key: 'b', icon: 'rotation' },
@@ -29,7 +30,10 @@ export function Nav() {
   const router = useRouter();
   const live = useConnected();
   const [palette, setPalette] = useState(false);
+  const [more, setMore] = useState(false);
+  const [mobile, setMobile] = useState(false);
   const [authed, setAuthed] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
     fetch('/api/session').then((r) => r.json()).then((s) => setAuthed(s.auth_required && s.authed)).catch(() => {});
@@ -41,68 +45,82 @@ export function Nav() {
       const l = LINKS.find((x) => x.key === e.key);
       if (l) router.push(l.href);
     };
+    const onScroll = () => setScrolled(window.scrollY > 8);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('scroll', onScroll); };
   }, [router]);
+  useEffect(() => { setMore(false); setMobile(false); }, [path]);
 
   if (path === '/login') return null;
   const active = (href: string) => (href === '/' ? path === '/' : path.startsWith(href));
+  const secondary = LINKS.filter((l) => !l.primary);
 
   return (
     <>
-      {/* desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[208px] flex-col border-r border-white/5 bg-bg/60 px-3 py-4 backdrop-blur-xl lg:flex">
-        <Link href="/" className="mb-5 flex items-center gap-2 px-2">
-          <span className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-accent2 text-bg shadow-[0_0_24px_-4px_var(--color-accent)]">
-            <Icon name="bolt" size={17} />
-          </span>
-          <span className="leading-tight"><span className="block text-[14px] font-semibold tracking-tight">Memecoin Radar</span>
-            <span className="block text-[10px] text-mute">narratives → coins, live</span></span>
-        </Link>
-        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
-          {LINKS.map((l) => (
-            <Link key={l.href} href={l.href} title={`shortcut: ${l.key}`}
-              className={`relative flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] transition-colors ${active(l.href) ? 'text-fg' : 'text-mute hover:text-fg'}`}>
-              {active(l.href) && <motion.span layoutId="nav-active" className="absolute inset-0 -z-10 rounded-xl bg-white/[0.07] ring-1 ring-white/10"
-                transition={{ type: 'spring', stiffness: 500, damping: 40 }} />}
-              <Icon name={l.icon} size={16} className={active(l.href) ? 'text-accent2' : ''} />
-              <span className="flex-1">{l.label}</span>
-              <kbd className="text-[10px] text-mute/60">{l.key}</kbd>
-            </Link>
-          ))}
-        </nav>
-        {authed && <button onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { location.href = '/login'; })}
-          className="mt-2 rounded-xl px-2.5 py-2 text-left text-[12px] text-mute hover:text-fg">Log out</button>}
-      </aside>
-
-      {/* top bar */}
-      <header className="sticky top-0 z-20 border-b border-white/5 bg-bg/70 backdrop-blur-xl lg:pl-[208px]">
-        <div className="flex items-center gap-3 px-3 py-2.5 md:px-5">
-          <Link href="/" className="flex items-center gap-2 lg:hidden">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-accent2 text-bg"><Icon name="bolt" size={15} /></span>
+      <header className={`sticky top-0 z-40 transition-colors duration-300 ${scrolled ? 'border-b border-white/[0.06] bg-black/80 backdrop-blur-xl' : 'bg-transparent'}`}>
+        <div className="mx-auto flex max-w-[1920px] items-center gap-6 px-4 py-3 md:px-6">
+          <Link href="/" className="flex items-center gap-2">
+            <span className="relative flex h-7 w-7 items-center justify-center">
+              <span className="absolute inset-0 rounded-full border-2 border-white/90" />
+              <span className="absolute inset-[5px] rounded-full bg-up shadow-[0_0_14px_var(--color-up)]" />
+            </span>
+            <span className="display text-[22px] tracking-wide">Radar</span>
           </Link>
-          <button onClick={() => setPalette(true)}
-            className="group flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-left text-mute transition hover:border-accent/50 md:max-w-md">
-            <Icon name="search" size={15} />
-            <span className="flex-1 truncate">Search coins, CAs, narratives…</span>
-            <kbd className="hidden rounded-md border border-white/10 px-1.5 text-[10px] sm:inline">⌘K</kbd>
-          </button>
-          <span className={`ml-auto flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium ${live ? 'border-up/30 bg-up/10 text-up' : 'border-down/30 bg-down/10 text-down'}`}
-            title="Live socket to the Radar backend">
-            <span className={`h-1.5 w-1.5 rounded-full ${live ? 'live-dot bg-up' : 'bg-down'}`} />{live ? 'Live' : 'Reconnecting'}
-          </span>
+          <nav className="hidden items-center gap-1 lg:flex">
+            {LINKS.filter((l) => l.primary).map((l) => (
+              <Link key={l.href} href={l.href} className={`relative px-3 py-2 text-[12px] font-semibold uppercase tracking-[0.14em] transition-colors ${active(l.href) ? 'text-white' : 'text-white/50 hover:text-white'}`}>
+                {l.label}
+                {active(l.href) && <motion.span layoutId="nav-underline" className="absolute inset-x-3 -bottom-[3px] h-[2px] rounded-full bg-white" transition={{ type: 'spring', stiffness: 500, damping: 40 }} />}
+              </Link>
+            ))}
+            <div className="relative" onMouseLeave={() => setMore(false)}>
+              <button onMouseEnter={() => setMore(true)} onClick={() => setMore(!more)}
+                className={`px-3 py-2 text-[12px] font-semibold uppercase tracking-[0.14em] ${secondary.some((l) => active(l.href)) ? 'text-white' : 'text-white/50 hover:text-white'}`}>More ▾</button>
+              <AnimatePresence>
+                {more && (
+                  <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} transition={{ duration: 0.18 }}
+                    className="glass absolute left-0 top-full z-50 mt-1 grid w-[420px] grid-cols-2 gap-1 rounded-2xl p-2">
+                    {secondary.map((l) => (
+                      <Link key={l.href} href={l.href} className={`flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] transition ${active(l.href) ? 'bg-white/10 text-white' : 'text-white/70 hover:bg-white/5 hover:text-white'}`}>
+                        <Icon name={l.icon} size={15} />{l.label}<kbd className="ml-auto text-[10px] text-white/30">{l.key}</kbd>
+                      </Link>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </nav>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setPalette(true)} className="flex items-center gap-2 rounded-full border border-white/15 px-3 py-1.5 text-[12px] text-white/60 transition hover:border-white/40 hover:text-white">
+              <Icon name="search" size={14} /><span className="hidden sm:inline">Search</span><kbd className="hidden text-[10px] text-white/40 sm:inline">⌘K</kbd>
+            </button>
+            <span className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] sm:flex ${live ? 'text-up' : 'text-down'}`} title="Live socket">
+              <span className={`h-1.5 w-1.5 rounded-full ${live ? 'live-dot bg-up' : 'bg-down'}`} />{live ? 'Live' : 'Offline'}
+            </span>
+            {authed && <button onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { location.href = '/login'; })} className="hidden text-[11px] uppercase tracking-[0.14em] text-white/40 hover:text-white md:block">Log out</button>}
+            <button onClick={() => setMobile(true)} className="rounded-full p-2 text-white lg:hidden" aria-label="Menu"><Icon name="menu" size={20} /></button>
+          </div>
         </div>
-        {/* mobile nav */}
-        <nav className="flex gap-1 overflow-x-auto px-3 pb-2 lg:hidden">
-          {LINKS.map((l) => (
-            <Link key={l.href} href={l.href}
-              className={`relative flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] ${active(l.href) ? 'text-fg' : 'text-mute'}`}>
-              {active(l.href) && <motion.span layoutId="nav-active-m" className="absolute inset-0 -z-10 rounded-lg bg-white/[0.08]" />}
-              <Icon name={l.icon} size={14} />{l.label}
-            </Link>
-          ))}
-        </nav>
       </header>
+
+      <AnimatePresence>
+        {mobile && (
+          <motion.div className="fixed inset-0 z-50 overflow-y-auto bg-black px-6 py-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <div className="mb-8 flex items-center justify-between">
+              <span className="display text-2xl">Radar</span>
+              <button onClick={() => setMobile(false)} className="rounded-full p-2" aria-label="Close"><Icon name="x" size={22} /></button>
+            </div>
+            <motion.ul initial="h" animate="s" variants={{ s: { transition: { staggerChildren: 0.035 } } }} className="space-y-1">
+              {LINKS.map((l) => (
+                <motion.li key={l.href} variants={{ h: { opacity: 0, y: 14 }, s: { opacity: 1, y: 0 } }}>
+                  <Link href={l.href} className={`display block py-1 text-[44px] ${active(l.href) ? 'text-white' : 'text-white/35'}`}>{l.label}</Link>
+                </motion.li>
+              ))}
+            </motion.ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <CommandPalette open={palette} onClose={() => setPalette(false)} />
     </>
   );

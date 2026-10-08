@@ -47,6 +47,17 @@ def _sources_cfg() -> dict[str, Any]:
     return {}
 
 
+# pump.fun bonding curve: starts with 30 virtual SOL, graduates when ~85 real SOL is in (≈115 virtual).
+CURVE_START_SOL, CURVE_END_SOL = 30.0, 115.0
+
+
+def curve_progress(vsol: Any) -> float | None:
+    try:
+        return round(max(0.0, min(100.0, (float(vsol) - CURVE_START_SOL) / (CURVE_END_SOL - CURVE_START_SOL) * 100)), 1)
+    except (TypeError, ValueError):
+        return None
+
+
 class Tracker:
     def __init__(self, db: DB) -> None:
         self.db = db
@@ -133,7 +144,8 @@ class Tracker:
         row = {"address": mint, "chain": "solana", "name": m.get("name"), "symbol": m.get("symbol"),
                "uri": m.get("uri"), "deployer": m.get("traderPublicKey"), "source": "pumpportal",
                "launched_at": now, "first_seen": now, "pump_mcap_sol": m.get("marketCapSol"),
-               "pump_mcap_as_of": now, "updated": now, "dev_initial_buy_pct": dev_pct}
+               "pump_mcap_as_of": now, "updated": now, "dev_initial_buy_pct": dev_pct,
+               "curve_sol": m.get("vSolInBondingCurve"), "curve_progress": curve_progress(m.get("vSolInBondingCurve"))}
         await self.db.upsert("tokens", row, "address")
         await self._hook("new_token", row)
         # watch every launch's first 90s of trades (sniper / bundle detection), on the one shared socket
@@ -153,8 +165,9 @@ class Tracker:
         await self.db.exec("INSERT OR IGNORE INTO pump_trades (mint, ts, side, sol, tokens, trader, mcap_sol, signature) "
                            "VALUES (?,?,?,?,?,?,?,?)", list(trade.values()))
         if m.get("marketCapSol") is not None:
-            await self.db.exec("UPDATE tokens SET pump_mcap_sol=?, pump_mcap_as_of=? WHERE address=?",
-                               (m.get("marketCapSol"), now, mint))
+            await self.db.exec("UPDATE tokens SET pump_mcap_sol=?, pump_mcap_as_of=?, curve_sol=COALESCE(?, curve_sol), "
+                               "curve_progress=CASE WHEN graduated_at IS NOT NULL THEN 100 ELSE COALESCE(?, curve_progress) END WHERE address=?",
+                               (m.get("marketCapSol"), now, m.get("vSolInBondingCurve"), curve_progress(m.get("vSolInBondingCurve")), mint))
         await hub.publish("trade", {**trade, "usd": self._usd(m.get("solAmount")), "mcap_usd": self._usd(m.get("marketCapSol"))})
         await self._hook("trade", trade)
 
@@ -166,7 +179,7 @@ class Tracker:
         await self.db.upsert("tokens", {"address": mint, "chain": "solana", "source": "pumpportal",
                                         "first_seen": now, "graduated_at": now, "graduated_pool": m.get("pool"),
                                         "updated": now}, "address")
-        await self.db.exec("UPDATE tokens SET graduated_at=COALESCE(graduated_at, ?) WHERE address=?", (now, mint))
+        await self.db.exec("UPDATE tokens SET graduated_at=COALESCE(graduated_at, ?), curve_progress=100 WHERE address=?", (now, mint))
         self.queue_rug(mint)
         tok = await self.token_summary(mint)
         await hub.publish("graduated", tok or {"address": mint, "graduated_at": now})

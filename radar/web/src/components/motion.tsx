@@ -36,12 +36,12 @@ export function Flash({ value, children, className = '' }: { value: number | nul
 /** Segmented chips with a sliding highlight. */
 export function Chips<T extends string>({ value, options, onChange, id }: { value: T; options: { value: T; label: React.ReactNode }[]; onChange: (v: T) => void; id: string }) {
   return (
-    <div className="relative inline-flex flex-wrap gap-0.5 rounded-xl border border-white/10 bg-white/[0.03] p-0.5">
+    <div className="relative inline-flex flex-wrap gap-0.5 rounded-full border border-white/10 bg-white/[0.03] p-1">
       {options.map((o) => (
         <button key={o.value} onClick={() => onChange(o.value)}
-          className={`relative z-0 rounded-lg px-2.5 py-1 text-[12px] transition-colors ${value === o.value ? 'text-fg' : 'text-mute hover:text-fg'}`}>
+          className={`relative z-0 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors duration-300 ${value === o.value ? 'text-black' : 'text-white/55 hover:text-white'}`}>
           {value === o.value && (
-            <motion.span layoutId={`chip-${id}`} className="absolute inset-0 -z-10 rounded-lg bg-gradient-to-r from-accent/30 to-accent2/25 ring-1 ring-white/10"
+            <motion.span layoutId={`chip-${id}`} className="absolute inset-0 -z-10 rounded-full bg-white"
               transition={{ type: 'spring', stiffness: 500, damping: 38 }} />
           )}
           {o.label}

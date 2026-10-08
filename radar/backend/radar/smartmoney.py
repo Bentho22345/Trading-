@@ -22,6 +22,7 @@ class SmartMoney:
     def __init__(self, db: Any, cfg: Any, tracker: Any, alerts: Any, connectors: Any) -> None:
         self.db, self.cfg, self.tracker, self.alerts, self.connectors = db, cfg, tracker, alerts, connectors
         self.tracked: dict[str, dict[str, Any]] = {}
+        self.traders: Any = None
 
     async def load(self) -> None:
         for w in self.cfg.watch.get("kol_wallets") or []:
@@ -38,7 +39,11 @@ class SmartMoney:
     async def refresh_tracked(self) -> None:
         rows = await self.db.all("SELECT * FROM wallets WHERE tracked=1 ORDER BY kind='kol' DESC, score DESC LIMIT 200")
         self.tracked = {r["address"]: r for r in rows}
-        await self.tracker.pump.set_account_trades(set(self.tracked))
+        if self.traders is not None:   # Top Traders owns the single account-trade subscription set
+            self.traders.extra_live = set(self.tracked)
+            await self.traders.refresh_live()
+        else:
+            await self.tracker.pump.set_account_trades(set(self.tracked))
 
     async def on_trade(self, t: dict[str, Any]) -> None:
         w = self.tracked.get(t.get("trader") or "")
@@ -83,7 +88,9 @@ class SmartMoney:
 
     async def input_for(self, mint: str) -> dict[str, Any]:
         shill = await self.db.one("SELECT 1 FROM kv WHERE key=? AND updated > ?", (f"shill:{mint}", time.time() - 6 * 3600))
-        return {"tracking": bool(self.tracked), "smart_buyers": await self.smart_buyers(mint), "kol_selling": bool(shill)}
+        ranked = await self.traders.smart_input(mint) if self.traders is not None else {"tracking": False, "smart_buyers": 0}
+        return {"tracking": bool(self.tracked) or ranked["tracking"],
+                "smart_buyers": await self.smart_buyers(mint) + ranked["smart_buyers"], "kol_selling": bool(shill)}
 
     async def discover(self) -> int:
         """Score wallets that bought early (first 15 min of trading we observed) into tokens that later ran."""

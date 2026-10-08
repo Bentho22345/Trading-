@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   pump_mcap_sol REAL, pump_mcap_as_of REAL,
   best_pair TEXT, last_refresh REAL,
   dev_initial_buy_pct REAL,   -- % of supply the deployer bought in the create tx
+  curve_sol REAL, curve_progress REAL,   -- pump.fun bonding curve: virtual SOL and % of the way to graduation
   image_hash TEXT,            -- perceptual dHash of the token image (copycat detection)
   updated REAL
 );
@@ -206,6 +207,34 @@ CREATE TABLE IF NOT EXISTS launch_watches (
   id INTEGER PRIMARY KEY AUTOINCREMENT, terms_json TEXT NOT NULL, label TEXT, narrative_id INTEGER,
   created REAL NOT NULL, enabled INTEGER DEFAULT 1, hits INTEGER DEFAULT 0, last_hit REAL, last_hit_token TEXT
 );
+
+CREATE TABLE IF NOT EXISTS traders (
+  address TEXT PRIMARY KEY, label TEXT, sources_json TEXT, first_seen REAL NOT NULL, last_active REAL,
+  followed INTEGER DEFAULT 0,
+  pinned INTEGER DEFAULT 0,          -- imported by you (paste / Dune): never pruned from the 5,000 pool
+  backfill_cursor TEXT, backfill_oldest REAL, backfill_done INTEGER DEFAULT 0, flags TEXT
+);
+CREATE INDEX IF NOT EXISTS traders_active ON traders(last_active DESC);
+
+CREATE TABLE IF NOT EXISTS trader_trades (
+  id TEXT PRIMARY KEY, wallet TEXT NOT NULL, mint TEXT NOT NULL, ts REAL NOT NULL, side TEXT NOT NULL,
+  token_amount REAL, usd REAL, sol REAL, source TEXT
+);
+CREATE INDEX IF NOT EXISTS tt_wallet_ts ON trader_trades(wallet, ts);
+CREATE INDEX IF NOT EXISTS tt_mint_ts ON trader_trades(mint, ts);
+CREATE INDEX IF NOT EXISTS tt_ts ON trader_trades(ts);
+
+CREATE TABLE IF NOT EXISTS trader_stats (
+  address TEXT NOT NULL, win TEXT NOT NULL,
+  realized_usd REAL, unrealized_usd REAL, pnl_usd REAL, volume_usd REAL, invested_usd REAL,
+  trades INTEGER, tokens INTEGER, wins INTEGER, losses INTEGER, win_rate REAL, roi REAL, median_roi REAL,
+  best_roi REAL, best_token TEXT, best_pnl_usd REAL, avg_hold_s REAL, score REAL, rank INTEGER,
+  coverage_from REAL, last_trade REAL, series_json TEXT, flags TEXT, updated REAL,
+  PRIMARY KEY (address, win)
+);
+CREATE INDEX IF NOT EXISTS ts_rank ON trader_stats(win, rank);
+
+CREATE TABLE IF NOT EXISTS sol_prices (day INTEGER PRIMARY KEY, usd REAL NOT NULL);
 
 CREATE TABLE IF NOT EXISTS briefs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, body TEXT, model TEXT, context_json TEXT

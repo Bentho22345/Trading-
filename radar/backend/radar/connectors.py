@@ -139,6 +139,13 @@ async def t_youtube(v: dict[str, str]) -> str:
     return _need(r, "YouTube Data API key valid")
 
 
+async def t_dune(v: dict[str, str]) -> str:
+    r = await _get("https://api.dune.com/api/v1/query/1/results", params={"limit": 1}, headers={"X-Dune-API-Key": v["api_key"]})
+    if r.status_code in (401, 403):
+        raise ValueError(f"HTTP {r.status_code}: key rejected")
+    return "Dune key accepted"
+
+
 async def t_wallet(v: dict[str, str]) -> str:
     if not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", v["address"]):
         raise ValueError("Not a valid Solana address")
@@ -212,11 +219,15 @@ CATALOG: list[Connector] = [
               "Alerts", 2, "https://support.discord.com/hc/en-us/articles/228383668", "Channel settings → Integrations → Webhooks → New → Copy URL.",
               "free", [Field("webhook_url", "Webhook URL", env="DISCORD_WEBHOOK_URL")], t_discord),
     Connector("helius", "Helius (Solana RPC)", "On-chain", "key", "Holder lists, wallet & deployer history, account webhooks.",
-              "Deployer reputation, smart-money wallets, holder growth", 2, "https://dashboard.helius.dev/signup",
+              "Top Traders: 1-year swap history backfill per wallet; deployer reputation", 2, "https://dashboard.helius.dev/signup",
               "Sign up → Dashboard → API Keys → copy.", "free tier", [Field("api_key", "API key", env="HELIUS_API_KEY")], t_helius, "helius"),
     Connector("birdeye", "Birdeye", "On-chain", "key", "Token overview, top traders, holders.",
-              "Smart-money discovery, holder data", 4, "https://bds.birdeye.so", "Sign up → API keys.", "free tier (limited)",
+              "Top Traders: seeds the top 10 traders of each hot token every hour", 4, "https://bds.birdeye.so", "Sign up → API keys.", "free tier (limited)",
               [Field("api_key", "API key", env="BIRDEYE_API_KEY")], t_birdeye),
+    Connector("dune", "Dune Analytics", "On-chain", "key", "Import wallet lists from any Dune query, e.g. a public 'top Solana memecoin traders, last 12 months' query.",
+              "Top Traders: seed the 5,000-wallet pool with year-long winners", 4, "https://dune.com/settings/api",
+              "dune.com → Settings → API → create key. Then on Top Traders → Import → paste a query ID (run the query on dune.com first).",
+              "free tier", [Field("api_key", "API key", env="DUNE_API_KEY")], t_dune, "dune"),
     Connector("coingecko", "CoinGecko demo key", "Market", "key", "Raises CoinGecko from ~5 to 30 req/min; categories for rotation heatmap.",
               "Trending, rotation heatmap", 1, "https://www.coingecko.com/en/developers/dashboard", "Developer dashboard → create Demo API key.",
               "free", [Field("api_key", "Demo API key", env="COINGECKO_API_KEY")], t_coingecko),

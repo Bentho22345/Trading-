@@ -154,7 +154,7 @@ def smart_money_score(sm: dict[str, Any] | None, c: dict[str, Any], why: list[st
     n = sm.get("smart_buyers", 0)
     score = _clamp(n / k["full_credit_wallets"] * 100)
     if n:
-        why.append(f"{n} tracked profitable wallet(s) bought in the last hour")
+        why.append(f"{n} top-ranked / tracked profitable wallet(s) bought in the last hour")
     if sm.get("kol_selling"):
         score -= k["kol_sell_penalty"]
         why.append("a KOL is selling while posting about it (shill-and-dump)")
