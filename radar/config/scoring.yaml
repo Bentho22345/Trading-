@@ -1,6 +1,6 @@
 # Radar Score config. Every number here is tunable (also from the Settings page; UI edits are
 # stored as overrides in the DB and win over this file). Bump `version` when you change logic.
-version: v1
+version: v2
 
 weights:            # sub-score weights (re-normalised to sum to 1)
   narrative: 0.30
@@ -24,6 +24,7 @@ vetoes:             # hard AVOID, regardless of score
   rugged: true
   max_rugcheck_score_normalised: 80   # RugCheck normalised score, higher = riskier
   require_safety_report: true          # no report yet -> cannot be BUY (WATCH at most)
+  max_liq_removed_pct_1h: 50           # LP withdrawn beyond the price move in the last hour (slow rug)
 
 momentum:
   vol_mcap_good: 0.5       # 24h volume / mcap >= this earns full credit (20-50% healthy)
@@ -52,8 +53,35 @@ catalyst:
   vip_ca: 100              # CA posted by VIP / official account
   vip_mention: 75
   breaking_news: 55
-  exchange_listing: 60
+  exchange_listing: 60     # narrative-level listing chatter
+  cex_listing: 80          # a listing headline that names this token (Binance, Coinbase, Upbit, OKX, Bybit...)
+  coingecko_trending: 45   # token is on CoinGecko's trending list (name + ticker match)
+  graduation: 40           # pump.fun bonding curve completed -> DEX pool, within drivers.graduation_window_h
+  kol_call: 35             # a KOL-tier account posted this token's CA in the last hour (often paid; also check smart money)
   paid_promo: 10           # boosts / KOL calls: weak signal (and a risk flag)
+
+drivers:            # price drivers read from Radar's own data (radar/drivers.py)
+  liq_mcap_good: 0.10      # liquidity >= 10% of market cap earns full depth credit (momentum)
+  liq_mcap_thin: 0.03      # below 3% -> safety penalty (one wallet can move the price)
+  liq_removed_bad_pct: 20  # LP withdrawn beyond the price move in 1h -> safety penalty (veto at vetoes.max_liq_removed_pct_1h)
+  max_holder_bad_pct: 5    # a single non-AMM wallet above this % of supply -> safety penalty
+  top10_rise_bad_pts: 5    # top-10 share rising this many points in 1h -> supply concentrating
+  mentions_good_per_h: 30  # posts naming the CA (1.0) or $TICKER (0.5) per hour for full social-volume credit
+  mention_accel_good: 2.0  # this hour vs the hour before for full acceleration credit
+  social_blend: 0.25       # share of the narrative sub-score taken by token-level social volume
+  dev_selling_now_penalty: 20   # deployer sold in the last 15 minutes
+  serial_launcher_7d: 5    # deployer launched this many tokens in 7 days
+  serial_launcher_penalty: 15
+  graduation_window_h: 6
+  vol_accel_good: 2.0      # 5m volume x12 vs 1h (or 1h x6 vs 6h) for full acceleration credit (momentum)
+  net_sol_good: 20         # net SOL bought in 15m on pump.fun for full order-flow credit
+  whale_buy_sol: 5         # a single trade this size or larger counts as a whale (also triggers instant re-scoring)
+  whale_sells_bad: 2       # this many whale sells in 15m -> safety penalty
+  churn_bad_trades_per_wallet: 6   # trades per wallet in 15m above this looks like wash/bot volume
+  churn_min_trades: 30
+  extended_h1_pct: 300     # already up this much in 1h -> chasing risk
+  negative_news_penalty: 30        # headline naming the token with delist/exploit/hack/rug/lawsuit words
+  negative_sentiment: -0.3         # narrative sentiment (-1..1) at or below this -> narrative penalty
 
 smart_money:
   wallet_min_score: 60     # tracked wallets above this count as smart money
@@ -99,3 +127,17 @@ alerts:
   exits: true
   rug: true
   cooldown_mutes_buy: true
+
+leaderboard:        # top wallets ranked by realized return on observed pump.fun trades (Smart money → Top wallets)
+  size: 1000               # wallets ranked per period (1d / 7d / 30d)
+  follow: 1000             # top wallets streamed live (PumpPortal account trades)
+  min_basis_sol: {1d: 0.5, 7d: 2, 30d: 5}   # cost basis closed in the window to qualify
+  min_closes: {1d: 2, 7d: 3, 30d: 5}        # exits in the window to qualify
+  bot_trades_per_day: 400  # above this the wallet is flagged as a bot and hidden by default
+  refresh_s: 300
+  flash:                   # every followed top-wallet trade flashes in the UI; these limit phone/Telegram pushes
+    push: true
+    push_min_sol: 1.0
+    push_max_per_min: 12
+    cluster_wallets: 3     # this many top wallets buying one coin within cluster_minutes = full-screen FLASH
+    cluster_minutes: 10
