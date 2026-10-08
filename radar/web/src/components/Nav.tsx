@@ -13,6 +13,7 @@ export const LINKS = [
   { href: '/trending', label: 'Trending', key: 't', icon: 'trending', group: 'Discover' },
   { href: '/launching', label: 'Launching', key: 'l', icon: 'rocket', group: 'Discover' },
   { href: '/narratives', label: 'Narratives', key: 'n', icon: 'narrative', group: 'Discover' },
+  { href: '/news', label: 'News', key: 'e', icon: 'news', group: 'Discover' },
   { href: '/signals', label: 'Signals', key: 's', icon: 'signal', group: 'Intelligence' },
   { href: '/social', label: 'Social', key: 'f', icon: 'social', group: 'Intelligence' },
   { href: '/smart-money', label: 'Smart money', key: 'w', icon: 'wallet', group: 'Intelligence' },
