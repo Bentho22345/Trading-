@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Any
 
-from . import scoring
+from . import drivers, scoring
 from .hub import hub
 
 log = logging.getLogger("radar.signals")
@@ -50,7 +50,8 @@ class SignalEngine:
         return {"token": tok, "safety": safety, "narrative": await self.social.narrative_for_token(addr),
                 "flow": await self.flow(addr, tok),
                 "smart_money": await self.smart.input_for(addr), "regime": await self.regime(),
-                "dev": await self.social.deployer_history((tok or {}).get("deployer")), "ticks": ticks[-60:]}
+                "dev": await self.social.deployer_history((tok or {}).get("deployer")),
+                "drivers": await drivers.collect(self.db, addr, tok, ticks), "ticks": ticks[-60:]}
 
     async def flow(self, addr: str, tok: dict[str, Any] | None) -> dict[str, Any]:
         """On-chain flow features from Radar's own pump.fun trade capture + holder snapshots."""

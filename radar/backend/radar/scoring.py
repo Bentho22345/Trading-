@@ -12,8 +12,22 @@ def _clamp(x: float, lo: float = 0, hi: float = 100) -> float:
     return max(lo, min(hi, x))
 
 
+# price-driver thresholds; defaults keep older configs and DB overrides working
+DRIVER_DEFAULTS = {
+    "liq_mcap_good": 0.10, "liq_mcap_thin": 0.03, "liq_removed_bad_pct": 20,
+    "max_holder_bad_pct": 5, "top10_rise_bad_pts": 5,
+    "mentions_good_per_h": 30, "mention_accel_good": 2.0, "social_blend": 0.25,
+    "dev_selling_now_penalty": 20, "serial_launcher_7d": 5, "serial_launcher_penalty": 15,
+    "graduation_window_h": 6,
+}
+
+
+def _drv(c: dict[str, Any]) -> dict[str, Any]:
+    return {**DRIVER_DEFAULTS, **(c.get("drivers") or {})}
+
+
 def momentum_score(t: dict[str, Any], ticks: list[dict[str, Any]], c: dict[str, Any], why: list[str],
-                   flow: dict[str, Any] | None = None) -> float | None:
+                   flow: dict[str, Any] | None = None, drivers: dict[str, Any] | None = None) -> float | None:
     if t.get("price_usd") is None:
         return None
     m = c["momentum"]
@@ -65,11 +79,17 @@ def momentum_score(t: dict[str, Any], ticks: list[dict[str, Any]], c: dict[str, 
             why.append(f"holders up {hg:.0f}% in the last hour")
         elif hg < 0:
             why.append(f"holder count shrinking ({hg:.0f}% in 1h)")
+    d, k = drivers or {}, _drv(c)
+    lm = d.get("liq_mcap_ratio")
+    if lm is not None:
+        parts.append(_clamp(lm / k["liq_mcap_good"] * 100))
+        if lm >= k["liq_mcap_good"]:
+            why.append(f"deep liquidity ({lm * 100:.0f}% of market cap)")
     return sum(parts) / len(parts) if parts else None
 
 
 def safety_score(t: dict[str, Any], s: dict[str, Any] | None, c: dict[str, Any], why: list[str],
-                 flow: dict[str, Any] | None = None) -> float | None:
+                 flow: dict[str, Any] | None = None, drivers: dict[str, Any] | None = None) -> float | None:
     if not s:
         return None
     k = c["safety"]
@@ -106,10 +126,65 @@ def safety_score(t: dict[str, Any], s: dict[str, Any] | None, c: dict[str, Any],
     if t.get("boost_amount"):
         score -= k["boost_penalty"]
         why.append(f"paid DexScreener boosts active ({t['boost_amount']}), often exit liquidity")
+    d, kd = drivers or {}, _drv(c)
+    lm = d.get("liq_mcap_ratio")
+    if lm is not None and lm < kd["liq_mcap_thin"]:
+        score -= 15
+        why.append(f"thin liquidity: only {lm * 100:.1f}% of market cap, easy to move either way")
+    lr = d.get("liq_removed_pct_1h")
+    if lr is not None and lr >= kd["liq_removed_bad_pct"]:
+        score -= 30
+        why.append(f"{lr:.0f}% of pool liquidity withdrawn in the last hour (beyond the price move)")
+    mh = d.get("max_holder_pct")
+    if mh is not None and mh > kd["max_holder_bad_pct"]:
+        score -= (mh - kd["max_holder_bad_pct"]) * 2
+        why.append(f"one wallet holds {mh:.1f}% of supply")
+    tc = d.get("top10_chg_pts_1h")
+    if tc is not None and tc >= kd["top10_rise_bad_pts"]:
+        score -= 10
+        why.append(f"supply concentrating: top-10 share up {tc:.1f} pts in 1h")
+    if d.get("dev_sells_15m"):
+        score -= kd["dev_selling_now_penalty"]
+        why.append(f"dev wallet sold in the last 15m ({d['dev_sells_15m']} sells, {d.get('dev_sold_sol_15m') or 0:.2f} SOL)")
+    dl = d.get("deployer_launches_7d")
+    if dl is not None and dl >= kd["serial_launcher_7d"]:
+        score -= kd["serial_launcher_penalty"]
+        why.append(f"serial launcher: deployer created {dl} tokens in 7 days")
     return _clamp(score)
 
 
-def narrative_score(n: dict[str, Any] | None, c: dict[str, Any], why: list[str]) -> float | None:
+def social_volume_score(d: dict[str, Any] | None, c: dict[str, Any], why: list[str]) -> float | None:
+    """Posts naming this token's CA or $TICKER: volume this hour, and acceleration vs the hour before."""
+    d = d or {}
+    m = d.get("mentions_1h")
+    if m is None or (not m and not d.get("mentions_prev_1h")):
+        return None
+    k = _drv(c)
+    vol = _clamp(m / k["mentions_good_per_h"] * 100)
+    prev = d.get("mentions_prev_1h") or 0
+    accel = m / prev if prev else (k["mention_accel_good"] if m >= 3 else 1.0)
+    acc = _clamp(50 + (accel - 1) / (k["mention_accel_good"] - 1) * 50)
+    if m >= 3 and accel >= k["mention_accel_good"]:
+        why.append(f"social volume accelerating: {m:.0f} posts on this token in 1h ({accel:.1f}x the prior hour, "
+                   f"{d.get('mention_authors_1h') or 0} authors)")
+    elif prev >= 3 and accel < 0.5:
+        why.append(f"social volume fading ({m:.0f} posts vs {prev:.0f} the hour before)")
+    return 0.6 * vol + 0.4 * acc
+
+
+def narrative_score(n: dict[str, Any] | None, c: dict[str, Any], why: list[str],
+                    drivers: dict[str, Any] | None = None) -> float | None:
+    soc = social_volume_score(drivers, c, why)
+    nar = _narrative_only(n, c, why)
+    if nar is None or soc is None:
+        return nar if soc is None else soc
+    if n and n.get("is_likely_fake"):
+        return nar
+    b = _drv(c)["social_blend"]
+    return _clamp((1 - b) * nar + b * soc, -40, 100)
+
+
+def _narrative_only(n: dict[str, Any] | None, c: dict[str, Any], why: list[str]) -> float | None:
     if not n:
         return None
     k = c["narrative"]
@@ -126,22 +201,37 @@ def narrative_score(n: dict[str, Any] | None, c: dict[str, Any], why: list[str])
     return _clamp(0.4 * stage + 0.3 * vel + 0.2 * spread + 0.1 * reach - bot_pen, -40, 100)
 
 
-def catalyst_score(t: dict[str, Any], n: dict[str, Any] | None, c: dict[str, Any], why: list[str]) -> float | None:
+def catalyst_score(t: dict[str, Any], n: dict[str, Any] | None, c: dict[str, Any], why: list[str],
+                   drivers: dict[str, Any] | None = None) -> float | None:
     k = c["catalyst"]
     best = None
+    d, kd = drivers or {}, _drv(c)
+    # token-specific listing events: these name this coin, so they outrank narrative-level flags of equal weight
+    listings = []
+    if d.get("cex_listing"):
+        listings.append((k.get("cex_listing", 80), f"exchange listing: \"{d['cex_listing'][:90]}\""))
+    if d.get("coingecko_trending_rank"):
+        listings.append((k.get("coingecko_trending", 45), f"#{d['coingecko_trending_rank']} on CoinGecko trending"))
+    g = d.get("graduated_h_ago")
+    if g is not None and g <= kd["graduation_window_h"]:
+        listings.append((k.get("graduation", 40), f"graduated from pump.fun to a DEX pool {g:.1f}h ago"))
+    for pts, msg in listings:
+        why.append(msg)
+    if listings:
+        best = max(p for p, _ in listings)
     if n:
+        msg, pts = "", None
         if n.get("vip_ca_match"):
-            best, msg = k["vip_ca"], "contract address posted by a VIP/official account"
+            pts, msg = k["vip_ca"], "contract address posted by a VIP/official account"
         elif n.get("vip_mention"):
-            best, msg = k["vip_mention"], "a VIP account is talking about this narrative"
+            pts, msg = k["vip_mention"], "a VIP account is talking about this narrative"
         elif n.get("exchange_listing"):
-            best, msg = k["exchange_listing"], "exchange-listing news"
+            pts, msg = k["exchange_listing"], "exchange-listing news"
         elif n.get("breaking_news"):
-            best, msg = k["breaking_news"], "breaking-news catalyst"
-        else:
-            msg = ""
+            pts, msg = k["breaking_news"], "breaking-news catalyst"
         if msg:
             why.append(msg)
+            best = max(best or 0, pts)
     if best is None and t.get("boost_amount"):
         best = k["paid_promo"]
     return best
@@ -183,9 +273,13 @@ def regime_multiplier(r: dict[str, Any] | None, c: dict[str, Any], why: list[str
 
 
 def vetoes(t: dict[str, Any], s: dict[str, Any] | None, n: dict[str, Any] | None, dev: dict[str, Any] | None,
-           c: dict[str, Any]) -> list[str]:
+           c: dict[str, Any], drivers: dict[str, Any] | None = None) -> list[str]:
     v = c["vetoes"]
     out = []
+    lr = (drivers or {}).get("liq_removed_pct_1h")
+    mx = v.get("max_liq_removed_pct_1h")
+    if lr is not None and mx is not None and lr >= mx:
+        out.append(f"{lr:.0f}% of liquidity withdrawn in 1h (>= {mx}%)")
     if s:
         if v["mint_authority_active"] and s.get("mint_authority"):
             out.append("Mint authority is active")
@@ -232,12 +326,13 @@ def evaluate(inp: dict[str, Any], c: dict[str, Any], risk: dict[str, Any], now: 
     t, s, n = inp.get("token") or {}, inp.get("safety"), inp.get("narrative")
     why: list[str] = []
     risks: list[str] = []
+    d = inp.get("drivers")
     subs = {
-        "narrative": narrative_score(n, c, why),
-        "catalyst": catalyst_score(t, n, c, why),
-        "momentum": momentum_score(t, inp.get("ticks") or [], c, why, inp.get("flow")),
+        "narrative": narrative_score(n, c, why, d),
+        "catalyst": catalyst_score(t, n, c, why, d),
+        "momentum": momentum_score(t, inp.get("ticks") or [], c, why, inp.get("flow"), d),
         "smart_money": smart_money_score(inp.get("smart_money"), c, why),
-        "safety": safety_score(t, s, c, risks, inp.get("flow")),
+        "safety": safety_score(t, s, c, risks, inp.get("flow"), d),
     }
     w = c["weights"]
     total_w = sum(w.values())
@@ -250,7 +345,7 @@ def evaluate(inp: dict[str, Any], c: dict[str, Any], risk: dict[str, Any], now: 
     k = c["confidence"]
     confidence = "high" if present >= k["high_min_inputs"] else "medium" if present >= k["medium_min_inputs"] else "low"
 
-    vs = vetoes(t, s, n, inp.get("dev"), c)
+    vs = vetoes(t, s, n, inp.get("dev"), c, d)
     sv = subs["safety"]
     grade = "F" if vs else next(g for th, g in GRADES if (sv if sv is not None else 30) >= th)
     vd = c["verdict"]
