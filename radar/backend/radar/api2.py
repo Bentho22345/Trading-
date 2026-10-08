@@ -329,8 +329,9 @@ async def clear_cooldown() -> dict[str, bool]:
 async def holdings() -> dict[str, Any]:
     addr = (await S.connectors.values("wallet")).get("address")
     if not addr:
-        raise HTTPException(409, "Add your public wallet address on Connectors")
+        raise HTTPException(409, "Connect a wallet or add your public address on Connectors")
     rows = await S.tracker.extra.holdings(addr)
+    sol = await S.tracker.extra.sol_balance(addr)
     mints = [r["mint"] for r in rows]
     for m in mints:
         await S.tracker._ensure_token(m, "solana", None, None, None, "wallet")
@@ -340,11 +341,17 @@ async def holdings() -> dict[str, Any]:
     out = []
     for r in rows:
         tok = await S.tracker.token_summary(r["mint"]) or {}
-        out.append({**r, "symbol": tok.get("symbol"), "price_usd": tok.get("price_usd"), "as_of": tok.get("as_of"),
+        out.append({**r, "symbol": tok.get("symbol"), "name": tok.get("name"), "image": tok.get("image"),
+                    "price_usd": tok.get("price_usd"), "chg_h24": tok.get("chg_h24"), "as_of": tok.get("as_of"),
                     "value_usd": round(r["amount"] * tok["price_usd"], 2) if tok.get("price_usd") else None,
                     "mint_authority": tok.get("mint_authority"), "freeze_authority": tok.get("freeze_authority"),
-                    "liquidity_usd": tok.get("liquidity_usd")})
-    return {"address": addr, "holdings": sorted(out, key=lambda x: -(x["value_usd"] or 0)), "as_of": time.time()}
+                    "liquidity_usd": tok.get("liquidity_usd"), "rug_score": tok.get("rug_score"), "rugged": tok.get("rugged"),
+                    "safety_as_of": tok.get("safety_as_of"), "lp_locked_pct": tok.get("lp_locked_pct"), "top10_pct": tok.get("top10_pct")})
+    sol_usd = S.tracker.sol_usd or None
+    sol_value = round(sol * sol_usd, 2) if sol is not None and sol_usd else None
+    total = (sol_value or 0) + sum(h["value_usd"] or 0 for h in out)
+    return {"address": addr, "sol": sol, "sol_usd": sol_usd, "sol_value_usd": sol_value, "total_usd": round(total, 2),
+            "holdings": sorted(out, key=lambda x: -(x["value_usd"] or 0)), "as_of": time.time()}
 
 
 # ---------------- rotation / brief / ask ----------------
