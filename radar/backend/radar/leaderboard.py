@@ -53,6 +53,7 @@ def _cfg(cfg: Any) -> dict[str, Any]:
 class Leaderboard:
     def __init__(self, db: Any, cfg: Any, smart: Any = None) -> None:
         self.db, self.cfg, self.smart = db, cfg, smart
+        self.sources: Any = None  # TopTraders, when external leaderboards are wired in
         self.queue: list[dict[str, Any]] = []
         self.followed: set[str] = set()
         self.seen: dict[str, None] = {}  # signatures already applied (account + token subscriptions can both deliver a trade)
@@ -222,9 +223,13 @@ class Leaderboard:
         for w, per in ranks.items():
             period, (rank, roi) = min(per.items(), key=lambda kv: kv[1][0])
             meta[w] = {"rank": rank, "period": period, "roi": roi}
-        best = sorted(meta, key=lambda w: meta[w]["rank"])[:n]
-        self.followed = set(best)
+        ext = await self.sources.external_follow() if self.sources is not None else {}
+        best = [w for w in sorted(meta, key=lambda w: meta[w]["rank"]) if w not in ext][: max(0, n - len(ext))]
         follow = {w: meta[w] for w in best}
+        for w, e in ext.items():  # Birdeye's leaders: rank on their list, P&L in USD instead of a Radar return
+            follow[w] = meta.get(w) or {"rank": e["rank"], "period": f"{e['source']} {e['period']}", "roi": None,
+                                        "pnl_usd": e.get("pnl_usd")}
+        self.followed = set(follow)
         now = time.time()
         # a wallets row lets chart markers / wallet-trade queries join them; never overrides a smart or KOL wallet's kind
         await self.db.many(
@@ -267,6 +272,19 @@ class Leaderboard:
             await asyncio.sleep(5)
 
     # ---------- reads ----------
+    async def external(self, source: str, period: str, limit: int, offset: int) -> dict[str, Any]:
+        rows = await self.db.all(
+            "SELECT e.*, e.wallet, w.label, w.kind, w.tracked, b.roi radar_roi_30d, b.realized_sol radar_realized_30d, "
+            "t.symbol token_symbol FROM wallet_external e LEFT JOIN wallets w ON w.address=e.wallet "
+            "LEFT JOIN wallet_board b ON b.wallet=e.wallet AND b.period='30d' LEFT JOIN tokens t ON t.address=e.token "
+            "WHERE e.source=? AND e.period=? ORDER BY e.rank LIMIT ? OFFSET ?", (source, period, limit, offset))
+        for r in rows:
+            r["followed"] = r["wallet"] in self.followed
+        total = await self.db.one("SELECT COUNT(*) n, MAX(as_of) as_of FROM wallet_external WHERE source=? AND period=?",
+                                  (source, period))
+        return {"source": source, "period": period, "rows": rows, "total": total["n"], "as_of": total["as_of"],
+                **(await self.coverage())}
+
     async def board(self, period: str = "1d", sort: str = "roi", limit: int = 100, offset: int = 0,
                     include_bots: bool = False) -> dict[str, Any]:
         if period not in PERIODS:
@@ -278,8 +296,14 @@ class Leaderboard:
             f"SELECT b.*, b.{col} AS rank, w.label, w.kind, w.handle, w.tracked FROM wallet_board b "
             f"LEFT JOIN wallets w ON w.address=b.wallet WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
             (period, limit, offset))
+        ext: dict[str, list[str]] = {}
+        if rows:
+            for e in await self.db.all(f"SELECT wallet, source, period, rank FROM wallet_external WHERE wallet IN "
+                                       f"({','.join('?' * len(rows))})", [r["wallet"] for r in rows]):
+                ext.setdefault(e["wallet"], []).append(f"{e['source']} {e['period']} #{e['rank']}")
         for r in rows:
             r["followed"] = r["wallet"] in self.followed
+            r["external"] = ext.get(r["wallet"], [])
         total = await self.db.one(f"SELECT COUNT(*) n, MAX(as_of) as_of FROM wallet_board b WHERE {where}", (period,))
         return {"period": period, "sort": sort, "rows": rows, "total": total["n"], "as_of": total["as_of"],
                 **(await self.coverage())}
@@ -287,8 +311,9 @@ class Leaderboard:
     async def coverage(self) -> dict[str, Any]:
         since = await self.db.one("SELECT value FROM kv WHERE key='leaderboard:since'")
         seen = await self.db.one("SELECT COUNT(DISTINCT wallet) n FROM wallet_pnl WHERE span=?", (DAY,))
+        ext = await self.db.all("SELECT source, period, COUNT(*) n, MAX(as_of) as_of FROM wallet_external GROUP BY source, period")
         return {"observing_since": json.loads(since["value"]) if since else None, "wallets_seen": seen["n"],
-                "followed": len(self.followed)}
+                "followed": len(self.followed), "external": ext}
 
     async def wallet(self, address: str) -> dict[str, Any]:
         days = await self.db.all("SELECT bucket ts, realized_sol, basis_sol, bought_sol, sold_sol, unmatched_sol, trades, wins, "
