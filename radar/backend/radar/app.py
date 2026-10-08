@@ -11,7 +11,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi import Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .adapters.http import UpstreamError
@@ -152,7 +153,56 @@ async def watch_rules(rows: list[dict[str, Any]]) -> None:
 
 
 app = FastAPI(title="Memecoin Radar", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"],
+                   allow_credentials=True)
+
+
+@app.middleware("http")
+async def auth_gate(request: Request, call_next):
+    from . import auth
+    if auth.needs_auth(request) and not auth.is_authed(dict(request.cookies)):
+        return JSONResponse({"detail": "login required"}, status_code=401)
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    return resp
+
+
+class LoginBody(BaseModel):
+    password: str
+
+
+@app.post("/api/login")
+async def login(body: LoginBody, request: Request, response: Response) -> dict[str, Any]:
+    from . import auth
+    if not auth.password():
+        return {"ok": True, "auth": False}
+    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")).split(",")[0].strip()
+    if not auth.check_password(body.password, ip):
+        raise HTTPException(401, "Wrong password (or too many attempts — wait a minute)")
+    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    response.set_cookie(auth.COOKIE, auth.session_token(), max_age=30 * 86400, httponly=True, secure=secure, samesite="lax")
+    return {"ok": True, "auth": True}
+
+
+@app.post("/api/logout")
+async def logout(response: Response) -> dict[str, bool]:
+    from . import auth
+    response.delete_cookie(auth.COOKIE)
+    return {"ok": True}
+
+
+@app.get("/api/session")
+async def session(request: Request) -> dict[str, bool]:
+    from . import auth
+    return {"auth_required": bool(auth.password()), "authed": auth.is_authed(dict(request.cookies))}
+
+
+@app.get("/api/healthz")
+async def healthz() -> dict[str, Any]:
+    """Unauthenticated liveness probe for Render / Docker (no data exposed)."""
+    return {"ok": True, "uptime_s": round(time.time() - STARTED)}
 
 
 # ---------------- health ----------------
@@ -454,6 +504,10 @@ app.include_router(_router2)
 # ---------------- live socket ----------------
 @app.websocket("/ws")
 async def ws(socket: WebSocket) -> None:
+    from . import auth
+    if not auth.is_authed(dict(socket.cookies)):
+        await socket.close(code=4401)
+        return
     await hub.connect(socket)
     try:
         while True:

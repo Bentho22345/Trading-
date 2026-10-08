@@ -34,7 +34,9 @@ class SignalEngine:
             r = rows.get(k)
             return json.loads(r["data_json"] or "{}").get("chg_24h") if r and time.time() - r["as_of"] < 600 else None
         fg = rows.get("fear_greed")
+        meme = rows.get("meme_category")
         out = {"btc_chg_24h": chg("px_BTC"), "sol_chg_24h": chg("px_SOL"),
+               "meme_chg_24h": json.loads(meme["data_json"] or "{}").get("chg_24h") if meme and time.time() - meme["as_of"] < 3600 else None,
                "fear_greed": fg["value"] if fg and time.time() - fg["as_of"] < 2 * 86400 else None}
         return out if any(v is not None for v in out.values()) else None
 
@@ -46,8 +48,32 @@ class SignalEngine:
         ticks = await self.db.all("SELECT ts, price_usd, liquidity_usd, market_cap FROM price_ticks WHERE token_address=? "
                                   "AND ts > ? ORDER BY ts", (addr, time.time() - 3600))
         return {"token": tok, "safety": safety, "narrative": await self.social.narrative_for_token(addr),
+                "flow": await self.flow(addr, tok),
                 "smart_money": await self.smart.input_for(addr), "regime": await self.regime(),
                 "dev": await self.social.deployer_history((tok or {}).get("deployer")), "ticks": ticks[-60:]}
+
+    async def flow(self, addr: str, tok: dict[str, Any] | None) -> dict[str, Any]:
+        """On-chain flow features from Radar's own pump.fun trade capture + holder snapshots."""
+        now = time.time()
+        t = await self.db.one("SELECT deployer, launched_at, dev_initial_buy_pct, source FROM tokens WHERE address=?", (addr,)) or {}
+        ub = await self.db.one("SELECT COUNT(DISTINCT trader) n FROM pump_trades WHERE mint=? AND side='buy' AND ts > ?", (addr, now - 300))
+        out: dict[str, Any] = {"unique_buyers_5m": ub["n"] if ub else None, "dev_initial_buy_pct": t.get("dev_initial_buy_pct")}
+        if t.get("deployer"):
+            d = await self.db.one("SELECT COALESCE(SUM(CASE WHEN side='buy' THEN tokens END),0) b, COALESCE(SUM(CASE WHEN side='sell' THEN tokens END),0) s "
+                                  "FROM pump_trades WHERE mint=? AND trader=?", (addr, t["deployer"]))
+            bought = (d["b"] or 0) + (t.get("dev_initial_buy_pct") or 0) / 100 * 1e9
+            out["dev_sold_pct"] = round(min(100, (d["s"] or 0) / bought * 100), 1) if bought else None
+        if t.get("launched_at") and t.get("source") == "pumpportal":
+            early = await self.db.one("SELECT COALESCE(SUM(tokens),0) amt, COUNT(DISTINCT trader) w, COUNT(*) n FROM pump_trades WHERE mint=? "
+                                      "AND side='buy' AND ts <= ? AND trader != COALESCE(?, '')", (addr, t["launched_at"] + 5, t.get("deployer")))
+            if early and early["n"]:
+                out["sniper_supply_pct"] = round((early["amt"] or 0) / 1e9 * 100, 2)
+                out["sniper_wallets"] = early["w"]
+        hs = await self.db.all("SELECT ts, holders FROM holder_snapshots WHERE token_address=? AND ts > ? AND holders IS NOT NULL ORDER BY ts",
+                               (addr, now - 3600))
+        if len(hs) >= 2 and hs[0]["holders"]:
+            out["holder_growth_pct_1h"] = round((hs[-1]["holders"] / hs[0]["holders"] - 1) * 100, 1)
+        return out
 
     async def evaluate(self, addr: str, force: bool = False) -> dict[str, Any] | None:
         inp = await self.inputs(addr)

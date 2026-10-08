@@ -8,3 +8,4 @@ web/.next/
 web/out/
 web/next-env.d.ts
 web/*.tsbuildinfo
+.sandbox-ca.crt

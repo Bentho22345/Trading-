@@ -5,7 +5,18 @@ A personal, real-time memecoin intelligence terminal. It catches new launches, g
 > ⚠ **Signals are probabilistic. Most memecoins go to zero. Only risk money you can lose.**
 > Radar is a decision tool, not a bot. It never asks for or holds private keys or seed phrases, and it never places trades. Wallet tracking is read-only, from a public address.
 
-## Run it (one command)
+## Deploy to Render (always-on, ~5 minutes)
+
+1. Push this repo to GitHub (already done if you're reading this there).
+2. In Render: **New → Blueprint**, then pick this repo and branch. Render reads `render.yaml` at the repo root. It defines `memecoin-radar` (Docker, Starter plan, 2 GB persistent disk at `/app/data`) next to the existing PULSE service. Delete the PULSE block if you don't want it.
+3. When prompted, set **`RADAR_PASSWORD`** (required, because the URL is public). The other prompted keys are optional; leave them blank and add them later on the Connectors page.
+4. Click **Apply**. The first build takes ~3–4 minutes. Render health-checks `/api/healthz`.
+5. Open `https://memecoin-radar-xxxx.onrender.com`, log in, then go to **Connectors** and paste your keys (X, Anthropic, Telegram…). Keys are encrypted with the `RADAR_SECRET` that Render generated.
+6. Phone: open the URL in Safari/Chrome → *Add to Home Screen* (it installs as an app). Add an ntfy topic or Telegram bot for push alerts.
+
+Why Starter rather than Free: Radar holds live WebSockets and polls continuously, and keeps its database on a disk. Free instances sleep after 15 minutes and can't attach disks. With a disk attached Render deploys with a few seconds of downtime, which is fine for a personal tool. To deploy anywhere else (Railway, Fly, a VPS), run the same Docker image with a volume on `/app/data`, plus `RADAR_PASSWORD`.
+
+## Run it locally (one command)
 
 ```bash
 cd radar
@@ -89,7 +100,7 @@ Tests: `cd backend && .venv/bin/python -m pytest`
 
 ## Security note
 
-The app has no login. Docker binds it to `127.0.0.1` only. If you host it remotely, put it behind authentication (for example Cloudflare Access or Tailscale). Saved keys are encrypted with AES-256-GCM using `RADAR_SECRET` or an auto-generated `data/secret.key`.
+Set `RADAR_PASSWORD` and the whole API, live socket and UI data sit behind a login (HttpOnly session cookie, 30 days; 10 attempts per minute per IP). Without it, the app is open, so docker-compose binds to `127.0.0.1` only. The only unauthenticated endpoint is `/api/healthz` (liveness, no data). Saved keys are encrypted with AES-256-GCM using `RADAR_SECRET` or an auto-generated `data/secret.key`.
 
 ## Status
 

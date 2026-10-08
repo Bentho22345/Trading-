@@ -13,7 +13,7 @@ const listeners = new Set<Listener>();
 const statusListeners = new Set<(c: boolean) => void>();
 
 function connect() {
-  if (typeof window === 'undefined' || socket) return;
+  if (typeof window === 'undefined' || socket || window.location.pathname === '/login') return;
   const ws = new WebSocket(wsUrl());
   socket = ws;
   ws.onopen = () => {
@@ -27,8 +27,14 @@ function connect() {
       listeners.forEach((f) => f(m));
     } catch { /* ignore */ }
   };
-  ws.onclose = () => {
+  ws.onclose = (e) => {
     socket = null;
+    if (!connected && e.code !== 1000) {
+      // handshake refused: probably logged out — let the session endpoint decide
+      fetch('/api/session', { credentials: 'same-origin' }).then((r) => r.json()).then((s) => {
+        if (s.auth_required && !s.authed && location.pathname !== '/login') location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+      }).catch(() => {});
+    }
     connected = false;
     statusListeners.forEach((f) => f(false));
     setTimeout(connect, 1500);

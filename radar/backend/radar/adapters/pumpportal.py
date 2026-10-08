@@ -69,9 +69,9 @@ class PumpPortal(Stream):
         if add:
             await self.send({"method": "subscribeAccountTrade", "keys": sorted(add)})
 
-    async def set_token_trades(self, mints: set[str]) -> None:
+    async def set_token_trades(self, mints: Any) -> None:
         """Diff-update trade subscriptions, capped by config."""
-        mints = set(sorted(mints)[: settings.max_trade_subscriptions])
+        mints = set(list(dict.fromkeys(mints))[: settings.max_trade_subscriptions])  # keep caller's priority order
         add, drop = mints - self.token_subs, self.token_subs - mints
         self.token_subs = mints
         if self.ws is None:

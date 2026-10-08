@@ -63,7 +63,8 @@ class Tracker:
         self.rug_pending: set[str] = set()
         self.tasks: list[asyncio.Task] = []
         self.extra = Extra()
-        self.flash_tokens: dict[str, float] = {}       # address -> until (max refresh rate during FLASH)
+        self.flash_tokens: dict[str, float] = {}
+        self.launch_watch: dict[str, float] = {}       # mint -> until (first-90s trade capture)       # address -> until (max refresh rate during FLASH)
         # hooks wired by the app: trade(t), tokens(rows), safety(rep), social(event), custom(item)
         self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": []}
         self.gecko_networks = [n.strip() for n in __import__("os").environ.get("GECKO_NETWORKS", "solana,base,bsc,eth").split(",") if n.strip()]
@@ -125,11 +126,20 @@ class Tracker:
         mint = m.get("mint")
         if not mint:
             return
+        try:  # pump.fun supply is 1B tokens; initialBuy is the dev's token amount in the create tx
+            dev_pct = round(float(m.get("initialBuy") or 0) / 1e9 * 100, 2)
+        except (TypeError, ValueError):
+            dev_pct = None
         row = {"address": mint, "chain": "solana", "name": m.get("name"), "symbol": m.get("symbol"),
                "uri": m.get("uri"), "deployer": m.get("traderPublicKey"), "source": "pumpportal",
                "launched_at": now, "first_seen": now, "pump_mcap_sol": m.get("marketCapSol"),
-               "pump_mcap_as_of": now, "updated": now}
+               "pump_mcap_as_of": now, "updated": now, "dev_initial_buy_pct": dev_pct}
         await self.db.upsert("tokens", row, "address")
+        # watch every launch's first 90s of trades (sniper / bundle detection), on the one shared socket
+        self.launch_watch[mint] = now + 90
+        if self.pump.ws is not None and mint not in self.pump.token_subs:
+            self.pump.token_subs.add(mint)
+            await self.pump.send({"method": "subscribeTokenTrade", "keys": [mint]})
         await hub.publish("launch", {**row, "initial_buy_sol": m.get("solAmount"), "pool": m.get("pool"),
                                      "mcap_usd": self._usd(m.get("marketCapSol")), "signature": m.get("signature")})
 
@@ -433,6 +443,8 @@ class Tracker:
                         await self.db.upsert("safety_reports", rep, "token_address")
                         await hub.publish("safety", {**rep, "risks": json.loads(rep["risks_json"])})
                         await self._hook("safety", rep)
+                        await self.db.exec("INSERT INTO holder_snapshots (token_address, ts, holders, top10_pct, source) VALUES (?,?,?,?,?)",
+                                           (mint, rep["as_of"], rep.get("holders"), rep.get("top10_pct"), rep.get("source")))
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -443,14 +455,17 @@ class Tracker:
     async def trade_subs_loop(self) -> None:
         while True:
             try:
-                want: list[str] = list(hub.viewed_tokens())
+                now = time.time()
+                self.launch_watch = {k: v for k, v in self.launch_watch.items() if v > now}
+                want: list[str] = list(hub.viewed_tokens()) + list(self.flash_tokens)
+                want += sorted(self.launch_watch, key=lambda k: -self.launch_watch[k])
                 want += [r["address"] for r in await self.db.all("SELECT address FROM watchlist")]
                 want += [r["address"] for r in await self.db.all(
                     "SELECT t.address FROM tokens t LEFT JOIN pairs p ON p.pair_address=t.best_pair "
                     "WHERE t.source='pumpportal' AND (t.graduated_at > ? OR t.first_seen > ?) "
                     "ORDER BY COALESCE(p.vol_m5,0) DESC LIMIT ?", (time.time() - 3600, time.time() - 600,
                                                                   settings.max_trade_subscriptions))]
-                await self.pump.set_token_trades(set(dict.fromkeys(want).keys()))
+                await self.pump.set_token_trades(list(dict.fromkeys(want)))
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -463,6 +478,10 @@ class Tracker:
         await self.db.exec("DELETE FROM pump_trades WHERE ts < ?", (cut,))
         await self.db.exec("DELETE FROM api_usage WHERE ts < ?", (cut,))
         await self.db.exec("DELETE FROM news WHERE fetched < ?", (cut,))
+        for table, col in (("social_events", "ts"), ("wallet_trades", "ts"), ("alerts", "ts"), ("holder_snapshots", "ts")):
+            await self.db.exec(f"DELETE FROM {table} WHERE {col} < ?", (cut,))
+        await self.db.exec("DELETE FROM narratives WHERE last_seen < ?", (cut,))
+        await self.db.exec("DELETE FROM narrative_tokens WHERE narrative_id NOT IN (SELECT id FROM narratives)")
         await self.db.exec("DELETE FROM tokens WHERE first_seen < ? AND best_pair IS NULL AND address NOT IN (SELECT address FROM watchlist)",
                            (time.time() - 24 * 3600,))
 

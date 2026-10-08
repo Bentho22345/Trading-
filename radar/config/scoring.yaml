@@ -30,12 +30,16 @@ momentum:
   buy_sell_good: 1.4       # 5m buys/sells ratio for full credit
   min_txns_5m: 20
   liquidity_good_usd: 75000
+  unique_buyers_per_min_good: 10
 
 safety:
   lp_locked_good_pct: 95
   top10_good_pct: 15
   insiders_bad: 3
   boost_penalty: 10        # points off safety when paid boosts are active (often exit liquidity)
+  dev_buy_bad_pct: 10      # dev bought more than this % of supply in the create tx
+  dev_sold_bad_pct: 50     # dev has sold this % of their tokens
+  sniper_bad_pct: 15       # % of supply bought by non-dev wallets in the first 5 seconds (bundles/snipers)
 
 narrative:
   stage_scores: { birth: 55, ignition: 100, peak: 60, fading: -40 }
@@ -60,6 +64,7 @@ regime:            # multiplier applied to the final score
   btc_down_24h_pct: -3     # below -> risk-off
   sol_down_24h_pct: -5
   fear_greed_low: 25
+  meme_down_24h_pct: -8    # meme sector market cap 24h change below this -> risk-off
   risk_off_multiplier: 0.8
   risk_on_multiplier: 1.05
 

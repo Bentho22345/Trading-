@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useConnected } from '@/lib/live';
 
 const LINKS = [
@@ -24,6 +24,7 @@ export function Nav() {
   const router = useRouter();
   const live = useConnected();
   const [q, setQ] = useState('');
+  if (path === '/login') return null;
   return (
     <nav className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-line bg-bg/95 px-3 py-2 backdrop-blur">
       <Link href="/" className="flex items-center gap-2 font-bold tracking-tight">
@@ -45,6 +46,7 @@ export function Nav() {
       <span className={`flex items-center gap-1 text-[11px] ${live ? 'text-up' : 'text-down'}`} title="Live socket to the Radar backend">
         <span className={`h-2 w-2 rounded-full ${live ? 'bg-up animate-pulse' : 'bg-down'}`} />{live ? 'LIVE' : 'OFFLINE'}
       </span>
+      <Logout />
       <Shortcuts />
     </nav>
   );
@@ -63,4 +65,11 @@ function Shortcuts() {
     });
   }
   return null;
+}
+
+function Logout() {
+  const [show, setShow] = useState(false);
+  useEffect(() => { fetch('/api/session').then((r) => r.json()).then((s) => setShow(s.auth_required && s.authed)).catch(() => {}); }, []);
+  if (!show) return null;
+  return <button onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { location.href = '/login'; })} className="text-[11px] text-mute hover:text-fg">log out</button>;
 }

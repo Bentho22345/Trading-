@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS tokens (
   links_json TEXT,
   pump_mcap_sol REAL, pump_mcap_as_of REAL,
   best_pair TEXT, last_refresh REAL,
+  dev_initial_buy_pct REAL,   -- % of supply the deployer bought in the create tx
+  image_hash TEXT,            -- perceptual dHash of the token image (copycat detection)
   updated REAL
 );
 CREATE INDEX IF NOT EXISTS tokens_first_seen ON tokens(first_seen DESC);
@@ -182,6 +184,20 @@ CREATE TABLE IF NOT EXISTS wallet_trades (
 CREATE INDEX IF NOT EXISTS wt_wallet ON wallet_trades(wallet, ts DESC);
 CREATE INDEX IF NOT EXISTS wt_mint ON wallet_trades(mint, ts DESC);
 
+CREATE TABLE IF NOT EXISTS holder_snapshots (
+  token_address TEXT NOT NULL, ts REAL NOT NULL, holders INTEGER, top10_pct REAL, source TEXT
+);
+CREATE INDEX IF NOT EXISTS holders_token_ts ON holder_snapshots(token_address, ts);
+
+CREATE TABLE IF NOT EXISTS image_hashes (url TEXT PRIMARY KEY, hash TEXT, ts REAL);
+
+CREATE INDEX IF NOT EXISTS tokens_refresh ON tokens(last_refresh DESC);
+CREATE INDEX IF NOT EXISTS tokens_deployer ON tokens(deployer);
+CREATE INDEX IF NOT EXISTS tokens_symbol ON tokens(symbol);
+CREATE INDEX IF NOT EXISTS nt_token ON narrative_tokens(token_address);
+CREATE INDEX IF NOT EXISTS social_source ON social_events(source, ts DESC);
+CREATE INDEX IF NOT EXISTS trades_trader ON pump_trades(trader);
+
 CREATE TABLE IF NOT EXISTS briefs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, body TEXT, model TEXT, context_json TEXT
 );
@@ -200,7 +216,35 @@ class DB:
         self.conn.row_factory = aiosqlite.Row
         await self.conn.execute("PRAGMA journal_mode=WAL")
         await self.conn.execute("PRAGMA synchronous=NORMAL")
+        await self.migrate()
         await self.conn.executescript(SCHEMA)
+        await self.conn.commit()
+
+    async def migrate(self) -> None:
+        """Add columns that newer versions introduced to tables created by older versions (SQLite can't do it in CREATE)."""
+        import re
+        assert self.conn
+        stmts = [re.sub(r"--[^\n]*", "", x) for x in SCHEMA.split(";")]
+        for st in stmts:
+            m = re.match(r"\s*CREATE TABLE IF NOT EXISTS (\w+)\s*\(", st)
+            if not m:
+                continue
+            table, body = m.group(1), st[m.end():st.rindex(")")]
+            async with self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)) as cur:
+                if not await cur.fetchone():
+                    continue
+            async with self.conn.execute(f"PRAGMA table_info({table})") as cur:
+                have = {r[1] for r in await cur.fetchall()}
+            body = re.sub(r"--[^\n]*", "", body)
+            for part in re.split(r",(?![^()]*\))", body):
+                part = part.strip()
+                if not part or part.upper().startswith(("PRIMARY KEY", "UNIQUE", "FOREIGN")):
+                    continue
+                col = part.split()[0]
+                if col in have:
+                    continue
+                ddl = re.sub(r"\bPRIMARY KEY\b|\bAUTOINCREMENT\b|\bUNIQUE\b|\bNOT NULL\b", "", part)
+                await self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
         await self.conn.commit()
 
     async def close(self) -> None:

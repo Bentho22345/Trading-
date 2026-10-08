@@ -6,6 +6,9 @@ import { FlashOverlay } from '@/components/FlashOverlay';
 export const metadata: Metadata = {
   title: 'Memecoin Radar',
   description: 'Real-time narrative, social and on-chain signal terminal',
+  manifest: '/manifest.webmanifest',
+  icons: { icon: '/icon.svg', apple: '/icon.svg' },
+  appleWebApp: { capable: true, title: 'Radar', statusBarStyle: 'black-translucent' },
 };
 export const viewport: Viewport = { themeColor: '#07090c', width: 'device-width', initialScale: 1 };
 

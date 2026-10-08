@@ -72,8 +72,8 @@ def test_live_launch_reaches_ui_and_gets_market_data(stack):
         async with websockets.connect(f"ws://{stack}/ws") as ws:
             await ws.send(json.dumps({"view": [MINT]}))
             t0 = time.time()
-            while time.time() - t0 < 15 and not {"launch", "tokens", "trade"} <= seen.keys():
-                msg = json.loads(await asyncio.wait_for(ws.recv(), 15))
+            while time.time() - t0 < 30 and not {"launch", "tokens", "trade"} <= seen.keys():
+                msg = json.loads(await asyncio.wait_for(ws.recv(), 30))
                 seen.setdefault(msg["ch"], []).append(msg["data"])
         return seen
     seen = asyncio.run(run())
@@ -185,3 +185,30 @@ def test_feature_endpoints(stack):
     t = httpx.get(f"http://{stack}/api/tokens?safe_only=true&min_liq=1000&q=HAWK").json()
     assert all(x["symbol"] and "HAWK" in x["symbol"] for x in t)
     assert httpx.post(f"http://{stack}/api/ask", json={"question": "hi"}).json()["answer"].startswith("Ask Radar needs")
+
+
+def test_password_gate(tmp_path):
+    port = free_port()
+    env = {**os.environ, "PORT": str(port), "HOST": "127.0.0.1", "RADAR_DB_PATH": str(tmp_path / "r.db"),
+           "RADAR_PASSWORD": "hunter2-correct-horse", "RADAR_DISABLE_INGEST": "1", "RADAR_WEB_DIR": "/nonexistent",
+           "LOG_LEVEL": "WARNING", "HTTPS_PROXY": "", "https_proxy": ""}
+    p = subprocess.Popen([sys.executable, "-m", "radar"], cwd=ROOT, env=env)
+    try:
+        wait_http(f"http://127.0.0.1:{port}/api/healthz")
+        base = f"http://127.0.0.1:{port}"
+        assert httpx.get(f"{base}/api/healthz").status_code == 200
+        assert httpx.get(f"{base}/api/connectors").status_code == 401
+        assert httpx.get(f"{base}/api/session").json() == {"auth_required": True, "authed": False}
+        assert httpx.post(f"{base}/api/login", json={"password": "nope"}).status_code == 401
+        with httpx.Client(base_url=base) as c:
+            assert c.post("/api/login", json={"password": "hunter2-correct-horse"}).status_code == 200
+            assert c.get("/api/connectors").status_code == 200
+
+        async def ws_denied():
+            async with websockets.connect(f"ws://127.0.0.1:{port}/ws") as ws:
+                await ws.recv()
+        with pytest.raises((websockets.exceptions.ConnectionClosed, websockets.exceptions.InvalidStatus)):
+            asyncio.run(ws_denied())
+    finally:
+        p.terminate()
+        p.wait(10)

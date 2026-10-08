@@ -87,3 +87,19 @@ def test_paper_simulation_ladder_stop_timestop():
     assert r3["closed"] is None and round(r3["unrealized_usd"], 1) == 10.0
     s = stats([{"return_pct": 50}, {"return_pct": -30}, {"return_pct": -10}])
     assert s["n"] == 3 and s["hit_rate"] == 33.3 and s["max_drawdown_pct_pts"] == -40
+
+
+def test_flow_features_move_the_score():
+    base = scoring.evaluate(STRONG, CFG, RISK)
+    sniped = copy.deepcopy(STRONG)
+    sniped["flow"] = {"sniper_supply_pct": 40, "sniper_wallets": 12, "dev_initial_buy_pct": 20, "dev_sold_pct": 80}
+    r = scoring.evaluate(sniped, CFG, RISK)
+    assert r["subscores"]["safety"] < base["subscores"]["safety"]
+    assert any("sniped" in x for x in r["risks"]) and any("dev has sold" in x for x in r["risks"])
+    grow = copy.deepcopy(STRONG)
+    grow["flow"] = {"unique_buyers_5m": 120, "holder_growth_pct_1h": 40}
+    g = scoring.evaluate(grow, CFG, RISK)
+    assert any("unique buyers/min" in x for x in g["reasons"]) and any("holders up" in x for x in g["reasons"])
+    off = copy.deepcopy(STRONG)
+    off["regime"] = {"meme_chg_24h": -12}
+    assert scoring.evaluate(off, CFG, RISK)["regime_multiplier"] == CFG["regime"]["risk_off_multiplier"]

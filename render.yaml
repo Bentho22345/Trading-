@@ -1,4 +1,6 @@
 # One-click deploy on Render (render.com): Dashboard → New → Blueprint → pick this repo/branch.
+# This Blueprint defines two independent services: PULSE (markets terminal) and Memecoin Radar.
+# Delete either block if you only want one.
 # PULSE needs an always-on Node process (live WebSocket + pollers), which static/serverless
 # hosts like Netlify can't provide.
 services:
@@ -26,3 +28,43 @@ services:
         generateValue: true
       - key: PULSE_TZ             # home time zone for brief schedules
         value: America/New_York
+
+  # ---------------------------------------------------------------------------------------
+  # Memecoin Radar — real-time memecoin narrative / on-chain / safety terminal (radar/)
+  # Needs an always-on instance (live WebSockets + pollers) and a persistent disk (SQLite DB
+  # + key-encryption secret), so it uses the paid "starter" plan: free instances sleep and
+  # can't attach disks.
+  # ---------------------------------------------------------------------------------------
+  - type: web
+    name: memecoin-radar
+    runtime: docker
+    plan: starter
+    rootDir: radar
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/healthz
+    autoDeploy: true
+    disk:
+      name: radar-data
+      mountPath: /app/data
+      sizeGB: 2
+    envVars:
+      - key: RADAR_PASSWORD        # REQUIRED: the login password (the URL is public)
+        sync: false
+      - key: RADAR_SECRET          # encrypts API keys saved on the Connectors page
+        generateValue: true
+      - key: AI_DAILY_BUDGET_USD   # hard daily cap on Claude spend
+        value: "3"
+      - key: RADAR_CORS_ORIGINS    # UI is served from the same origin; nothing cross-origin needed
+        value: ""
+      # Optional — you can also paste these later on the in-app Connectors page:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: X_BEARER_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: NTFY_TOPIC
+        sync: false

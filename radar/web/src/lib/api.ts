@@ -8,9 +8,13 @@ export function wsUrl(): string {
 
 export async function api<T = any>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(API + path, {
+    credentials: API ? 'include' : 'same-origin',
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
   });
+  if (r.status === 401 && typeof window !== 'undefined' && !path.startsWith('/api/login') && location.pathname !== '/login') {
+    location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+  }
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
     try { msg = (await r.json()).detail || msg; } catch { /* not json */ }

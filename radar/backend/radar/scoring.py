@@ -12,7 +12,8 @@ def _clamp(x: float, lo: float = 0, hi: float = 100) -> float:
     return max(lo, min(hi, x))
 
 
-def momentum_score(t: dict[str, Any], ticks: list[dict[str, Any]], c: dict[str, Any], why: list[str]) -> float | None:
+def momentum_score(t: dict[str, Any], ticks: list[dict[str, Any]], c: dict[str, Any], why: list[str],
+                   flow: dict[str, Any] | None = None) -> float | None:
     if t.get("price_usd") is None:
         return None
     m = c["momentum"]
@@ -51,10 +52,24 @@ def momentum_score(t: dict[str, Any], ticks: list[dict[str, Any]], c: dict[str, 
         if liq0 and liq1:
             g = (liq1 / liq0 - 1) * 100
             parts.append(_clamp(50 + g * 2))
+    flow = flow or {}
+    ub = flow.get("unique_buyers_5m")
+    if ub:
+        parts.append(_clamp(ub / 5 / m.get("unique_buyers_per_min_good", 10) * 100))
+        if ub / 5 >= m.get("unique_buyers_per_min_good", 10):
+            why.append(f"{ub / 5:.0f} unique buyers/min (many small buyers)")
+    hg = flow.get("holder_growth_pct_1h")
+    if hg is not None:
+        parts.append(_clamp(50 + hg * 2))
+        if hg >= 20:
+            why.append(f"holders up {hg:.0f}% in the last hour")
+        elif hg < 0:
+            why.append(f"holder count shrinking ({hg:.0f}% in 1h)")
     return sum(parts) / len(parts) if parts else None
 
 
-def safety_score(t: dict[str, Any], s: dict[str, Any] | None, c: dict[str, Any], why: list[str]) -> float | None:
+def safety_score(t: dict[str, Any], s: dict[str, Any] | None, c: dict[str, Any], why: list[str],
+                 flow: dict[str, Any] | None = None) -> float | None:
     if not s:
         return None
     k = c["safety"]
@@ -78,6 +93,16 @@ def safety_score(t: dict[str, Any], s: dict[str, Any] | None, c: dict[str, Any],
     rn = s.get("score_normalised")
     if rn is not None:
         score -= float(rn) * 0.4
+    flow = flow or {}
+    if (flow.get("dev_initial_buy_pct") or 0) > k.get("dev_buy_bad_pct", 10):
+        score -= 15
+        why.append(f"dev bought {flow['dev_initial_buy_pct']:.1f}% of supply at launch")
+    if (flow.get("dev_sold_pct") or 0) >= k.get("dev_sold_bad_pct", 50):
+        score -= 20
+        why.append(f"dev has sold {flow['dev_sold_pct']:.0f}% of their tokens")
+    if (flow.get("sniper_supply_pct") or 0) >= k.get("sniper_bad_pct", 15):
+        score -= 25
+        why.append(f"{flow['sniper_supply_pct']:.0f}% of supply sniped/bundled in the first 5s by {flow.get('sniper_wallets')} wallets")
     if t.get("boost_amount"):
         score -= k["boost_penalty"]
         why.append(f"paid DexScreener boosts active ({t['boost_amount']}), often exit liquidity")
@@ -145,6 +170,8 @@ def regime_multiplier(r: dict[str, Any] | None, c: dict[str, Any], why: list[str
         off.append(f"BTC {r['btc_chg_24h']:+.1f}%")
     if r.get("sol_chg_24h") is not None and r["sol_chg_24h"] <= k["sol_down_24h_pct"]:
         off.append(f"SOL {r['sol_chg_24h']:+.1f}%")
+    if r.get("meme_chg_24h") is not None and r["meme_chg_24h"] <= k.get("meme_down_24h_pct", -8):
+        off.append(f"meme sector {r['meme_chg_24h']:+.1f}%")
     if r.get("fear_greed") is not None and r["fear_greed"] <= k["fear_greed_low"]:
         off.append(f"Fear & Greed {r['fear_greed']:.0f}")
     if off:
@@ -208,9 +235,9 @@ def evaluate(inp: dict[str, Any], c: dict[str, Any], risk: dict[str, Any], now: 
     subs = {
         "narrative": narrative_score(n, c, why),
         "catalyst": catalyst_score(t, n, c, why),
-        "momentum": momentum_score(t, inp.get("ticks") or [], c, why),
+        "momentum": momentum_score(t, inp.get("ticks") or [], c, why, inp.get("flow")),
         "smart_money": smart_money_score(inp.get("smart_money"), c, why),
-        "safety": safety_score(t, s, c, risks),
+        "safety": safety_score(t, s, c, risks, inp.get("flow")),
     }
     w = c["weights"]
     total_w = sum(w.values())
