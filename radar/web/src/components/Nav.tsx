@@ -16,6 +16,7 @@ export const LINKS = [
   { href: '/signals', label: 'Signals', key: 's', icon: 'signal', group: 'Intelligence' },
   { href: '/social', label: 'Social', key: 'f', icon: 'social', group: 'Intelligence' },
   { href: '/smart-money', label: 'Smart money', key: 'w', icon: 'wallet', group: 'Intelligence' },
+  { href: '/wallets', label: 'Top wallets', key: 'o', icon: 'score', group: 'Intelligence' },
   { href: '/scorecard', label: 'Scorecard', key: 'p', icon: 'score', group: 'Intelligence' },
   { href: '/risk', label: 'Risk', key: 'r', icon: 'risk', group: 'Intelligence' },
   { href: '/rotation', label: 'Rotation & Brief', key: 'b', icon: 'rotation', group: 'Intelligence' },

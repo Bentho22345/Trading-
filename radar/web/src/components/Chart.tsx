@@ -6,7 +6,7 @@ import { ago } from '@/lib/format';
 
 const TFS = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
-export type ChartMarker = { ts: number; label: string; kind: 'vip' | 'post' | 'signal' | 'smart' };
+export type ChartMarker = { ts: number; label: string; kind: 'vip' | 'post' | 'signal' | 'smart' | 'top'; side?: 'buy' | 'sell' };
 
 export function Chart({ address, poll = 30000, markers = [] }: { address: string; poll?: number; markers?: ChartMarker[] }) {
   const el = useRef<HTMLDivElement>(null);
@@ -43,11 +43,16 @@ export function Chart({ address, poll = 30000, markers = [] }: { address: string
   const paintMarkers = () => {
     const t = times.current;
     if (!mk.current || !t.length) return;
-    const COLORS = { vip: '#e879f9', post: '#38bdf8', signal: '#f59e0b', smart: '#22c55e' };
+    const COLORS = { vip: '#e879f9', post: '#38bdf8', signal: '#f59e0b', smart: '#22c55e', top: '#facc15' };
     const snap = (ts: number) => { let best = null as number | null; for (const x of t) if (x <= ts) best = x; return best; };
     const out = markersRef.current.map((m) => ({ m, time: snap(m.ts) })).filter((x) => x.time != null)
-      .map(({ m, time }) => ({ time: time as UTCTimestamp, position: m.kind === 'signal' ? 'belowBar' as const : 'aboveBar' as const,
-        shape: m.kind === 'signal' ? 'arrowUp' as const : 'circle' as const, color: COLORS[m.kind], text: m.label.slice(0, 18) }))
+      .map(({ m, time }) => {
+        // top-wallet entries sit under the candle as up arrows, exits above it as down arrows
+        const up = m.kind === 'signal' || (m.kind === 'top' && m.side === 'buy');
+        const shape = m.kind === 'top' ? (up ? 'arrowUp' as const : 'arrowDown' as const) : m.kind === 'signal' ? 'arrowUp' as const : 'circle' as const;
+        const color = m.kind === 'top' && m.side === 'sell' ? '#f87171' : COLORS[m.kind];
+        return { time: time as UTCTimestamp, position: up ? 'belowBar' as const : 'aboveBar' as const, shape, color, text: m.label.slice(0, 18) };
+      })
       .sort((a, b) => a.time - b.time);
     mk.current.setMarkers(out);
   };

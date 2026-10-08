@@ -18,7 +18,7 @@ export function LiveTape() {
     else if (ch === 'signal' && data.verdict !== 'AVOID') push({ kind: data.verdict, text: `${data.symbol} · score ${data.score}`, href: `/token?a=${data.token_address}`, tone: data.verdict === 'BUY' ? 'up' : 'warn' });
     else if (ch === 'flash') push({ kind: 'FLASH', text: data.kind === 'vip_ca' ? `${data.author} posted a CA` : `breakout: ${data.title}`, href: data.token_address ? `/token?a=${data.token_address}` : '/narratives', tone: 'flash' });
     else if (ch === 'narrative_new') push({ kind: 'NARRATIVE', text: data.title, href: `/narratives?n=${data.id}`, tone: 'accent' });
-    else if (ch === 'wallet_trade') push({ kind: data.kind === 'kol' ? 'KOL' : 'SMART', text: `${data.label || short(data.wallet)} ${data.side} ${short(data.mint)}`, href: `/token?a=${data.mint}`, tone: data.side === 'buy' ? 'up' : 'down' });
+    else if (ch === 'wallet_trade') push({ kind: data.kind === 'kol' ? 'KOL' : data.kind === 'top' ? 'TOP' : 'SMART', text: `${data.label || short(data.wallet)} ${data.side} ${data.symbol || short(data.mint)}`, href: `/token?a=${data.mint}`, tone: data.side === 'buy' ? 'up' : 'down' });
     else if (ch === 'launch_watch_hit') push({ kind: 'WATCH HIT', text: `${data.token.symbol} matches “${data.term}”`, href: `/token?a=${data.token.address}`, tone: 'flash' });
     else if (ch === 'alert' && data.kind === 'rug') push({ kind: 'RUG', text: data.title.replace(/^🚨\s*/, ''), href: data.token_address ? `/token?a=${data.token_address}` : undefined, tone: 'down' });
     else if (ch === 'story') push({ kind: 'STORY', text: `${(data.narratives?.[0]?.title) || 'narrative found'}`, href: `/token?a=${data.token_address}`, tone: 'mute' });
