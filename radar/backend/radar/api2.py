@@ -231,7 +231,9 @@ async def discover() -> dict[str, Any]:
 # ---------------- top-wallet leaderboard ----------------
 @router.get("/leaderboard")
 async def leaderboard(period: str = "1d", sort: str = "roi", limit: int = 100, offset: int = 0,
-                      include_bots: bool = False) -> dict[str, Any]:
+                      include_bots: bool = False, source: str = "radar") -> dict[str, Any]:
+    if source != "radar":
+        return await S.board.external(source, period, max(1, min(limit, 1000)), max(0, offset))
     try:
         return await S.board.board(period, sort, max(1, min(limit, 1000)), max(0, offset), include_bots)
     except ValueError as e:
@@ -278,6 +280,14 @@ async def top_trades(limit: int = 80, hours: float = 24) -> list[dict[str, Any]]
 @router.get("/leaderboard/wallet/{address}")
 async def leaderboard_wallet(address: str) -> dict[str, Any]:
     return await S.board.wallet(address)
+
+
+@router.post("/leaderboard/sources/refresh")
+async def leaderboard_sources_refresh() -> dict[str, Any]:
+    """Pull Birdeye's leaderboards now (needs the Birdeye key), then re-rank and re-follow."""
+    n = await S.toptraders.birdeye_round()
+    await S.board.refresh()
+    return {"birdeye": n, "followed": len(S.board.followed)}
 
 
 @router.post("/leaderboard/refresh")

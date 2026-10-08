@@ -211,6 +211,12 @@ CREATE TABLE IF NOT EXISTS wallet_board (  -- ranked snapshot per period (1d / 7
 CREATE INDEX IF NOT EXISTS wboard_roi ON wallet_board(period, rank_roi);
 CREATE INDEX IF NOT EXISTS wboard_pnl ON wallet_board(period, rank_pnl);
 
+CREATE TABLE IF NOT EXISTS wallet_external (  -- top-trader lists from other platforms (Birdeye), per source and period
+  source TEXT NOT NULL, period TEXT NOT NULL, wallet TEXT NOT NULL, rank INTEGER, pnl_usd REAL, volume_usd REAL,
+  trades INTEGER, token TEXT, as_of REAL, PRIMARY KEY (source, period, wallet)
+);
+CREATE INDEX IF NOT EXISTS wext_wallet ON wallet_external(wallet);
+
 CREATE TABLE IF NOT EXISTS holder_snapshots (
   token_address TEXT NOT NULL, ts REAL NOT NULL, holders INTEGER, top10_pct REAL, source TEXT
 );

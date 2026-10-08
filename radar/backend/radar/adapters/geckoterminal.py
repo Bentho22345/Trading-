@@ -72,6 +72,29 @@ def parse_ohlcv(payload: dict[str, Any]) -> list[dict[str, float]]:
     return sorted(candles, key=lambda c: c["time"])
 
 
+SOL_MINT = "So11111111111111111111111111111111111111112"
+
+
+def parse_trades(payload: dict[str, Any], token: str) -> list[dict[str, Any]]:
+    """Pool trades (last 24h, newest first) -> ledger trades for `token` against SOL. Non-SOL legs are skipped."""
+    out = []
+    for t in (payload or {}).get("data") or []:
+        a = t.get("attributes") or {}
+        frm, to = a.get("from_token_address"), a.get("to_token_address")
+        if a.get("kind") == "buy" and frm == SOL_MINT and to == token:
+            sol, tokens = _f(a.get("from_token_amount")), _f(a.get("to_token_amount"))
+        elif a.get("kind") == "sell" and frm == token and to == SOL_MINT:
+            sol, tokens = _f(a.get("to_token_amount")), _f(a.get("from_token_amount"))
+        else:
+            continue
+        if not sol or not tokens or not a.get("tx_from_address"):
+            continue
+        out.append({"trader": a["tx_from_address"], "mint": token, "side": a["kind"], "sol": sol, "tokens": tokens,
+                    "ts": _ts(a.get("block_timestamp")), "signature": a.get("tx_hash"),
+                    "usd": _f(a.get("volume_in_usd")), "source": "geckoterminal"})
+    return out
+
+
 class GeckoTerminal:
     def __init__(self) -> None:
         self.http = RestClient(settings.geckoterminal_url, health, headers={"Accept": "application/json;version=20230302"})
@@ -89,3 +112,7 @@ class GeckoTerminal:
         data = await self.http.get(f"/networks/{network}/pools/{pool}/ohlcv/{unit}", bucket,
                                    params={"aggregate": agg, "limit": limit, "currency": "usd"}, not_found_ok=True)
         return parse_ohlcv(data or {})
+
+    async def trades(self, pool: str, token: str, network: str = "solana") -> list[dict[str, Any]]:
+        data = await self.http.get(f"/networks/{network}/pools/{pool}/trades", bucket, not_found_ok=True)
+        return parse_trades(data or {}, token)

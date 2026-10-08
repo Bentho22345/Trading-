@@ -214,7 +214,7 @@ CATALOG: list[Connector] = [
     Connector("helius", "Helius (Solana RPC)", "On-chain", "key", "Holder lists, wallet & deployer history, account webhooks.",
               "Deployer reputation, smart-money wallets, holder growth", 2, "https://dashboard.helius.dev/signup",
               "Sign up → Dashboard → API Keys → copy.", "free tier", [Field("api_key", "API key", env="HELIUS_API_KEY")], t_helius, "helius"),
-    Connector("birdeye", "Birdeye", "On-chain", "key", "Token overview, top traders, holders.",
+    Connector("birdeye", "Birdeye", "On-chain", "key", "Top-trader leaderboards and each hot coin's top traders for the Top wallets page.",
               "Smart-money discovery, holder data", 4, "https://bds.birdeye.so", "Sign up → API keys.", "free tier (limited)",
               [Field("api_key", "API key", env="BIRDEYE_API_KEY")], t_birdeye),
     Connector("coingecko", "CoinGecko demo key", "Market", "key", "Raises CoinGecko from ~5 to 30 req/min; categories for rotation heatmap.",

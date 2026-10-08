@@ -44,6 +44,7 @@ class State:
     social: Any
     smart: Any
     board: Any
+    toptraders: Any
     paper: Any
     signals: Any
     insights: Any
@@ -91,6 +92,9 @@ async def lifespan(app: FastAPI):
     S.discover = Discover(S.db, S.tracker, S.social, S.signals, S.alerts)
     S.story = StoryEngine(S.db, S.ai, S.social, S.connectors, S.discover, S.cfg)
     S.tracker.hooks["new_token"].append(S.discover.check_launch)
+    from .toptraders import TopTraders
+    S.toptraders = TopTraders(S.db, S.cfg, S.tracker, S.board, S.connectors)
+    S.board.sources = S.toptraders
     from .metas import MetaBoard
     from .newsintel import NewsIntel
     S.metas = MetaBoard(S.db, S.alerts)
@@ -124,7 +128,7 @@ async def lifespan(app: FastAPI):
         S.social.start()
         await S.smart.load()
         jobs = [S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
-                S.insights.brief_scheduler(), S.smart.helius_loop(), S.board.loop(),
+                S.insights.brief_scheduler(), S.smart.helius_loop(), S.board.loop(), S.toptraders.run(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
