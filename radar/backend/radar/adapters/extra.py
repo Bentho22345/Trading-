@@ -112,6 +112,18 @@ class Extra:
                         "mcap": r.get("mcap"), "created": (r.get("firstPool") or {}).get("createdAt")})
         return out
 
+    async def sol_balance(self, owner: str) -> float | None:
+        """Native SOL balance (lamports -> SOL) via getBalance. None when the RPC call fails."""
+        await rpc_b.acquire()
+        t0 = time.perf_counter()
+        r = await self.rpc.client.post(self.rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [owner]})
+        if r.status_code >= 400:
+            rpc_h.fail(f"HTTP {r.status_code}")
+            return None
+        rpc_h.ok((time.perf_counter() - t0) * 1000)
+        lamports = ((r.json().get("result") or {}).get("value"))
+        return lamports / 1e9 if isinstance(lamports, (int, float)) else None
+
     async def holdings(self, owner: str) -> list[dict[str, Any]]:
         out = []
         for prog in TOKEN_PROGRAMS:

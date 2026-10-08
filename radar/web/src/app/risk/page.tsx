@@ -56,7 +56,7 @@ export default function RiskPage() {
           </Panel>
           <Panel title="My wallet (read-only)" right={<button onClick={() => run(async () => setHold(await api('/api/holdings')), 'Loaded')} className="text-accent">load holdings</button>}>
             <div className="p-2 text-[12px]">
-              {!hold && <p className="text-mute">Add your public address on Connectors → “Your wallet”, then load. Held tokens join the watchlist so Rug Shield monitors them.</p>}
+              {!hold && <p className="text-mute">Connect your wallet from the top bar (or paste a public address there), then load. Full view on <Link href="/wallet" className="text-accent">My wallet</Link>. Held tokens join the watchlist so Rug Shield monitors them.</p>}
               {hold?.holdings?.map((h: any) => (
                 <div key={h.mint} className="flex gap-2 border-t border-line/50 py-1 num">
                   <Link href={`/token?a=${h.mint}`} className="flex-1 truncate font-semibold">{h.symbol || short(h.mint)}</Link>

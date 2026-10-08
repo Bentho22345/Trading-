@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useConnected } from '@/lib/live';
 import { CommandPalette } from './CommandPalette';
 import { Icon } from './Icon';
+import { WalletButton } from './WalletButton';
 import { motion } from './motion';
 
 export const LINKS = [
@@ -16,6 +17,7 @@ export const LINKS = [
   { href: '/social', label: 'Social', key: 'f', icon: 'social' },
   { href: '/smart-money', label: 'Smart money', key: 'w', icon: 'wallet' },
   { href: '/scorecard', label: 'Scorecard', key: 'p', icon: 'score' },
+  { href: '/wallet', label: 'My wallet', key: 'm', icon: 'wallet' },
   { href: '/risk', label: 'Risk', key: 'r', icon: 'risk' },
   { href: '/rotation', label: 'Rotation & Brief', key: 'b', icon: 'rotation' },
   { href: '/ask', label: 'Ask Radar', key: 'a', icon: 'ask' },
@@ -87,7 +89,9 @@ export function Nav() {
             <span className="flex-1 truncate">Search coins, CAs, narratives…</span>
             <kbd className="hidden rounded-md border border-white/10 px-1.5 text-[10px] sm:inline">⌘K</kbd>
           </button>
-          <span className={`ml-auto flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium ${live ? 'border-up/30 bg-up/10 text-up' : 'border-down/30 bg-down/10 text-down'}`}
+          <span className="ml-auto" />
+          <WalletButton />
+          <span className={`flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium ${live ? 'border-up/30 bg-up/10 text-up' : 'border-down/30 bg-down/10 text-down'}`}
             title="Live socket to the Radar backend">
             <span className={`h-1.5 w-1.5 rounded-full ${live ? 'live-dot bg-up' : 'bg-down'}`} />{live ? 'Live' : 'Reconnecting'}
           </span>
