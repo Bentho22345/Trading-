@@ -57,6 +57,7 @@ catalyst:
   cex_listing: 80          # a listing headline that names this token (Binance, Coinbase, Upbit, OKX, Bybit...)
   coingecko_trending: 45   # token is on CoinGecko's trending list (name + ticker match)
   graduation: 40           # pump.fun bonding curve completed -> DEX pool, within drivers.graduation_window_h
+  kol_call: 35             # a KOL-tier account posted this token's CA in the last hour (often paid; also check smart money)
   paid_promo: 10           # boosts / KOL calls: weak signal (and a risk flag)
 
 drivers:            # price drivers read from Radar's own data (radar/drivers.py)
@@ -72,6 +73,15 @@ drivers:            # price drivers read from Radar's own data (radar/drivers.py
   serial_launcher_7d: 5    # deployer launched this many tokens in 7 days
   serial_launcher_penalty: 15
   graduation_window_h: 6
+  vol_accel_good: 2.0      # 5m volume x12 vs 1h (or 1h x6 vs 6h) for full acceleration credit (momentum)
+  net_sol_good: 20         # net SOL bought in 15m on pump.fun for full order-flow credit
+  whale_buy_sol: 5         # a single trade this size or larger counts as a whale (also triggers instant re-scoring)
+  whale_sells_bad: 2       # this many whale sells in 15m -> safety penalty
+  churn_bad_trades_per_wallet: 6   # trades per wallet in 15m above this looks like wash/bot volume
+  churn_min_trades: 30
+  extended_h1_pct: 300     # already up this much in 1h -> chasing risk
+  negative_news_penalty: 30        # headline naming the token with delist/exploit/hack/rug/lawsuit words
+  negative_sentiment: -0.3         # narrative sentiment (-1..1) at or below this -> narrative penalty
 
 smart_money:
   wallet_min_score: 60     # tracked wallets above this count as smart money

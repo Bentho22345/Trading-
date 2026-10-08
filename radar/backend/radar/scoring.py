@@ -19,6 +19,9 @@ DRIVER_DEFAULTS = {
     "mentions_good_per_h": 30, "mention_accel_good": 2.0, "social_blend": 0.25,
     "dev_selling_now_penalty": 20, "serial_launcher_7d": 5, "serial_launcher_penalty": 15,
     "graduation_window_h": 6,
+    "vol_accel_good": 2.0, "net_sol_good": 20, "whale_buy_sol": 5, "whale_sells_bad": 2,
+    "churn_bad_trades_per_wallet": 6, "churn_min_trades": 30, "extended_h1_pct": 300,
+    "negative_news_penalty": 30, "negative_sentiment": -0.3,
 }
 
 
@@ -85,6 +88,24 @@ def momentum_score(t: dict[str, Any], ticks: list[dict[str, Any]], c: dict[str, 
         parts.append(_clamp(lm / k["liq_mcap_good"] * 100))
         if lm >= k["liq_mcap_good"]:
             why.append(f"deep liquidity ({lm * 100:.0f}% of market cap)")
+    accs = [x for x in (d.get("vol_accel_5m"), d.get("vol_accel_1h")) if x is not None]
+    if accs:
+        acc = max(accs)
+        parts.append(_clamp((acc - 0.5) / (k["vol_accel_good"] - 0.5) * 100))
+        if acc >= k["vol_accel_good"]:
+            why.append(f"volume accelerating ({acc:.1f}x its recent pace)")
+    bs1 = d.get("buy_sell_1h")
+    if bs1 is not None:
+        parts.append(_clamp((bs1 - 0.6) / (m["buy_sell_good"] - 0.6) * 100))
+    net = d.get("net_sol_15m")
+    if net is not None and d.get("trades_15m"):
+        parts.append(_clamp(50 + net / k["net_sol_good"] * 50))
+        if net >= k["net_sol_good"] / 2:
+            why.append(f"net {net:+.1f} SOL of buying in 15m")
+        elif net <= -k["net_sol_good"] / 2:
+            why.append(f"net {net:+.1f} SOL of selling in 15m")
+    if d.get("whale_buys_15m"):
+        why.append(f"{d['whale_buys_15m']} whale buy(s) of {k['whale_buy_sol']}+ SOL in 15m")
     return sum(parts) / len(parts) if parts else None
 
 
@@ -146,6 +167,20 @@ def safety_score(t: dict[str, Any], s: dict[str, Any] | None, c: dict[str, Any],
     if d.get("dev_sells_15m"):
         score -= kd["dev_selling_now_penalty"]
         why.append(f"dev wallet sold in the last 15m ({d['dev_sells_15m']} sells, {d.get('dev_sold_sol_15m') or 0:.2f} SOL)")
+    if (d.get("whale_sells_15m") or 0) >= kd["whale_sells_bad"]:
+        score -= 10
+        why.append(f"{d['whale_sells_15m']} whale sells of {kd['whale_buy_sol']}+ SOL in 15m")
+    tpw = d.get("trades_per_wallet_15m")
+    if tpw is not None and tpw >= kd["churn_bad_trades_per_wallet"] and (d.get("trades_15m") or 0) >= kd["churn_min_trades"]:
+        score -= 15
+        why.append(f"likely wash/bot trading: {tpw:.1f} trades per wallet in 15m")
+    h1 = d.get("chg_h1")
+    if h1 is not None and h1 >= kd["extended_h1_pct"]:
+        score -= 10
+        why.append(f"already up {h1:.0f}% in 1h: late entries are exit liquidity")
+    if d.get("negative_news"):
+        score -= kd["negative_news_penalty"]
+        why.append(f"negative headline: \"{d['negative_news'][:90]}\"")
     dl = d.get("deployer_launches_7d")
     if dl is not None and dl >= kd["serial_launcher_7d"]:
         score -= kd["serial_launcher_penalty"]
@@ -196,6 +231,10 @@ def _narrative_only(n: dict[str, Any] | None, c: dict[str, Any], why: list[str])
     spread = _clamp(len(n.get("sources") or []) / k["cross_platform_good"] * 100)
     reach = _clamp(n.get("reach_score") or 0)
     bot_pen = (n.get("bot_share") or 0) * 50
+    sent = n.get("sentiment")
+    if sent is not None and sent <= _drv(c)["negative_sentiment"]:
+        bot_pen += 15
+        why.append(f"narrative sentiment is negative ({sent:+.2f})")
     why.append(f"linked narrative '{n.get('title')}' is in {(n.get('stage') or 'birth').upper()} "
                f"({n.get('vel_5m') or 0:.1f} mentions/min across {len(n.get('sources') or [])} sources)")
     return _clamp(0.4 * stage + 0.3 * vel + 0.2 * spread + 0.1 * reach - bot_pen, -40, 100)
@@ -215,6 +254,8 @@ def catalyst_score(t: dict[str, Any], n: dict[str, Any] | None, c: dict[str, Any
     g = d.get("graduated_h_ago")
     if g is not None and g <= kd["graduation_window_h"]:
         listings.append((k.get("graduation", 40), f"graduated from pump.fun to a DEX pool {g:.1f}h ago"))
+    if d.get("kol_calls_1h"):
+        listings.append((k.get("kol_call", 35), f"{d['kol_calls_1h']} KOL(s) posted the contract address in the last hour"))
     for pts, msg in listings:
         why.append(msg)
     if listings:

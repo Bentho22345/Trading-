@@ -112,3 +112,48 @@ def test_collect_reads_drivers_from_the_database(tmp_path):
     assert d["mentions_1h"] == 1.5 and d["ca_mentions_1h"] == 1 and d["mentions_prev_1h"] == 1.0 and d["mention_authors_1h"] == 2
     assert d["dev_sells_15m"] == 1 and d["dev_sold_sol_15m"] == 2.5 and d["deployer_launches_7d"] == 6
     assert d["cex_listing"].startswith("Upbit") and d["graduated_h_ago"] == 2 and d["coingecko_trending_rank"] == 4
+
+
+def test_trade_flow_and_headlines():
+    tr = [{"side": "buy", "sol": 6, "trader": "a"}, {"side": "buy", "sol": 1, "trader": "b"}, {"side": "sell", "sol": 2, "trader": "a"}]
+    f = drivers.trade_flow(tr, 5)
+    assert f == {"net_sol_15m": 5.0, "whale_buys_15m": 1, "whale_sells_15m": 0, "trades_per_wallet_15m": 1.5, "trades_15m": 3}
+    t = ["Binance to delist HAWK after exploit", "Binance will list HAWK"]
+    assert drivers.negative_headline(t, "HAWK", "") == t[0] and drivers.listing_headline(t, "HAWK", "") == t[1]
+
+
+def test_order_flow_volume_and_extension_drivers():
+    up = _with({"vol_accel_5m": 3.0, "net_sol_15m": 25, "trades_15m": 40, "whale_buys_15m": 2, "buy_sell_1h": 2.0})
+    down = _with({"vol_accel_5m": 0.3, "net_sol_15m": -25, "trades_15m": 40, "buy_sell_1h": 0.4})
+    assert up["subscores"]["momentum"] > down["subscores"]["momentum"]
+    assert any("whale buy" in x for x in up["reasons"]) and any("selling in 15m" in x for x in down["reasons"])
+    base = _with({})["subscores"]["safety"]
+    for d, msg in (({"whale_sells_15m": 3}, "whale sells"), ({"trades_per_wallet_15m": 9, "trades_15m": 60}, "wash"),
+                   ({"chg_h1": 450}, "already up"), ({"negative_news": "Upbit to delist HAWK"}, "negative headline")):
+        r = _with(d)
+        assert r["subscores"]["safety"] < base and any(msg in x for x in r["risks"]), d
+
+
+def test_kol_call_and_negative_sentiment():
+    inp = copy.deepcopy(STRONG)
+    inp["narrative"] = None
+    inp["drivers"] = {"kol_calls_1h": 2}
+    assert scoring.evaluate(inp, CFG, RISK)["subscores"]["catalyst"] == CFG["catalyst"]["kol_call"]
+    inp = copy.deepcopy(STRONG)
+    good = scoring.evaluate(inp, CFG, RISK)["subscores"]["narrative"]
+    inp["narrative"]["sentiment"] = -0.8
+    r = scoring.evaluate(inp, CFG, RISK)
+    assert r["subscores"]["narrative"] < good and any("sentiment" in x for x in r["reasons"])
+
+
+def test_big_moves_trigger_instant_rescoring():
+    from radar.signals import SignalEngine
+    eng = SignalEngine(None, None, None, None, None, None, None, None)
+    kicked = []
+    eng.kick = lambda a, *_: kicked.append(a)
+    eng.eval_px = {"A": (1.0, 1000), "B": (1.0, 1000), "C": (1.0, 1000)}
+    asyncio.run(eng.on_tokens([{"address": "A", "price_usd": 1.05, "liquidity_usd": 1000},
+                               {"address": "B", "price_usd": 1.0, "liquidity_usd": 800},
+                               {"address": "C", "price_usd": 1.01, "liquidity_usd": 990},
+                               {"address": "D", "price_usd": 2.0, "liquidity_usd": 1}]))
+    assert kicked == ["A", "B"]

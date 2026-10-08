@@ -25,6 +25,43 @@ class SignalEngine:
         self.last: dict[str, tuple[str, float]] = {}
         self.prev_liq: dict[str, float] = {}
         self.prev_safety: dict[str, dict[str, Any]] = {}
+        self.eval_px: dict[str, tuple[float, float]] = {}   # addr -> (price, liquidity) at last evaluation
+        self.kicked: dict[str, float] = {}                  # addr -> last event-driven evaluation
+
+    # ---------------- event-driven re-evaluation ----------------
+    def kick(self, addr: str, min_gap_s: float = 2.0) -> None:
+        """Re-score a token now instead of on the next loop pass (price jump, LP pulled, dev or whale trade)."""
+        now = time.time()
+        if now - self.kicked.get(addr, 0) < min_gap_s:
+            return
+        self.kicked[addr] = now
+        if len(self.kicked) > 5000:
+            self.kicked = {a: t for a, t in self.kicked.items() if now - t < 60}
+        asyncio.create_task(self._kick(addr))
+
+    async def _kick(self, addr: str) -> None:
+        try:
+            await self.evaluate(addr)
+        except Exception as e:  # noqa: BLE001
+            log.debug("kick %s: %s", addr, e)
+
+    async def on_tokens(self, rows: list[dict[str, Any]]) -> None:
+        for t in rows:
+            px, liq = t.get("price_usd"), t.get("liquidity_usd")
+            prev = self.eval_px.get(t["address"])
+            if not px or not prev:
+                continue
+            if abs(px / prev[0] - 1) >= 0.03 or (liq is not None and prev[1] and liq < prev[1] * 0.9):
+                self.kick(t["address"])
+
+    async def on_trade(self, trade: dict[str, Any]) -> None:
+        if not trade.get("mint"):
+            return
+        whale = float(trade.get("sol") or 0) >= scoring._drv(self.cfg.scoring)["whale_buy_sol"]
+        dev = trade.get("side") == "sell" and await self.db.one(
+            "SELECT 1 FROM tokens WHERE address=? AND deployer=?", (trade["mint"], trade.get("trader")))
+        if whale or dev:
+            self.kick(trade["mint"], 0.5)
 
     async def regime(self) -> dict[str, Any] | None:
         rows = {r["key"]: r for r in await self.db.all("SELECT key, value, data_json, as_of FROM market")}
@@ -51,7 +88,8 @@ class SignalEngine:
                 "flow": await self.flow(addr, tok),
                 "smart_money": await self.smart.input_for(addr), "regime": await self.regime(),
                 "dev": await self.social.deployer_history((tok or {}).get("deployer")),
-                "drivers": await drivers.collect(self.db, addr, tok, ticks), "ticks": ticks[-60:]}
+                "drivers": await drivers.collect(self.db, addr, tok, ticks, whale_sol=scoring._drv(self.cfg.scoring)["whale_buy_sol"]),
+                "ticks": ticks[-60:]}
 
     async def flow(self, addr: str, tok: dict[str, Any] | None) -> dict[str, Any]:
         """On-chain flow features from Radar's own pump.fun trade capture + holder snapshots."""
@@ -82,6 +120,7 @@ class SignalEngine:
             return None
         risk = self.cfg.risk
         res = scoring.evaluate(inp, self.cfg.scoring, risk)
+        self.eval_px[addr] = (inp["token"]["price_usd"], inp["token"].get("liquidity_usd") or 0)
         prev = self.last.get(addr)
         resig = self.cfg.scoring["engine"]["resignal_after_s"]
         if not force and prev and prev[0] == res["verdict"] and (res["verdict"] != "BUY" or time.time() - prev[1] < resig):
@@ -99,7 +138,7 @@ class SignalEngine:
              str(self.cfg.scoring.get("version"))))
         sig = {**res, "id": sid, "token_address": addr, "symbol": inp["token"].get("symbol"), "name": inp["token"].get("name"),
                "category": cat, "narrative_title": (n or {}).get("title"), "writeup": self.template(res, inp),
-               "price_usd": inp["token"].get("price_usd"), "disclaimer": DISCLAIMER}
+               "price_usd": inp["token"].get("price_usd"), "drivers": inp.get("drivers"), "disclaimer": DISCLAIMER}
         if res["verdict"] in self.cfg.scoring["engine"].get("paper_trade_verdicts", ["BUY"]):
             await self.paper.open(sig, inp["token"])
         await hub.publish("signal", sig)
