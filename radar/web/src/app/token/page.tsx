@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import { Chart, type ChartMarker } from '@/components/Chart';
 import { SignalCard, useAction } from '@/components/radar';
+import { StoryDrawer } from '@/components/discover';
 import { AsOf, Copy, DISCLAIMER, Panel, SafetyFlags, safetyFlags, TokenIcon } from '@/components/ui';
 import { api } from '@/lib/api';
 import { ago, clock, pct, pctClass, price, short, usd } from '@/lib/format';
@@ -19,6 +20,7 @@ function TokenInner() {
   const now = useNow();
   const [d, setD] = useState<any>(null);
   const [err, setErr] = useState('');
+  const [story, setStory] = useState(false);
 
   const load = useCallback(() => {
     if (!a) return;
@@ -63,7 +65,7 @@ function TokenInner() {
 
   return (
     <div className="space-y-2">
-      <header className="flex flex-wrap items-center gap-3 rounded border border-line bg-panel px-3 py-2">
+      <header className="glass flex flex-wrap items-center gap-3 rounded-2xl px-4 py-3">
         <TokenIcon src={t.image} symbol={t.symbol} size={36} />
         <div className="min-w-0">
           <h1 className="text-lg font-bold">{t.symbol || short(a)} <span className="text-sm font-normal text-mute">{t.name}</span>
@@ -77,15 +79,16 @@ function TokenInner() {
         </div>
         <div className="ml-auto flex flex-wrap gap-1">
           {tokenLinks(a, t.chain || 'solana', t.pair_address).map((l) => (
-            <a key={l.label} href={l.href} target="_blank" rel="noreferrer" className="rounded border border-line px-2 py-1 hover:border-accent hover:text-accent">{l.label} ↗</a>
+            <a key={l.label} href={l.href} target="_blank" rel="noreferrer" className="rounded-lg border border-white/10 px-2 py-1 transition hover:border-accent hover:text-accent">{l.label} ↗</a>
           ))}
+          <button onClick={() => setStory(true)} className="rounded-lg bg-gradient-to-r from-accent/40 to-accent2/30 px-2.5 py-1 font-medium">Why it’s moving ↗</button>
           <WatchButton address={a} initial={d.watched} />
         </div>
       </header>
 
       <div className="grid grid-cols-3 gap-1 sm:grid-cols-5 lg:grid-cols-7 xl:grid-cols-14">
         {tiles.map(([k, v, c]) => (
-          <div key={k} className="rounded border border-line bg-panel px-2 py-1">
+          <div key={k} className="glass rounded-xl px-2.5 py-1.5">
             <div className="text-[10px] uppercase text-mute">{k}</div>
             <div className={`num text-sm ${c || ''}`}>{v}</div>
           </div>
@@ -173,7 +176,8 @@ function TokenInner() {
           )}
         </Panel>
       </div>
-      <p className="rounded border border-warn/40 bg-warn/5 px-3 py-2 text-warn">⚠ {DISCLAIMER} Radar never holds keys or places trades.</p>
+      <StoryDrawer address={story ? a : null} onClose={() => setStory(false)} />
+      <p className="rounded-xl border border-warn/30 bg-warn/5 px-3 py-2 text-warn">⚠ {DISCLAIMER} Radar never holds keys or places trades.</p>
       <p className="text-[11px] text-mute"><Link href="/">← Dashboard</Link></p>
     </div>
   );

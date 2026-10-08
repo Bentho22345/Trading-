@@ -66,7 +66,7 @@ class Tracker:
         self.flash_tokens: dict[str, float] = {}
         self.launch_watch: dict[str, float] = {}       # mint -> until (first-90s trade capture)       # address -> until (max refresh rate during FLASH)
         # hooks wired by the app: trade(t), tokens(rows), safety(rep), social(event), custom(item)
-        self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": []}
+        self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": [], "new_token": []}
         self.gecko_networks = [n.strip() for n in __import__("os").environ.get("GECKO_NETWORKS", "solana,base,bsc,eth").split(",") if n.strip()]
         self.poly_prev: dict[str, float] = {}
         for c in (self.dex.http, self.gecko.http, self.rug.http):
@@ -135,6 +135,7 @@ class Tracker:
                "launched_at": now, "first_seen": now, "pump_mcap_sol": m.get("marketCapSol"),
                "pump_mcap_as_of": now, "updated": now, "dev_initial_buy_pct": dev_pct}
         await self.db.upsert("tokens", row, "address")
+        await self._hook("new_token", row)
         # watch every launch's first 90s of trades (sniper / bundle detection), on the one shared socket
         self.launch_watch[mint] = now + 90
         if self.pump.ws is not None and mint not in self.pump.token_subs:
@@ -275,12 +276,15 @@ class Tracker:
     async def _ensure_token(self, address: str, chain: str, name: str | None, symbol: str | None,
                             image: str | None, source: str, launched_at: float | None = None) -> None:
         now = time.time()
+        existed = await self.db.one("SELECT 1 FROM tokens WHERE address=?", (address,))
         await self.db.exec(
             "INSERT INTO tokens (address, chain, name, symbol, image, source, first_seen, launched_at, updated) "
             "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(address) DO UPDATE SET "
             "name=COALESCE(tokens.name, excluded.name), symbol=COALESCE(tokens.symbol, excluded.symbol), "
             "image=COALESCE(tokens.image, excluded.image)",
             (address, chain, name, symbol, image, source, now, launched_at, now))
+        if not existed and (name or symbol):
+            await self._hook("new_token", {"address": address, "chain": chain, "name": name, "symbol": symbol, "source": source})
 
     async def _store_trending(self, source: str, lst: str, rows: list[dict[str, Any]], key: str = "token_address") -> None:
         now = time.time()

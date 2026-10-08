@@ -14,6 +14,7 @@ export default function NarrativesPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [cat, setCat] = useState('');
   const [sel, setSel] = useState<number | null>(null);
+  useEffect(() => { const n = new URLSearchParams(window.location.search).get('n'); if (n) setSel(+n); }, []);
   const load = useCallback(() => api(`/api/narratives?limit=60&category=${cat}`).then(setRows).catch(() => {}), [cat]);
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
   useLive(({ ch }) => { if (ch === 'narrative_new') load(); });
@@ -30,7 +31,7 @@ export default function NarrativesPage() {
         </div>
         <div className="grid gap-2 md:grid-cols-2">
           {rows.map((n) => (
-            <button key={n.id} onClick={() => setSel(n.id)} className={`rounded border bg-panel p-2 text-left hover:border-accent ${n.flash ? 'border-flash flash-pulse' : sel === n.id ? 'border-accent' : 'border-line'}`}>
+            <button key={n.id} onClick={() => setSel(n.id)} className={`glass glass-hover rounded-2xl p-3 text-left ${n.flash ? 'flash-pulse' : sel === n.id ? 'grad-border' : ''}`}>
               <div className="flex items-center gap-2">
                 <span className={`text-[11px] font-bold uppercase ${STAGE[n.stage] || ''}`}>{n.stage}</span>
                 {n.flash && <span className="text-[11px] font-bold text-flash">⚡ FLASH</span>}

@@ -198,6 +198,15 @@ CREATE INDEX IF NOT EXISTS nt_token ON narrative_tokens(token_address);
 CREATE INDEX IF NOT EXISTS social_source ON social_events(source, ts DESC);
 CREATE INDEX IF NOT EXISTS trades_trader ON pump_trades(trader);
 
+CREATE TABLE IF NOT EXISTS token_stories (
+  token_address TEXT PRIMARY KEY, ts REAL NOT NULL, story_json TEXT, method TEXT
+);
+
+CREATE TABLE IF NOT EXISTS launch_watches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, terms_json TEXT NOT NULL, label TEXT, narrative_id INTEGER,
+  created REAL NOT NULL, enabled INTEGER DEFAULT 1, hits INTEGER DEFAULT 0, last_hit REAL, last_hit_token TEXT
+);
+
 CREATE TABLE IF NOT EXISTS briefs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, body TEXT, model TEXT, context_json TEXT
 );

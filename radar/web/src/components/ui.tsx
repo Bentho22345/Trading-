@@ -7,9 +7,9 @@ export function Panel({ title, right, children, className = '' }: {
   title: React.ReactNode; right?: React.ReactNode; children: React.ReactNode; className?: string;
 }) {
   return (
-    <section className={`flex min-h-0 min-w-0 flex-col rounded border border-line bg-panel ${className}`}>
-      <header className="flex items-center justify-between gap-2 border-b border-line px-2 py-1.5">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-mute">{title}</h2>
+    <section className={`glass flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl ${className}`}>
+      <header className="flex items-center justify-between gap-2 border-b border-white/5 px-3 py-2">
+        <h2 className="text-[12px] font-semibold tracking-tight text-fg/90">{title}</h2>
         <div className="flex items-center gap-2 text-[11px] text-mute">{right}</div>
       </header>
       <div className="min-h-0 flex-1 overflow-auto">{children}</div>
@@ -25,7 +25,7 @@ export function Copy({ text, label = 'Copy CA' }: { text: string; label?: string
         e.preventDefault(); e.stopPropagation();
         navigator.clipboard?.writeText(text).then(() => { setOk(true); setTimeout(() => setOk(false), 1200); });
       }}
-      className="rounded border border-line px-1.5 py-0.5 text-[11px] hover:border-accent hover:text-accent"
+      className="rounded-lg border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] transition hover:border-accent hover:text-accent active:scale-95"
       title={text}
     >
       {ok ? 'Copied ✓' : label}
@@ -59,7 +59,7 @@ export function SafetyFlags({ t }: { t: Partial<Token> }) {
     <span className="inline-flex gap-0.5">
       {safetyFlags(t).map((f) => (
         <span key={f.label} title={f.title}
-          className={`rounded px-1 text-[10px] ${f.bad == null ? 'bg-line text-mute' : f.bad ? 'bg-down/20 text-down' : 'bg-up/15 text-up'}`}>
+          className={`rounded-md px-1.5 py-px text-[10px] font-medium ${f.bad == null ? 'bg-line text-mute' : f.bad ? 'bg-down/20 text-down' : 'bg-up/15 text-up'}`}>
           {f.label}
         </span>
       ))}
@@ -80,7 +80,7 @@ export function TokenIcon({ src, symbol, size = 20 }: { src?: string | null; sym
 }
 
 export function Dot({ status }: { status: string }) {
-  const c = status === 'ok' || status === 'connected' ? 'bg-up' : status === 'pending' || status === 'saved' ? 'bg-mute' : status === 'stale' || status === 'degraded' ? 'bg-warn' : 'bg-down';
+  const c = status === 'ok' || status === 'connected' ? 'bg-up shadow-[0_0_8px_var(--color-up)]' : status === 'pending' || status === 'saved' ? 'bg-mute' : status === 'stale' || status === 'degraded' ? 'bg-warn' : 'bg-down';
   return <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${c}`} />;
 }
 

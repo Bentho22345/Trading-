@@ -47,6 +47,8 @@ class State:
     signals: Any
     insights: Any
     telegram: Any
+    discover: Any
+    story: Any
 
 
 S = State()
@@ -79,6 +81,11 @@ async def lifespan(app: FastAPI):
     S.paper = Paper(S.db, S.cfg)
     S.signals = SignalEngine(S.db, S.cfg, S.tracker, S.social, S.smart, S.paper, S.alerts, S.ai)
     S.insights = Insights(S.db, S.cfg, S.ai, S.alerts, S.social, S.paper, S.tracker)
+    from .discover import Discover
+    from .story import StoryEngine
+    S.discover = Discover(S.db, S.tracker, S.social, S.signals, S.alerts)
+    S.story = StoryEngine(S.db, S.ai, S.social, S.connectors, S.discover, S.cfg)
+    S.tracker.hooks["new_token"].append(S.discover.check_launch)
 
     async def on_change(cid: str, vals: dict[str, str]) -> None:
         if cid == "coingecko":
@@ -104,7 +111,7 @@ async def lifespan(app: FastAPI):
         await S.custom.start_all()
         S.social.start()
         await S.smart.load()
-        jobs = [S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(),
+        jobs = [S.story.loop(), S.signals.loop(), S.signals.rug_refresh_loop(), S.insights.brief_scheduler(), S.smart.helius_loop(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),

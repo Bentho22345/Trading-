@@ -17,8 +17,8 @@ export default function LoginPage() {
     }
   };
   return (
-    <div className="mx-auto mt-24 max-w-sm rounded border border-line bg-panel p-5">
-      <h1 className="mb-1 text-lg font-bold"><span className="text-accent">◉</span> Memecoin Radar</h1>
+    <div className="glass grad-border mx-auto mt-24 max-w-sm rounded-2xl p-6">
+      <h1 className="mb-1 text-lg font-bold"><span className="grad-text">Memecoin Radar</span></h1>
       <p className="mb-4 text-[11px] text-mute">Private terminal. Enter the password set in RADAR_PASSWORD.</p>
       <form onSubmit={submit} className="space-y-2">
         <input type="password" autoFocus value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Password"

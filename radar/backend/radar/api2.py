@@ -428,3 +428,86 @@ async def tg_sign(b: CodeBody) -> dict[str, str]:
         return {"message": await S.telegram.sign_in(b.code or "", b.password)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, str(e)) from e
+
+
+# ---------------- discovery: trending / launching / emerging / stories / search / launch watch ----------------
+_cache: dict[str, tuple[float, Any]] = {}
+
+
+async def _cached(key: str, ttl: float, fn):
+    hit = _cache.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    val = await fn()
+    _cache[key] = (time.time(), val)
+    return val
+
+
+@router.get("/discover/climbers")
+async def climbers(hours: float = 4, min_liq: float = 5000, limit: int = 60) -> dict[str, Any]:
+    rows = await _cached(f"climb:{hours}:{min_liq}:{limit}", 8, lambda: S.discover.climbers(hours=hours, min_liq=min_liq, limit=limit))
+    return {"as_of": time.time(), "rows": rows}
+
+
+@router.get("/discover/launching")
+async def launching(max_age_h: float = 24, limit: int = 60) -> dict[str, Any]:
+    rows = await _cached(f"launch:{max_age_h}:{limit}", 6, lambda: S.discover.launching(max_age_h=max_age_h, limit=limit))
+    return {"as_of": time.time(), "rows": rows}
+
+
+@router.get("/discover/emerging")
+async def emerging(limit: int = 30) -> dict[str, Any]:
+    return await _cached(f"emerging:{limit}", 4, lambda: S.discover.emerging(limit=limit))
+
+
+@router.get("/token/{address}/story")
+async def story(address: str) -> dict[str, Any]:
+    st = await S.story.get(address)
+    if not st:
+        st = await S.story.build(address)
+    if not st:
+        raise HTTPException(404, "unknown token")
+    return st
+
+
+@router.post("/token/{address}/story")
+async def story_refresh(address: str, x: bool = False) -> dict[str, Any]:
+    st = await S.story.build(address, use_x=x)
+    if not st:
+        raise HTTPException(404, "unknown token")
+    return st
+
+
+@router.get("/sparks")
+async def sparks(a: str, hours: float = 2) -> dict[str, list[float]]:
+    return await S.discover.sparks([x for x in a.split(",") if x][:300], hours)
+
+
+@router.get("/search")
+async def search(q: str) -> dict[str, Any]:
+    return await S.discover.search(q)
+
+
+class WatchTermsBody(BaseModel):
+    terms: list[str]
+    label: str | None = None
+    narrative_id: int | None = None
+
+
+@router.get("/launch-watches")
+async def launch_watches() -> list[dict[str, Any]]:
+    return await S.discover.watches()
+
+
+@router.post("/launch-watches")
+async def add_launch_watch(b: WatchTermsBody) -> dict[str, Any]:
+    try:
+        return {"id": await S.discover.add_watch(b.terms, b.label, b.narrative_id)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.delete("/launch-watches/{wid}")
+async def del_launch_watch(wid: int) -> dict[str, bool]:
+    await S.db.exec("DELETE FROM launch_watches WHERE id=?", (wid,))
+    return {"ok": True}

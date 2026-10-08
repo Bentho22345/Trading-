@@ -7,9 +7,9 @@ import { tokenLinks } from '@/lib/links';
 import { Copy, DISCLAIMER } from './ui';
 
 export function VerdictBadge({ v, size = 'sm' }: { v?: string; size?: 'sm' | 'lg' }) {
-  const cls = v === 'BUY' ? 'bg-up/20 text-up border-up/50' : v === 'WATCH' ? 'bg-warn/15 text-warn border-warn/50' : 'bg-down/15 text-down border-down/50';
+  const cls = v === 'BUY' ? 'bg-up/15 text-up border-up/40 shadow-[0_0_12px_-4px_var(--color-up)]' : v === 'WATCH' ? 'bg-warn/10 text-warn border-warn/40' : 'bg-down/10 text-down border-down/30';
   const label = v === 'BUY' ? 'BUY SIGNAL' : v || '—';
-  return <span className={`inline-block rounded border font-bold ${cls} ${size === 'lg' ? 'px-2 py-0.5 text-sm' : 'px-1 text-[10px]'}`}>{label}</span>;
+  return <span className={`inline-block rounded-full border font-semibold tracking-wide ${cls} ${size === 'lg' ? 'px-2.5 py-0.5 text-[12px]' : 'px-1.5 text-[10px]'}`}>{label}</span>;
 }
 
 /** Single-series sparkline; hover shows the value at each point. */
@@ -51,7 +51,7 @@ export function SignalCard({ s, now, compact = false }: { s: any; now: number; c
   const risks = s.reasons?.risks ?? s.risks ?? [];
   const [open, setOpen] = useState(!compact);
   return (
-    <article className={`rounded border bg-panel p-2 ${s.verdict === 'BUY' ? 'border-up/50' : 'border-line'}`}>
+    <article className={`glass glass-hover rounded-2xl p-3 ${s.verdict === 'BUY' ? 'grad-border' : ''}`}>
       <header className="flex flex-wrap items-center gap-2">
         <VerdictBadge v={s.verdict} size="lg" />
         <Link href={`/token?a=${s.token_address}`} className="font-bold hover:text-accent">{s.symbol || s.token_address.slice(0, 6)}</Link>
@@ -99,7 +99,7 @@ export function SignalCard({ s, now, compact = false }: { s: any; now: number; c
 
 export function Stat({ k, v, cls = '', title }: { k: string; v: React.ReactNode; cls?: string; title?: string }) {
   return (
-    <div className="rounded border border-line bg-panel px-2 py-1" title={title}>
+    <div className="glass rounded-xl px-3 py-2" title={title}>
       <div className="text-[10px] uppercase text-mute">{k}</div>
       <div className={`num text-sm ${cls}`}>{v}</div>
     </div>

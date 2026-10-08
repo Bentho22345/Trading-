@@ -72,7 +72,10 @@ def test_live_launch_reaches_ui_and_gets_market_data(stack):
         async with websockets.connect(f"ws://{stack}/ws") as ws:
             await ws.send(json.dumps({"view": [MINT]}))
             t0 = time.time()
-            while time.time() - t0 < 30 and not {"launch", "tokens", "trade"} <= seen.keys():
+            def done() -> bool:
+                return ("launch" in seen and any(t["address"] == MINT and t["liquidity_usd"] for rows in seen.get("tokens", []) for t in rows)
+                        and any(t["mint"] == MINT for t in seen.get("trade", [])))
+            while time.time() - t0 < 30 and not done():
                 msg = json.loads(await asyncio.wait_for(ws.recv(), 30))
                 seen.setdefault(msg["ch"], []).append(msg["data"])
         return seen
@@ -212,3 +215,23 @@ def test_password_gate(tmp_path):
     finally:
         p.terminate()
         p.wait(10)
+
+
+def test_discovery_endpoints(stack):
+    w = httpx.post(f"http://{stack}/api/launch-watches", json={"terms": ["fake"], "label": "fakes"}).json()
+    assert w["id"]
+    for path in ("/api/discover/climbers", "/api/discover/launching", "/api/discover/emerging", "/api/launch-watches"):
+        r = httpx.get(f"http://{stack}{path}")
+        assert r.status_code == 200, (path, r.text)
+    assert httpx.get(f"http://{stack}/api/search?q=HAWK").json()["tokens"][0]["symbol"] == "HAWKTUAH"
+    sp = httpx.get(f"http://{stack}/api/sparks?a={MINT}").json()
+    assert MINT in sp and len(sp[MINT]) >= 1
+    st = httpx.get(f"http://{stack}/api/token/{MINT}/story").json()
+    assert st["method"] == "heuristic" and "narratives" in st and "linked" in st
+    for _ in range(40):  # the fake feed launches "Fake xxxx" tokens every 0.5s -> Launch Watch must fire
+        hits = [x for x in httpx.get(f"http://{stack}/api/launch-watches").json() if x["id"] == w["id"]]
+        if hits and hits[0]["hits"]:
+            break
+        time.sleep(0.25)
+    assert hits[0]["hits"] >= 1
+    assert any("Launch Watch" in a["title"] for a in httpx.get(f"http://{stack}/api/alerts").json())

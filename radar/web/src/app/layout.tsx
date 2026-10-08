@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from 'next';
+import { GeistMono } from 'geist/font/mono';
+import { GeistSans } from 'geist/font/sans';
 import './globals.css';
 import { Nav } from '@/components/Nav';
 import { FlashOverlay } from '@/components/FlashOverlay';
@@ -14,10 +16,11 @@ export const viewport: Viewport = { themeColor: '#07090c', width: 'device-width'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body className="min-h-screen">
+        <div className="aurora" aria-hidden />
         <Nav />
-        <main className="px-2 pb-6 md:px-3">{children}</main>
+        <main className="px-3 pb-10 pt-3 md:px-5 lg:pl-[228px]">{children}</main>
         <FlashOverlay />
       </body>
     </html>
