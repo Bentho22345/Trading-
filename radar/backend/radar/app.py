@@ -99,8 +99,8 @@ async def lifespan(app: FastAPI):
         await on_change(cid, await S.connectors.values(cid))
 
     S.tracker.hooks["social"].append(S.social.ingest)
-    S.tracker.hooks["trade"] += [S.smart.on_trade, S.signals.rug_shield_trade]
-    S.tracker.hooks["tokens"] += [S.signals.rug_shield_tokens, watch_rules]
+    S.tracker.hooks["trade"] += [S.smart.on_trade, S.signals.rug_shield_trade, S.signals.on_trade]
+    S.tracker.hooks["tokens"] += [S.signals.rug_shield_tokens, watch_rules, S.signals.on_tokens]
     S.tracker.hooks["safety"].append(S.signals.rug_shield_safety)
     S.custom.on_item = S.social.ingest
     vals = S.connectors.values
