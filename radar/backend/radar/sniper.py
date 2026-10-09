@@ -28,6 +28,7 @@ from collections import Counter, deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import snipe_metrics as sm
 from .hub import hub
 from .tracker import CURVE_END_SOL, CURVE_START_SOL, curve_progress
 
@@ -69,6 +70,14 @@ class Launch:
     last_pub: float = 0.0
     dirty: bool = True
     until: float = 0.0
+    balances: dict[str, float] = field(default_factory=dict)          # wallet -> tokens held (from the trade stream)
+    early: set[str] = field(default_factory=set)                       # bought in the first 5s (snipers)
+    bundlers: set[str] = field(default_factory=set)                    # several wallets taking supply in the creation block
+    pros: set[str] = field(default_factory=set)                        # buyers who are in the Top Traders pool
+    metadata: dict[str, Any] = field(default_factory=dict)             # socials / description from the coin's metadata URI
+    uri: str | None = None
+    hits: dict[str, float] = field(default_factory=dict)               # strategy id -> first match ts
+    block: set[str] = field(default_factory=set)                       # buyers in the first 2.5s
 
 
 def _slope(pts: list[tuple[float, float]]) -> float:
@@ -218,7 +227,7 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
     enough = len(trades) >= MIN_TRADES_FOR_CALL and len(L.buyers) >= MIN_BUYERS_FOR_CALL and age >= MIN_AGE_FOR_CALL
     tier = "TRAP" if hard else "SNIPE" if score >= SNIPE_AT and enough else "WATCH" if score >= WATCH_AT else "PASS"
     sol_usd = ctx.get("sol_usd")
-    return {
+    res = {
         "mint": L.mint, "symbol": L.symbol, "name": L.name, "deployer": L.deployer, "created": L.created, "age_s": round(age),
         "score": round(score, 1), "tier": tier, "flags": flags, "detectors": det,
         "mcap_sol": L.mcap_sol, "mcap_usd": round(L.mcap_sol * sol_usd) if L.mcap_sol and sol_usd else None,
@@ -232,6 +241,24 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
         # high score but not yet enough trades / buyers / age to call: shown as "confirming" instead of a call
         "confirming": tier == "WATCH" and score >= SNIPE_AT and not enough,
     }
+    # trader-terminal metrics + the two-axis read (upside vs risk) + every strategy this launch matches right now
+    mx = sm.compute(L, now, sol_usd, {"social": {"authors": soc["authors"], "engagement": soc.get("engagement", 0)} if soc else {}})
+    mx["net_sol_1m"] = res["net_sol_1m"]
+    up, risk, why_up, why_risk = sm.upside_risk(res, mx)
+    res.update(metrics=mx, upside=up, risk=risk, why_up=why_up, why_risk=why_risk,
+               scores={k: sm.appetite_score(up, risk, k) for k in sm.APPETITE},
+               description=(L.metadata.get("description") or "")[:280] or None,
+               links={k: L.metadata.get(k) for k in ("twitter", "telegram", "website") if L.metadata.get(k)},
+               image=L.metadata.get("image"))
+    row = flat(res)
+    res["strategies"] = [st["id"] for st in ctx.get("strategies", []) if sm.matches(st["rules"], row, st.get("mode", "all"))]
+    return res
+
+
+def flat(res: dict[str, Any]) -> dict[str, Any]:
+    """One flat dict of every metric a strategy rule can reference."""
+    return {**{k: v for k, v in res.items() if not isinstance(v, (dict, list))}, **res.get("metrics", {}),
+            "alpha": len(res.get("alpha") or []), "upside": res.get("upside"), "risk": res.get("risk")}
 
 
 class Sniper:
@@ -247,16 +274,28 @@ class Sniper:
         self.ctx: dict[str, Any] = {"social": {}, "cashtags": {}}
         self.clones: dict[str, dict[str, Any]] = {}
         self.seen_launches = 0
+        self.meta_fetch: Any = None                          # callable(mint, uri) wired by the app
+        self.pool: set[str] = set()                          # every wallet in the Top Traders pool (pro traders)
+        self.strategies: list[dict[str, Any]] = []           # active strategies (presets + custom + playbook consensus)
+        self.hits: dict[tuple[str, str], dict[str, Any]] = {}
+        self.dirty_hits: set[tuple[str, str]] = set()
+        self.on_hit: Any = None
+        self.hit_mints: set[str] = set()
 
     # ---------------- stream hooks (hot path: memory only) ----------------
     async def on_launch(self, row: dict[str, Any]) -> None:
         now = time.time()
         mint = row["address"]
+        if row.get("is_mayhem"):
+            return
         L = Launch(mint=mint, created=row.get("launched_at") or now, symbol=row.get("symbol"), name=row.get("name"),
                    deployer=row.get("deployer"), dev_buy_sol=float(row.get("initial_buy_sol") or 0),
                    dev_buy_pct=row.get("dev_initial_buy_pct"), dev_tokens=float(row.get("initial_buy_tokens") or 0),
                    vsol=row.get("vsol") or row.get("curve_sol"), mcap_sol=row.get("pump_mcap_sol"), until=now + TRACK_S)
         L.peak_mcap_sol = L.mcap_sol or 0.0
+        L.uri = row.get("uri")
+        if L.deployer and L.dev_tokens:
+            L.balances[L.deployer] = L.dev_tokens
         if self.metas:
             for mid in self.metas.match_coin(L.name, L.symbol)[:3]:
                 m = next((r for r in self.metas.rows if r["id"] == mid), None)
@@ -270,7 +309,26 @@ class Sniper:
         await self.db.exec("INSERT OR IGNORE INTO dev_launches (mint, deployer, symbol, name, ts, peak_mcap_sol) VALUES (?,?,?,?,?,?)",
                            (mint, L.deployer, L.symbol, L.name, L.created, L.mcap_sol))
         asyncio.get_running_loop().create_task(self._load_dev(L))
+        if self.meta_fetch and L.uri:
+            self.meta_fetch(L.mint, L.uri)
         await self._evaluate(L, now, force=True)
+
+    async def on_metadata(self, mint: str, md: dict[str, Any]) -> None:
+        L = self.launches.get(mint)
+        if L is None:
+            return
+        if md.get("is_mayhem"):
+            self.launches.pop(mint, None)
+            await hub.publish("snipe_drop", {"mint": mint, "reason": "mayhem"})
+            return
+        L.metadata = md
+        if self.metas and md.get("description"):
+            for mid in self.metas.match_text(md["description"])[:2]:
+                if not any(x["id"] == mid for x in L.meta):
+                    m = next((r for r in self.metas.rows if r["id"] == mid), None)
+                    if m:
+                        L.meta.append({"id": mid, "name": m.get("name"), "emoji": m.get("emoji"), "status": m.get("status"), "heat": m.get("heat")})
+        await self._evaluate(L, time.time(), force=True)
 
     async def on_trade(self, t: dict[str, Any]) -> None:
         mint = t.get("mint")
@@ -278,6 +336,8 @@ class Sniper:
         call = self.calls.get(mint)
         if call and t.get("mcap_sol"):
             self._call_mark(call, t["mcap_sol"], t["ts"])
+        if t.get("mcap_sol") and self.hit_mints and mint in self.hit_mints:
+            self._hit_mark(mint, t["mcap_sol"], t["ts"])
         if L is None:
             return
         now = t["ts"]
@@ -289,6 +349,8 @@ class Sniper:
         if t.get("mcap_sol"):
             L.mcap_sol = float(t["mcap_sol"])
             L.peak_mcap_sol = max(L.peak_mcap_sol, L.mcap_sol)
+        if trader:
+            L.balances[trader] = max(0.0, L.balances.get(trader, 0.0) + (tokens if side == "buy" else -tokens))
         if trader == L.deployer:
             if side == "sell":
                 L.dev_sold_tokens += tokens
@@ -296,6 +358,15 @@ class Sniper:
                 L.dev_tokens = tokens
         elif side == "buy" and trader:
             L.buyers.setdefault(trader, now)
+            dt = now - L.created
+            if dt <= 5:
+                L.early.add(trader)
+            if dt <= 2.5:   # creation-block cluster: counted as bundlers once 3+ wallets land there
+                L.block.add(trader)
+                if len(L.block) >= 3:
+                    L.bundlers |= L.block
+            if self.pool and trader in self.pool:
+                L.pros.add(trader)
             L.buy_sol[trader] = L.buy_sol.get(trader, 0.0) + sol
             if trader not in {a["wallet"] for a in L.alpha}:
                 hit = self._alpha(trader)
@@ -315,6 +386,7 @@ class Sniper:
             call["graduated_at"] = ev["ts"]
             self.dirty_calls.add(ev["mint"])
         await self.db.exec("UPDATE dev_launches SET graduated_at=COALESCE(graduated_at, ?) WHERE mint=?", (ev["ts"], ev["mint"]))
+        await self.db.exec("UPDATE strategy_hits SET graduated_at=COALESCE(graduated_at, ?) WHERE mint=?", (ev["ts"], ev["mint"]))
 
     async def on_trending_first(self, ev: dict[str, Any]) -> None:
         for a in ev["addresses"]:
@@ -333,6 +405,8 @@ class Sniper:
             mc = r.get("market_cap") or r.get("fdv")
             if call and mc:
                 self._call_mark(call, mc / sol, r.get("as_of") or time.time())
+            if mc and r.get("address") in self.hit_mints:
+                self._hit_mark(r["address"], mc / sol, r.get("as_of") or time.time())
 
     def _alpha(self, wallet: str) -> dict[str, Any] | None:
         r = (self.traders.ranked.get(wallet) if self.traders else None)
@@ -352,7 +426,12 @@ class Sniper:
         L.last_eval = now
         prev = L.result.get("tier")
         self.ctx["sol_usd"] = self.tracker.sol_usd
+        self.ctx["strategies"] = self.strategies
         L.result = analyze(L, now, self.ctx)
+        for sid in L.result.get("strategies", []):
+            if sid not in L.hits and L.mcap_sol:
+                L.hits[sid] = now
+                await self._hit(L, sid, now)
         L.dirty = False
         tier = L.result["tier"]
         if tier in ("SNIPE", "WATCH"):
@@ -388,6 +467,29 @@ class Sniper:
         asyncio.get_running_loop().create_task(self.alerts.send("info", f"🎯 SNIPE {L.symbol or L.mint[:6]} · score {r['score']:.0f}",
                                f"{top['label']}: {top['detail']}" if top else "", token=L.mint, dedupe=f"snipe:{L.mint}", ttl=86400))
 
+    async def _hit(self, L: Launch, sid: str, now: float) -> None:
+        """First time a launch matches a strategy: log it with its metrics so the strategy gets graded on Proof."""
+        h = {"strategy_id": sid, "mint": L.mint, "symbol": L.symbol, "ts": now, "mcap_sol": L.mcap_sol,
+             "metrics_json": json.dumps(flat(L.result)), "peak_mcap_sol": L.mcap_sol, "peak_ts": now, "last_mcap_sol": L.mcap_sol,
+             "graduated_at": L.graduated_at}
+        self.hits[(sid, L.mint)] = h
+        self.hit_mints.add(L.mint)
+        self.tracker.launch_watch[L.mint] = max(self.tracker.launch_watch.get(L.mint, 0), now + 1800)
+        L.until = max(L.until, now + 3600)
+        await self.db.exec("INSERT OR IGNORE INTO strategy_hits (strategy_id, mint, symbol, ts, mcap_sol, metrics_json, peak_mcap_sol, "
+                           "peak_ts, last_mcap_sol) VALUES (?,?,?,?,?,?,?,?,?)",
+                           (sid, L.mint, L.symbol, now, L.mcap_sol, h["metrics_json"], L.mcap_sol, now, L.mcap_sol))
+        if self.on_hit:
+            asyncio.get_running_loop().create_task(self.on_hit(sid, L.result))
+
+    def _hit_mark(self, mint: str, mcap_sol: float, ts: float) -> None:
+        for (sid, m), h in self.hits.items():
+            if m == mint:
+                h["last_mcap_sol"] = mcap_sol
+                if mcap_sol > (h.get("peak_mcap_sol") or 0):
+                    h["peak_mcap_sol"], h["peak_ts"] = mcap_sol, ts
+                self.dirty_hits.add((sid, m))
+
     def _call_mark(self, call: dict[str, Any], mcap_sol: float, ts: float) -> None:
         call["last_mcap_sol"], call["last_ts"] = mcap_sol, ts
         if mcap_sol > (call.get("peak_mcap_sol") or 0):
@@ -409,6 +511,21 @@ class Sniper:
                         self.calls.pop(mint, None)
                     elif now - c["call_ts"] < 6 * 3600:   # keep its trades streaming for 6h so the outcome is exact
                         self.tracker.launch_watch[mint] = max(self.tracker.launch_watch.get(mint, 0), now + 60)
+                for key, h in list(self.hits.items()):
+                    for col, dt in (("mcap_sol_15m", 900), ("mcap_sol_1h", 3600)):
+                        if h.get(col) is None and now - h["ts"] >= dt:
+                            h[col] = h.get("last_mcap_sol")
+                            self.dirty_hits.add(key)
+                    if now - h["ts"] > CALL_TRACK_S:
+                        self.hits.pop(key, None)
+                self.hit_mints = {m for _, m in self.hits}
+                if self.dirty_hits:
+                    rows = [self.hits[k] for k in self.dirty_hits if k in self.hits]
+                    self.dirty_hits.clear()
+                    await self.db.many("UPDATE strategy_hits SET peak_mcap_sol=?, peak_ts=?, last_mcap_sol=?, mcap_sol_15m=?, mcap_sol_1h=? "
+                                       "WHERE strategy_id=? AND mint=?",
+                                       [(h.get("peak_mcap_sol"), h.get("peak_ts"), h.get("last_mcap_sol"), h.get("mcap_sol_15m"),
+                                         h.get("mcap_sol_1h"), h["strategy_id"], h["mint"]) for h in rows])
                 if self.dirty_calls:
                     rows = [self.calls[m] for m in self.dirty_calls if m in self.calls]
                     self.dirty_calls.clear()
@@ -530,7 +647,10 @@ class Sniper:
 
     # ---------------- reads ----------------
     def board(self, min_score: float = 0, tiers: set[str] | None = None, max_age_min: float = 30, limit: int = 100,
-              hide_bundled: bool = False, alpha_only: bool = False, proven_dev: bool = False) -> dict[str, Any]:
+              hide_bundled: bool = False, alpha_only: bool = False, proven_dev: bool = False, appetite: str = "",
+              strategy: str = "", rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """`appetite` (safe / balanced / degen) ranks by upside minus a risk penalty instead of the call tier, so a coin
+        doesn't have to be perfect to make the board — it just has to be worth its risk at your appetite."""
         now = time.time()
         rows = []
         for L in self.launches.values():
@@ -545,11 +665,18 @@ class Sniper:
                 continue
             if proven_dev and not ((L.dev or {}).get("graduated")):
                 continue
+            if strategy and strategy not in r.get("strategies", []):
+                continue
+            if rules and not sm.matches(rules, flat(r)):
+                continue
             rows.append({**r, "age_s": round(now - L.created), "called": L.mint in self.calls})
-        order = {"SNIPE": 0, "WATCH": 1, "PASS": 2, "TRAP": 3}
-        rows.sort(key=lambda r: (order.get(r["tier"], 9), -r["score"], -r["created"]))
+        if appetite in sm.APPETITE:
+            rows.sort(key=lambda r: (-(r.get("scores") or {}).get(appetite, 0), -r["created"]))
+        else:
+            order = {"SNIPE": 0, "WATCH": 1, "PASS": 2, "TRAP": 3}
+            rows.sort(key=lambda r: (order.get(r["tier"], 9), -r["score"], -r["created"]))
         return {"rows": rows[:limit], "tracking": len(self.launches), "seen": self.seen_launches, "as_of": now,
-                "thresholds": {"snipe": SNIPE_AT, "watch": WATCH_AT}}
+                "matched": len(rows), "thresholds": {"snipe": SNIPE_AT, "watch": WATCH_AT}}
 
     def one(self, mint: str) -> dict[str, Any] | None:
         L = self.launches.get(mint)

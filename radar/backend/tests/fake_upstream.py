@@ -102,6 +102,18 @@ def gecko_trades(net: str, pool: str):
     return {"data": rows}
 
 
+@api.get("/meta/{mint}")
+def coin_meta(mint: str):
+    """pump.fun-style metadata JSON; every other coin has socials (one an X community)."""
+    h = sum(map(ord, mint))
+    md = {"name": f"Fake {mint[:4]}", "symbol": mint[:5].upper(), "description": "the dog that runs the internet" if h % 3 == 0 else "gm",
+          "image": "https://example.invalid/img.png"}
+    if h % 2 == 0:
+        md.update(twitter="https://x.com/i/communities/1888" if h % 4 == 0 else "https://x.com/fakecoin", telegram="https://t.me/fake",
+                  website="https://fake.example")
+    return md
+
+
 @api.get("/rug/tokens/{mint}/report")
 def rug(mint: str):
     rep = copy.deepcopy(fx.RUG_REPORT_MINTABLE if mint == fx.MINT_BAD else fx.RUG_REPORT)
@@ -162,7 +174,11 @@ async def pump_ws(ws):
                 created.append(mint)
             ev = {**fx.PUMP_CREATE, "mint": mint, "signature": f"sig{n}",
                   "name": fx.PUMP_CREATE["name"] if n == 1 else f"Fake {mint[:4]}", "symbol": fx.PUMP_CREATE["symbol"] if n == 1 else mint[:5].upper(),
-                  **({} if n == 1 else {"traderPublicKey": f"Dev{n % 7}{'d' * 36}"[:40]})}
+                  **({} if n == 1 else {"traderPublicKey": f"Dev{n % 7}{'d' * 36}"[:40]}),
+                  "uri": f"http://127.0.0.1:{sys.argv[1]}/meta/{mint}"}
+            if n > 1 and n % 9 == 0:   # a Mayhem Mode launch: 2B supply, so market cap is twice the 1B-supply value
+                ev["marketCapSol"] = ev["vSolInBondingCurve"] / ev["vTokensInBondingCurve"] * 2e9
+                ev["symbol"] = "MAYHM"
             await ws.send(json.dumps(ev))
             if n > 1 and n % 5 in (2, 4):
                 asyncio.get_running_loop().create_task(rocket(mint, n, bundled=n % 5 == 4))

@@ -51,6 +51,22 @@ def _sources_cfg() -> dict[str, Any]:
 CURVE_START_SOL, CURVE_END_SOL = 30.0, 115.0
 
 
+HIDE_MAYHEM = __import__("os").environ.get("HIDE_MAYHEM", "1") != "0"
+
+
+def is_mayhem(m: dict[str, Any]) -> bool:
+    """pump.fun Mayhem Mode launches (an AI agent trades them for 24h; 2B supply instead of 1B). PumpPortal has no
+    documented flag, so: any `mayhem` field, else the supply implied by the create event (market cap / curve price)."""
+    for k, v in m.items():
+        if "mayhem" in str(k).lower() and v not in (None, False, 0, "", "false", "0"):
+            return True
+    try:
+        vs, vt, mc = float(m["vSolInBondingCurve"]), float(m["vTokensInBondingCurve"]), float(m["marketCapSol"])
+        return vs > 0 and vt > 0 and mc > 0 and mc / (vs / vt) > 1.5e9
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return False
+
+
 def curve_progress(vsol: Any) -> float | None:
     try:
         return round(max(0.0, min(100.0, (float(vsol) - CURVE_START_SOL) / (CURVE_END_SOL - CURVE_START_SOL) * 100)), 1)
@@ -85,6 +101,7 @@ class Tracker:
         self.poly_prev: dict[str, float] = {}
         self.subs_kick = asyncio.Event()               # set to re-evaluate trade subscriptions now (someone opened a token)
         self.trending_seen: set[str] = set()
+        self.mayhem: set[str] = set()
         for c in (self.dex.http, self.gecko.http, self.rug.http):
             c.on_request = self._usage
 
@@ -151,6 +168,12 @@ class Tracker:
                "launched_at": now, "first_seen": now, "pump_mcap_sol": m.get("marketCapSol"),
                "pump_mcap_as_of": now, "updated": now, "dev_initial_buy_pct": dev_pct,
                "curve_sol": m.get("vSolInBondingCurve"), "curve_progress": curve_progress(m.get("vSolInBondingCurve"))}
+        if is_mayhem(m):
+            row["is_mayhem"] = 1
+            self.mayhem.add(mint)
+            await self.db.upsert("tokens", row, "address")
+            if HIDE_MAYHEM:
+                return     # stored (so it's never mistaken for a normal coin later) but not shown, scored or streamed
         await self.db.upsert("tokens", row, "address")
         await self._hook("new_token", row)
         await self._hook("launch", {**row, "initial_buy_sol": m.get("solAmount"), "initial_buy_tokens": m.get("initialBuy"),
@@ -166,6 +189,8 @@ class Tracker:
     async def on_trade(self, m: dict[str, Any]) -> None:
         now = time.time()
         mint = m.get("mint")
+        if HIDE_MAYHEM and mint in self.mayhem:
+            return
         trade = {"mint": mint, "ts": now, "side": m.get("txType"), "sol": m.get("solAmount"),
                  "tokens": m.get("tokenAmount"), "trader": m.get("traderPublicKey"),
                  "mcap_sol": m.get("marketCapSol"), "signature": m.get("signature"), "sol_usd": self.sol_usd}

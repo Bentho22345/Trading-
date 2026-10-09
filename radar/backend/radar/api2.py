@@ -651,11 +651,11 @@ async def pulse() -> dict[str, Any]:
                 "(SELECT COUNT(DISTINCT trader) FROM pump_trades pt WHERE pt.mint=t.address AND pt.side='buy' AND pt.ts > ?) buyers_5m "
                 "FROM tokens t LEFT JOIN pairs p ON p.pair_address=t.best_pair LEFT JOIN safety_reports s ON s.token_address=t.address ")
         a = [now - 300, now - 300]
-        new = await S.db.all(base + "WHERE t.source='pumpportal' AND t.graduated_at IS NULL AND COALESCE(t.curve_progress,0) < 60 "
+        new = await S.db.all(base + "WHERE COALESCE(t.is_mayhem,0)=0 AND t.source='pumpportal' AND t.graduated_at IS NULL AND COALESCE(t.curve_progress,0) < 60 "
                              "AND t.first_seen > ? ORDER BY t.first_seen DESC LIMIT 40", [*a, now - 1800])
-        stretch = await S.db.all(base + "WHERE t.graduated_at IS NULL AND t.curve_progress >= 60 AND t.first_seen > ? "
+        stretch = await S.db.all(base + "WHERE COALESCE(t.is_mayhem,0)=0 AND t.graduated_at IS NULL AND t.curve_progress >= 60 AND t.first_seen > ? "
                                  "ORDER BY t.curve_progress DESC LIMIT 40", [*a, now - 6 * 3600])
-        migrated = await S.db.all(base + "WHERE t.graduated_at > ? ORDER BY t.graduated_at DESC LIMIT 40", [*a, now - 6 * 3600])
+        migrated = await S.db.all(base + "WHERE COALESCE(t.is_mayhem,0)=0 AND t.graduated_at > ? ORDER BY t.graduated_at DESC LIMIT 40", [*a, now - 6 * 3600])
         sol = S.tracker.sol_usd
         nar = await S.discover._narr([r["address"] for r in [*new, *stretch, *migrated]])
         for r in [*new, *stretch, *migrated]:
@@ -668,9 +668,20 @@ async def pulse() -> dict[str, Any]:
 # ---------------- Snipe engine ----------------
 @router.get("/snipe")
 async def snipe_board(min_score: float = 0, tiers: str = "", max_age_min: float = 30, limit: int = 100,
-                      hide_bundled: bool = False, alpha_only: bool = False, proven_dev: bool = False) -> dict[str, Any]:
+                      hide_bundled: bool = False, alpha_only: bool = False, proven_dev: bool = False,
+                      appetite: str = "", strategy: str = "", rules: str = "") -> dict[str, Any]:
     t = {x.strip().upper() for x in tiers.split(",") if x.strip()} or None
-    return S.sniper.board(min_score, t, max_age_min, min(limit, 300), hide_bundled, alpha_only, proven_dev)
+    try:
+        rl = json.loads(rules) if rules else None
+    except ValueError as e:
+        raise HTTPException(400, "rules must be a JSON list of {metric, op, value}") from e
+    return S.sniper.board(min_score, t, max_age_min, min(limit, 300), hide_bundled, alpha_only, proven_dev, appetite, strategy, rl)
+
+
+@router.get("/snipe/metrics")
+async def snipe_metrics() -> dict[str, Any]:
+    from .snipe_metrics import METRICS
+    return {k: {"label": v[0], "unit": v[1], "kind": v[2]} for k, v in METRICS.items()}
 
 
 @router.get("/snipe/proof")
@@ -684,3 +695,84 @@ async def snipe_one(mint: str) -> dict[str, Any]:
     if r is None:
         raise HTTPException(404, "not being tracked (the Snipe board follows pump.fun launches for their first 30 minutes)")
     return r
+
+
+# ---------------- strategies & playbook ----------------
+class StrategyBody(BaseModel):
+    id: str | None = None
+    name: str
+    description: str | None = None
+    rules: list[dict[str, Any]]
+    mode: str = "all"
+    appetite: str = "balanced"
+    alert: bool = False
+
+
+class ToggleBody(BaseModel):
+    enabled: bool | None = None
+    alert: bool | None = None
+
+
+class SourceBody(BaseModel):
+    url: str | None = None
+    title: str | None = None
+    author: str | None = None
+    text: str | None = None
+    kind: str | None = None
+
+
+@router.get("/strategies")
+async def strategies(hours: float = 168) -> list[dict[str, Any]]:
+    return await _cached(f"strats:{hours}:{S.playbook.version}", 5, lambda: S.playbook.list(hours))
+
+
+@router.post("/strategies")
+async def save_strategy(b: StrategyBody) -> dict[str, str]:
+    try:
+        sid = await S.playbook.save(b.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    _cache.clear()
+    return {"id": sid}
+
+
+@router.post("/strategies/{sid}/toggle")
+async def toggle_strategy(sid: str, b: ToggleBody) -> dict[str, bool]:
+    await S.playbook.toggle(sid, b.enabled, b.alert)
+    _cache.clear()
+    return {"ok": True}
+
+
+@router.delete("/strategies/{sid}")
+async def delete_strategy(sid: str) -> dict[str, bool]:
+    await S.playbook.delete(sid)
+    _cache.clear()
+    return {"ok": True}
+
+
+@router.get("/playbook")
+async def playbook() -> dict[str, Any]:
+    return await S.playbook.overview()
+
+
+@router.post("/playbook")
+async def add_playbook_source(b: SourceBody) -> dict[str, int]:
+    if not (b.url or b.text):
+        raise HTTPException(400, "give a link, the text/transcript, or both")
+    return {"id": await S.playbook.add(b.model_dump())}
+
+
+@router.post("/playbook/{sid}/digest")
+async def digest_playbook_source(sid: int) -> dict[str, Any]:
+    r = await S.playbook.digest(sid)
+    if r is None:
+        raise HTTPException(404, "no such source")
+    return r
+
+
+@router.post("/playbook/discover")
+async def discover_playbook() -> dict[str, int]:
+    try:
+        return {"added": await S.playbook.discover()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"YouTube search failed: {e}") from e

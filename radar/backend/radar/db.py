@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   best_pair TEXT, last_refresh REAL,
   dev_initial_buy_pct REAL,   -- % of supply the deployer bought in the create tx
   curve_sol REAL, curve_progress REAL,   -- pump.fun bonding curve: virtual SOL and % of the way to graduation
+  is_mayhem INTEGER DEFAULT 0,  -- pump.fun Mayhem Mode launch (AI agent trades it, 2B supply) — hidden everywhere
   first_trending_at REAL,     -- first time it appeared on GeckoTerminal trending / DexScreener boosts (lead-time proof)
   image_hash TEXT,            -- perceptual dHash of the token image (copycat detection)
   updated REAL
@@ -254,6 +255,25 @@ CREATE TABLE IF NOT EXISTS snipe_calls (
   graduated_at REAL, first_trending_at REAL, updated REAL
 );
 CREATE INDEX IF NOT EXISTS snipe_calls_ts ON snipe_calls(call_ts DESC);
+
+-- strategies: built-in trader playbooks, your own, and the crowd consensus distilled from digested videos/guides
+CREATE TABLE IF NOT EXISTS strategies (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, rules_json TEXT NOT NULL, mode TEXT DEFAULT 'all',
+  appetite TEXT, source TEXT, sources_json TEXT, enabled INTEGER DEFAULT 1, alert INTEGER DEFAULT 0, created REAL, updated REAL
+);
+-- first time each launch matched each strategy, then its real outcome (graded on Proof)
+CREATE TABLE IF NOT EXISTS strategy_hits (
+  strategy_id TEXT NOT NULL, mint TEXT NOT NULL, symbol TEXT, ts REAL NOT NULL, mcap_sol REAL, metrics_json TEXT,
+  peak_mcap_sol REAL, peak_ts REAL, last_mcap_sol REAL, mcap_sol_15m REAL, mcap_sol_1h REAL, graduated_at REAL,
+  PRIMARY KEY (strategy_id, mint)
+);
+CREATE INDEX IF NOT EXISTS strategy_hits_ts ON strategy_hits(ts DESC);
+-- playbook: videos / guides / posts about how traders pick coins, and the filter rules extracted from them
+CREATE TABLE IF NOT EXISTS playbook_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, url TEXT UNIQUE, title TEXT, author TEXT, published REAL,
+  views REAL, text TEXT, added REAL, digested REAL, status TEXT, summary TEXT, rules_json TEXT, unsupported_json TEXT,
+  extractor TEXT, error TEXT
+);
 
 CREATE TABLE IF NOT EXISTS token_stories (
   token_address TEXT PRIMARY KEY, ts REAL NOT NULL, story_json TEXT, method TEXT

@@ -11,6 +11,15 @@ from fastapi import WebSocket
 
 log = logging.getLogger("radar.hub")
 
+try:   # orjson serializes several times faster than json — this runs for every live event
+    import orjson
+
+    def dumps(o: Any) -> str:
+        return orjson.dumps(o, default=str, option=orjson.OPT_NON_STR_KEYS).decode()
+except ImportError:  # pragma: no cover
+    def dumps(o: Any) -> str:
+        return json.dumps(o, default=str, separators=(",", ":"))
+
 
 class Hub:
     def __init__(self) -> None:
@@ -35,7 +44,7 @@ class Hub:
     async def publish(self, channel: str, data: Any) -> None:
         if not self.clients:
             return
-        msg = json.dumps({"ch": channel, "ts": time.time(), "data": data}, default=str, separators=(",", ":"))
+        msg = dumps({"ch": channel, "ts": time.time(), "data": data})
         clients = list(self.clients)
 
         async def send(ws: WebSocket) -> WebSocket | None:

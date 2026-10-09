@@ -8,3 +8,4 @@ feedparser==6.0.14
 cryptography==50.0.2
 anthropic==1.12.1
 telethon==1.45.0
+orjson==3.11.3

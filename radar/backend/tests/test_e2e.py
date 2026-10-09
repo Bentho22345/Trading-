@@ -316,3 +316,48 @@ def test_snipe_board_scores_launches_live_and_logs_calls(stack):
     assert proof["stats"]["launches_seen"] >= 1
     for r in proof["calls"]:
         assert r["peak_x"] is None or r["peak_x"] >= 0.0
+
+
+def test_mayhem_hidden_metadata_strategies_and_playbook(stack):
+    t0 = time.time()
+    rows: list[dict] = []
+    while time.time() - t0 < 30:
+        rows = httpx.get(f"http://{stack}/api/snipe?max_age_min=30&limit=300&appetite=degen").json()["rows"]
+        if any(r.get("links") for r in rows) and any(r.get("strategies") for r in rows) and len(rows) >= 12:
+            break
+        time.sleep(1)
+    # Mayhem launches (2B supply) are never shown anywhere
+    assert not any(r["symbol"] == "MAYHM" for r in rows)
+    assert not any(l.get("symbol") == "MAYHM" for l in httpx.get(f"http://{stack}/api/launches?limit=300").json())
+    # degen ranking is by appetite score; every row carries the trader-terminal metrics
+    scores = [r["scores"]["degen"] for r in rows]
+    assert scores == sorted(scores, reverse=True)
+    r0 = rows[0]
+    assert {"holders", "top10_pct", "dev_hold_pct", "snipers_hold_pct", "bundle_hold_pct", "pro_traders", "coverage_pct"} <= set(r0["metrics"])
+    assert any(r.get("links", {}).get("twitter") for r in rows) and any(r["metrics"]["x_community"] for r in rows)
+    # strategies: presets loaded, matches recorded, filters work server-side
+    strats = {s["id"]: s for s in httpx.get(f"http://{stack}/api/strategies").json()}
+    assert {"clean-launch", "first-30s", "degen-lottery", "cto"} <= set(strats)
+    hit = next(r for r in rows if r.get("strategies"))
+    sid = hit["strategies"][0]
+    assert any(x["mint"] == hit["mint"] for x in httpx.get(f"http://{stack}/api/snipe?strategy={sid}&limit=300").json()["rows"])
+    rules = json.dumps([{"metric": "holders", "op": ">=", "value": 5}])
+    for r in httpx.get(f"http://{stack}/api/snipe", params={"rules": rules, "limit": 300}).json()["rows"]:
+        assert r["metrics"]["holders"] >= 5
+    # custom strategy round trip
+    sid2 = httpx.post(f"http://{stack}/api/strategies", json={"name": "My degen", "rules": [{"metric": "buyers", "op": ">=", "value": 3}]}).json()["id"]
+    assert sid2 == "custom-my-degen" and any(s["id"] == sid2 for s in httpx.get(f"http://{stack}/api/strategies").json())
+    assert httpx.post(f"http://{stack}/api/strategies", json={"id": "cto", "name": "x", "rules": [{"metric": "buyers", "op": ">=", "value": 1}]}).status_code == 400
+    # playbook: seeded guides digested into a crowd consensus; a pasted transcript is digested by the parser
+    pid = httpx.post(f"http://{stack}/api/playbook", json={"url": "https://www.tiktok.com/@trader/video/1", "title": "my filters",
+                                                          "text": "I only buy when top 10 holders under 25% and at least 40 holders"}).json()["id"]
+    t0 = time.time()
+    while time.time() - t0 < 10:
+        pb = httpx.get(f"http://{stack}/api/playbook").json()
+        src = next(s for s in pb["sources"] if s["id"] == pid)
+        if src["status"] == "digested":
+            break
+        time.sleep(0.3)
+    assert src["kind"] == "tiktok" and {(r["metric"], r["value"]) for r in src["rules"]} >= {("top10_pct", 25), ("holders", 40)}
+    assert pb["consensus"] and any(c["metric"] == "top10_pct" for c in pb["consensus"])
+    assert any(s["id"] == "crowd-consensus" for s in httpx.get(f"http://{stack}/api/strategies").json())

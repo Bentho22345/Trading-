@@ -94,7 +94,7 @@ class Discover:
     # ---------------- Trending: steady climbers ----------------
     async def climbers(self, hours: float = 4, limit: int = 60, min_liq: float = 5000) -> list[dict[str, Any]]:
         now = time.time()
-        toks = await self.db.all(TOKEN_SUMMARY_SQL + " WHERE t.best_pair IS NOT NULL AND p.as_of > ? AND COALESCE(p.liquidity_usd,0) >= ?",
+        toks = await self.db.all(TOKEN_SUMMARY_SQL + " WHERE t.best_pair IS NOT NULL AND COALESCE(t.is_mayhem,0)=0 AND p.as_of > ? AND COALESCE(p.liquidity_usd,0) >= ?",
                                  (now - 900, min_liq))
         by = {t["address"]: t for t in toks}
         ser = await self._series(list(by), now - hours * 3600)
@@ -135,7 +135,7 @@ class Discover:
     # ---------------- Launching: explosive new coins ----------------
     async def launching(self, max_age_h: float = 24, limit: int = 60) -> list[dict[str, Any]]:
         now = time.time()
-        toks = await self.db.all(TOKEN_SUMMARY_SQL + " WHERE t.best_pair IS NOT NULL AND p.as_of > ? AND "
+        toks = await self.db.all(TOKEN_SUMMARY_SQL + " WHERE t.best_pair IS NOT NULL AND COALESCE(t.is_mayhem,0)=0 AND p.as_of > ? AND "
                                  "COALESCE(t.launched_at, p.pair_created_at, t.first_seen) > ?", (now - 600, now - max_age_h * 3600))
         by = {t["address"]: t for t in toks}
         ser = await self._series(list(by), now - 1800)
@@ -164,7 +164,7 @@ class Discover:
         # pre-DEX pump.fun bonding-curve rockets (from the live trade stream)
         for r in await self.db.all(
                 "SELECT mint, MIN(mcap_sol) lo, MAX(mcap_sol) hi, COUNT(*) n, COUNT(DISTINCT trader) w, SUM(CASE WHEN side='buy' THEN sol ELSE 0 END) b "
-                "FROM pump_trades WHERE ts > ? GROUP BY mint HAVING n >= 15", (now - 600,)):
+                "FROM pump_trades WHERE ts > ? AND mint NOT IN (SELECT address FROM tokens WHERE is_mayhem=1) GROUP BY mint HAVING n >= 15", (now - 600,)):
             if r["mint"] in by or not r["lo"]:
                 continue
             mult = r["hi"] / r["lo"]

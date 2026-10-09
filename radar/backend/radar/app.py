@@ -55,6 +55,8 @@ class State:
     news: Any
     charts: Any
     sniper: Any
+    playbook: Any
+    metadata: Any
 
 
 S = State()
@@ -115,6 +117,28 @@ async def lifespan(app: FastAPI):
     S.tracker.hooks["trending_first"].append(S.sniper.on_trending_first)
     S.tracker.hooks["tokens"].append(S.sniper.on_tokens)
     await S.sniper.warm()
+    from .metadata import MetadataFetcher
+    from .playbook import Playbook
+
+    async def on_metadata(mint: str, md: dict[str, Any]) -> None:
+        if md.get("is_mayhem"):
+            S.tracker.mayhem.add(mint)
+            await S.db.exec("UPDATE tokens SET is_mayhem=1 WHERE address=?", (mint,))
+        links = {k: md[k] for k in ("twitter", "telegram", "website") if md.get(k)}
+        await S.db.exec("UPDATE tokens SET image=COALESCE(image, ?), links_json=COALESCE(links_json, ?) WHERE address=?",
+                        (md.get("image"), json.dumps({"websites": [md["website"]] if md.get("website") else [],
+                                                      "socials": [{"type": k, "url": v} for k, v in links.items() if k != "website"]})
+                         if links else None, mint))
+        await S.sniper.on_metadata(mint, md)
+    S.metadata = MetadataFetcher(on_metadata)
+    S.sniper.meta_fetch = S.metadata.submit
+    S.playbook = Playbook(S.db, S.ai, S.connectors, S.sniper, S.alerts)
+    S.sniper.on_hit = S.playbook.on_hit
+    await S.playbook.load()
+
+    async def load_pool() -> None:
+        S.sniper.pool = {r["address"] for r in await S.db.all("SELECT address FROM traders")}
+    await load_pool()
 
     async def on_change(cid: str, vals: dict[str, str]) -> None:
         if cid == "coingecko":
@@ -140,7 +164,7 @@ async def lifespan(app: FastAPI):
         await S.custom.start_all()
         S.social.start()
         await S.smart.load()
-        jobs = [S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
+        jobs = [S.metadata.run(), S.playbook.loop(), periodic(300, load_pool), S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
@@ -190,7 +214,12 @@ async def watch_rules(rows: list[dict[str, Any]]) -> None:
                                     dedupe=f"rule:{t['address']}:{key}", ttl=3600)
 
 
-app = FastAPI(title="Memecoin Radar", lifespan=lifespan)
+try:
+    from fastapi.responses import ORJSONResponse as _JSON   # faster serialization for every API response
+    import orjson  # noqa: F401
+except ImportError:  # pragma: no cover
+    _JSON = JSONResponse
+app = FastAPI(title="Memecoin Radar", lifespan=lifespan, default_response_class=_JSON)
 app.add_middleware(GZipMiddleware, minimum_size=800, compresslevel=5)   # JSON shrinks 5-10× on the wire
 app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"],
                    allow_credentials=True)
@@ -270,7 +299,7 @@ async def tokens(sort: str = "vol_h1", limit: int = 200, min_liq: float = 0, q: 
                  verdict: str = "", max_stale_s: float = 0) -> list[dict[str, Any]]:
     col = sort if sort in SORTS else "vol_h1"
     prefix = "s." if col == "holders" else ("t." if col in ("first_seen", "launched_at") else "p.")
-    where, args = ["t.best_pair IS NOT NULL", "COALESCE(p.liquidity_usd,0) >= ?"], [min_liq]
+    where, args = ["t.best_pair IS NOT NULL", "COALESCE(p.liquidity_usd,0) >= ?", "COALESCE(t.is_mayhem,0)=0"], [min_liq]
     now = time.time()
     if q:
         where.append("(t.symbol LIKE ? OR t.name LIKE ? OR t.address = ?)")
@@ -313,13 +342,13 @@ async def tokens(sort: str = "vol_h1", limit: int = 200, min_liq: float = 0, q: 
 
 @app.get("/api/launches")
 async def launches(limit: int = 60) -> list[dict[str, Any]]:
-    return await S.db.all(TOKEN_SUMMARY_SQL + " WHERE t.source='pumpportal' AND t.launched_at IS NOT NULL "
+    return await S.db.all(TOKEN_SUMMARY_SQL + " WHERE t.source='pumpportal' AND t.launched_at IS NOT NULL AND COALESCE(t.is_mayhem,0)=0 "
                           "ORDER BY t.first_seen DESC LIMIT ?", (min(limit, 300),))
 
 
 @app.get("/api/graduated")
 async def graduated(limit: int = 40) -> list[dict[str, Any]]:
-    return await S.db.all(TOKEN_SUMMARY_SQL + " WHERE t.graduated_at IS NOT NULL ORDER BY t.graduated_at DESC LIMIT ?",
+    return await S.db.all(TOKEN_SUMMARY_SQL + " WHERE t.graduated_at IS NOT NULL AND COALESCE(t.is_mayhem,0)=0 ORDER BY t.graduated_at DESC LIMIT ?",
                           (min(limit, 200),))
 
 
