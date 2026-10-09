@@ -58,7 +58,7 @@ class Launch:
     mcap_sol: float | None = None
     peak_mcap_sol: float = 0.0
     graduated_at: float | None = None
-    trades: deque = field(default_factory=lambda: deque(maxlen=4000))   # (ts, side, sol, tokens, trader, vsol)
+    trades: deque = field(default_factory=lambda: deque(maxlen=1500))   # (ts, side, sol, tokens, trader, vsol)
     buyers: dict[str, float] = field(default_factory=dict)             # trader -> first buy ts
     buy_sol: dict[str, float] = field(default_factory=dict)            # trader -> SOL bought
     alpha: list[dict[str, Any]] = field(default_factory=list)
@@ -78,6 +78,8 @@ class Launch:
     uri: str | None = None
     hits: dict[str, float] = field(default_factory=dict)               # strategy id -> first match ts
     block: set[str] = field(default_factory=set)                       # buyers in the first 2.5s
+    observed_sol: float = 0.0                                          # net SOL seen trading (coverage check), kept incrementally
+    early_frozen: dict[str, Any] | None = None                         # launch-window stats, fixed once the window has passed
 
 
 def _slope(pts: list[tuple[float, float]]) -> float:
@@ -138,17 +140,22 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
                     "value": round(slope, 2), "eta_min": round(eta_min, 1) if eta_min is not None else None})
 
     # 3 · organic flow vs bundles ----------------------------------------------------------------------------------
-    early = [t for t in buys if t[0] - L.created <= 2.5]
-    early_wallets = {t[4] for t in early}
-    by_sec = Counter(int(t[0]) for t in buys if t[0] - L.created <= 10)
-    burst = max(by_sec.values()) if by_sec else 0
+    if L.early_frozen:      # the creation window is long gone: reuse its stats (old trades may have rolled off the buffer)
+        early_wallets, early_supply, burst = L.early_frozen["wallets"], L.early_frozen["supply"], L.early_frozen["burst"]
+    else:
+        early = [t for t in buys if t[0] - L.created <= 2.5]
+        early_wallets = {t[4] for t in early}
+        by_sec = Counter(int(t[0]) for t in buys if t[0] - L.created <= 10)
+        burst = max(by_sec.values()) if by_sec else 0
+        early_supply = sum(t[3] or 0 for t in early) / 1e9 * 100           # % of the 1B supply taken in the first 2.5s
+        if age >= 15:
+            L.early_frozen = {"wallets": early_wallets, "supply": early_supply, "burst": burst}
     amounts = Counter(round(t[2] or 0, 3) for t in buys if t[2])
     same_amt = (amounts.most_common(1)[0][1] / len(buys)) if buys and amounts else 0.0
     vol_by = sorted(L.buy_sol.values(), reverse=True)
     tot = sum(vol_by) or 0.0
     top3 = sum(vol_by[:3]) / tot if tot else 0.0
     uniq_ratio = len(L.buyers) / max(1, len(buys))
-    early_supply = sum(t[3] or 0 for t in early) / 1e9 * 100           # % of the 1B supply taken in the first 2.5s
     organic = 100.0
     # sniper bots in block 0 are normal on pump.fun; a *bundle* is several wallets taking a big slice of supply at once
     organic -= min(40.0, max(0.0, early_supply - 5) * 2) if len(early_wallets) >= 3 else 0
@@ -281,6 +288,9 @@ class Sniper:
         self.dirty_hits: set[tuple[str, str]] = set()
         self.on_hit: Any = None
         self.hit_mints: set[str] = set()
+        self.hits_by_mint: dict[str, list[tuple[str, str]]] = {}
+        self.dirty: set[str] = set()
+        self.stats = {"evals": 0, "eval_ms": 0.0, "batches": 0, "last_tick_ms": 0.0, "backlog": 0}
 
     # ---------------- stream hooks (hot path: memory only) ----------------
     async def on_launch(self, row: dict[str, Any]) -> None:
@@ -372,8 +382,9 @@ class Sniper:
                 hit = self._alpha(trader)
                 if hit:
                     L.alpha.append({**hit, "wallet": trader, "ts": now, "sol": round(sol, 3)})
+        L.observed_sol += sol if side == "buy" else -sol
         L.dirty = True
-        await self._evaluate(L, now)
+        self.dirty.add(mint)      # scored by eval_loop under a CPU budget — the stream never waits on scoring
 
     async def on_graduated(self, ev: dict[str, Any]) -> None:
         L = self.launches.get(ev["mint"])
@@ -419,10 +430,10 @@ class Sniper:
             return {"rank": None, "label": w.get("label") or "smart wallet"}
         return None
 
-    async def _evaluate(self, L: Launch, now: float, force: bool = False) -> None:
-        # coalesce: at most ~4 scorings and 2 pushes per second per coin, however fast it trades
+    async def _evaluate(self, L: Launch, now: float, force: bool = False, publish: bool = True) -> bool:
+        """Score one launch. Returns True when the UI should get the new row (eval_loop batches those)."""
         if not force and now - L.last_eval < 0.25:
-            return
+            return False
         L.last_eval = now
         prev = L.result.get("tier")
         self.ctx["sol_usd"] = self.tracker.sol_usd
@@ -442,7 +453,51 @@ class Sniper:
             await self._call(L, now)
         if force or tier != prev or now - L.last_pub >= 0.5:
             L.last_pub = now
-            await hub.publish("snipe", L.result)
+            if publish:
+                await hub.publish("snipe", L.result)
+            return True
+        return False
+
+    def _interval(self, L: Launch) -> float:
+        """Busy coins are re-scored less often: their score barely moves trade to trade, and scoring cost grows with trades."""
+        n = len(L.trades)
+        return 0.3 if n < 150 else 0.8 if n < 600 else 1.5
+
+    async def eval_loop(self) -> None:
+        """Re-score dirty launches a few times a second within a CPU budget, and push all changes in ONE message."""
+        budget = float(__import__("os").environ.get("SNIPE_EVAL_BUDGET_MS", "60")) / 1000
+        while True:
+            await asyncio.sleep(0.3)
+            try:
+                if not self.dirty:
+                    continue
+                t0 = time.perf_counter()
+                now = time.time()
+                order = sorted((m for m in self.dirty if m in self.launches),
+                               key=lambda m: ({"SNIPE": 0, "WATCH": 1}.get(self.launches[m].result.get("tier"), 2), -self.launches[m].created))
+                out = []
+                for m in order:
+                    L = self.launches[m]
+                    if now - L.last_eval < self._interval(L):
+                        continue
+                    self.dirty.discard(m)
+                    e0 = time.perf_counter()
+                    if await self._evaluate(L, now, publish=False):
+                        out.append(L.result)
+                    self.stats["evals"] += 1
+                    self.stats["eval_ms"] += (time.perf_counter() - e0) * 1000
+                    if time.perf_counter() - t0 > budget:
+                        break
+                self.dirty &= set(self.launches)
+                self.stats["backlog"] = len(self.dirty)
+                if out:
+                    self.stats["batches"] += 1
+                    await hub.publish("snipe_batch", out)
+                self.stats["last_tick_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                log.warning("snipe eval loop: %s", e)
 
     # ---------------- calls & proof ----------------
     async def _call(self, L: Launch, now: float) -> None:
@@ -474,6 +529,7 @@ class Sniper:
              "graduated_at": L.graduated_at}
         self.hits[(sid, L.mint)] = h
         self.hit_mints.add(L.mint)
+        self.hits_by_mint.setdefault(L.mint, []).append((sid, L.mint))
         self.tracker.launch_watch[L.mint] = max(self.tracker.launch_watch.get(L.mint, 0), now + 1800)
         L.until = max(L.until, now + 3600)
         await self.db.exec("INSERT OR IGNORE INTO strategy_hits (strategy_id, mint, symbol, ts, mcap_sol, metrics_json, peak_mcap_sol, "
@@ -483,12 +539,14 @@ class Sniper:
             asyncio.get_running_loop().create_task(self.on_hit(sid, L.result))
 
     def _hit_mark(self, mint: str, mcap_sol: float, ts: float) -> None:
-        for (sid, m), h in self.hits.items():
-            if m == mint:
-                h["last_mcap_sol"] = mcap_sol
-                if mcap_sol > (h.get("peak_mcap_sol") or 0):
-                    h["peak_mcap_sol"], h["peak_ts"] = mcap_sol, ts
-                self.dirty_hits.add((sid, m))
+        for key in self.hits_by_mint.get(mint, ()):
+            h = self.hits.get(key)
+            if h is None:
+                continue
+            h["last_mcap_sol"] = mcap_sol
+            if mcap_sol > (h.get("peak_mcap_sol") or 0):
+                h["peak_mcap_sol"], h["peak_ts"] = mcap_sol, ts
+            self.dirty_hits.add(key)
 
     def _call_mark(self, call: dict[str, Any], mcap_sol: float, ts: float) -> None:
         call["last_mcap_sol"], call["last_ts"] = mcap_sol, ts
@@ -519,6 +577,9 @@ class Sniper:
                     if now - h["ts"] > CALL_TRACK_S:
                         self.hits.pop(key, None)
                 self.hit_mints = {m for _, m in self.hits}
+                self.hits_by_mint = {}
+                for key in self.hits:
+                    self.hits_by_mint.setdefault(key[1], []).append(key)
                 if self.dirty_hits:
                     rows = [self.hits[k] for k in self.dirty_hits if k in self.hits]
                     self.dirty_hits.clear()
@@ -612,7 +673,7 @@ class Sniper:
                 self.clones = clones
                 for L in list(self.launches.values()):
                     if now - L.last_eval > 5:
-                        await self._evaluate(L, now)
+                        self.dirty.add(L.mint)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -630,6 +691,7 @@ class Sniper:
                        graduated_at=t["graduated_at"], until=(t["launched_at"] or t["first_seen"]) + TRACK_S)
             for r in await self.db.all("SELECT ts, side, sol, tokens, trader, mcap_sol FROM pump_trades WHERE mint=? ORDER BY ts", (L.mint,)):
                 L.trades.append((r["ts"], r["side"], r["sol"] or 0, r["tokens"] or 0, r["trader"], None))
+                L.observed_sol += (r["sol"] or 0) * (1 if r["side"] == "buy" else -1)
                 if r["trader"] == L.deployer:
                     if r["side"] == "sell":
                         L.dev_sold_tokens += r["tokens"] or 0

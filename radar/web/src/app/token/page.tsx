@@ -38,6 +38,7 @@ function TokenInner() {
 
   useLive(({ ch, data }) => {
     if (ch === 'snipe' && data.mint === a) setSnipe((p) => ({ ...(p || {}), ...data }));
+    if (ch === 'snipe_batch') { const r = (data as SnipeRow[]).find((x) => x.mint === a); if (r) setSnipe((p) => ({ ...(p || {}), ...r })); }
     if (!d) return;
     if (ch === 'tokens') {
       const t = (data as any[]).find((x) => x.address === a);

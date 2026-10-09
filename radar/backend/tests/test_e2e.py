@@ -286,8 +286,8 @@ def test_snipe_board_scores_launches_live_and_logs_calls(stack):
             t0 = time.time()
             while time.time() - t0 < 40:
                 msg = json.loads(await asyncio.wait_for(ws.recv(), 30))
-                if msg["ch"] == "snipe":
-                    got.append(msg["data"])
+                if msg["ch"] in ("snipe", "snipe_batch"):
+                    got.extend(msg["data"] if msg["ch"] == "snipe_batch" else [msg["data"]])
                     tiers = {g["tier"] for g in got}
                     if "TRAP" in tiers and any(g["tier"] in ("SNIPE", "WATCH") and g["buyers"] >= 8 for g in got):
                         break

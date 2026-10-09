@@ -93,6 +93,7 @@ export function useSnipe(f: SnipeFilters) {
   }, [load, url]);
   useLive(({ ch, data }) => {
     if (ch === 'snipe') setRows((p) => ({ ...p, [data.mint]: { ...p[data.mint], ...data } }));
+    else if (ch === 'snipe_batch') setRows((p) => { const n = { ...p }; for (const r of data as SnipeRow[]) n[r.mint] = { ...p[r.mint], ...r }; return n; });
     else if (ch === 'snipe_drop') setRows((p) => { const n = { ...p }; delete n[data.mint]; return n; });
     else if (ch === 'snipe_call') setCalls((c) => [data, ...c.filter((x) => x.mint !== data.mint)].slice(0, 20));
   });

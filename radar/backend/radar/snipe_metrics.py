@@ -53,7 +53,8 @@ def compute(L: Any, now: float, sol_usd: float | None, ctx: dict[str, Any]) -> d
     snipers = [w for w in L.early if w != L.deployer]
     snip_hold = sum(bal.get(w, 0.0) for w in snipers)
     bund_hold = sum(bal.get(w, 0.0) for w in L.bundlers)
-    observed_sol = sum((t[2] or 0) * (1 if t[1] == "buy" else -1) for t in trades) + (L.dev_buy_sol or 0)
+    observed_sol = (getattr(L, "observed_sol", None) if getattr(L, "observed_sol", None) else
+                    sum((t[2] or 0) * (1 if t[1] == "buy" else -1) for t in trades)) + (L.dev_buy_sol or 0)
     curve_sol = max(0.0, (L.vsol or CURVE_START_SOL) - CURVE_START_SOL)
     coverage = 100.0 if curve_sol < 0.5 else max(0.0, min(100.0, observed_sol / curve_sol * 100))
     buys1, sells1 = sum(1 for t in m1 if t[1] == "buy"), sum(1 for t in m1 if t[1] == "sell")

@@ -164,7 +164,7 @@ async def lifespan(app: FastAPI):
         await S.custom.start_all()
         S.social.start()
         await S.smart.load()
-        jobs = [S.metadata.run(), S.playbook.loop(), periodic(300, load_pool), S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
+        jobs = [S.sniper.eval_loop(), loop_lag_monitor(), S.metadata.run(), S.playbook.loop(), periodic(300, load_pool), S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
@@ -183,6 +183,19 @@ async def lifespan(app: FastAPI):
     for t in S.custom.tasks.values():
         t.cancel()
     await S.db.close()
+
+
+LAG = {"ms": 0.0, "max_ms": 0.0}
+
+
+async def loop_lag_monitor() -> None:
+    """How late the event loop wakes up: the single best 'is the server overloaded?' number (shown on /api/healthz)."""
+    while True:
+        t = time.perf_counter()
+        await asyncio.sleep(0.5)
+        lag = max(0.0, (time.perf_counter() - t - 0.5) * 1000)
+        LAG["ms"] = round(lag * 0.3 + LAG["ms"] * 0.7, 1)
+        LAG["max_ms"] = round(max(LAG["max_ms"] * 0.98, lag), 1)
 
 
 async def periodic(seconds: float, fn) -> None:
@@ -269,8 +282,28 @@ async def session(request: Request) -> dict[str, bool]:
 
 @app.get("/api/healthz")
 async def healthz() -> dict[str, Any]:
-    """Unauthenticated liveness probe for Render / Docker (no data exposed)."""
-    return {"ok": True, "uptime_s": round(time.time() - STARTED)}
+    """Unauthenticated liveness probe for Render / Docker. Exposes only load / pipeline counters (no coins, keys or data),
+    so a slow or empty deployment can be diagnosed from one URL."""
+    out: dict[str, Any] = {"ok": True, "uptime_s": round(time.time() - STARTED), "loop_lag_ms": LAG["ms"], "loop_lag_max_ms": LAG["max_ms"]}
+    try:
+        import resource
+        out["rss_mb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+    except Exception:  # noqa: BLE001
+        pass
+    sn = getattr(S, "sniper", None)
+    if sn is not None:
+        st = sn.stats
+        out["snipe"] = {"tracking": len(sn.launches), "seen": sn.seen_launches, "backlog": st["backlog"], "evals": st["evals"],
+                        "avg_eval_ms": round(st["eval_ms"] / st["evals"], 2) if st["evals"] else None, "last_tick_ms": st["last_tick_ms"]}
+    tr = getattr(S, "tracker", None)
+    if tr is not None:
+        out["pumpportal"] = {"connected": tr.pump.ws is not None, "trade_subs": len(tr.pump.token_subs),
+                             "account_subs": len(tr.pump.account_subs)}
+        out["sol_usd_known"] = tr.sol_usd is not None
+    out["ws_clients"] = len(hub.clients)
+    hs = REGISTRY.values() if isinstance(REGISTRY, dict) else REGISTRY
+    out["sources"] = {st: sorted(h.name for h in hs if h.status() == st) for st in ("ok", "degraded", "stale", "down", "pending")}
+    return out
 
 
 # ---------------- health ----------------

@@ -41,6 +41,18 @@ class Hub:
             out |= s
         return out
 
+    async def publish_viewers(self, channel: str, data: Any, mint: str) -> None:
+        """Only to the browsers that have this coin open (the raw trade feed is far too busy to send to everyone)."""
+        targets = [ws for ws, v in self.viewing.items() if mint in v]
+        if not targets:
+            return
+        msg = dumps({"ch": channel, "ts": time.time(), "data": data})
+        for ws in targets:
+            try:
+                await asyncio.wait_for(ws.send_text(msg), timeout=2)
+            except Exception:  # noqa: BLE001
+                self.disconnect(ws)
+
     async def publish(self, channel: str, data: Any) -> None:
         if not self.clients:
             return

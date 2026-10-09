@@ -235,6 +235,7 @@ class Traders:
         self.helius_calls_today = 0
         self.helius_day = int(time.time() // 86400)
         self.sol_days: dict[int, float] = {}
+        self.known: set[str] | None = None              # every wallet in the pool, so most trades skip the DB entirely
 
     # ---------------- ingestion ----------------
     async def sol_usd_at(self, ts: float) -> float | None:
@@ -257,12 +258,15 @@ class Traders:
                 t["usd"] = t["sol"] * px if px else None
             if not t.get("wallet") or not t.get("mint") or t.get("usd") is None:
                 continue
-            known = await self.db.one("SELECT 1 FROM traders WHERE address=?", (t["wallet"],))
+            if self.known is None:
+                self.known = {r["address"] for r in await self.db.all("SELECT address FROM traders")}
+            known = t["wallet"] in self.known
             if not known:
                 if not admit or t["usd"] < self.min_usd_admit:
                     continue
                 await self.db.exec("INSERT OR IGNORE INTO traders (address, sources_json, first_seen, last_active) VALUES (?,?,?,?)",
                                    (t["wallet"], json.dumps([t["source"]]), now, t["ts"]))
+                self.known.add(t["wallet"])
             else:
                 await self.db.exec("UPDATE traders SET last_active=MAX(COALESCE(last_active,0), ?), sources_json=CASE WHEN "
                                    "instr(COALESCE(sources_json,''), ?)=0 THEN json_insert(COALESCE(sources_json,'[]'), '$[#]', ?) "
@@ -363,6 +367,8 @@ class Traders:
                            "sources_json=CASE WHEN instr(COALESCE(sources_json,''), ?)=0 THEN json_insert(COALESCE(sources_json,'[]'), '$[#]', ?) "
                            "ELSE sources_json END", (addr, label, json.dumps([source]), time.time(), 1 if pinned else 0,
                                                     f'"{source}"', source))
+        if self.known is not None:
+            self.known.add(addr)
 
     async def import_text(self, text: str, source: str = "import") -> int:
         rows = extract_addresses(text)
@@ -532,6 +538,7 @@ class Traders:
         await self.db.exec("DELETE FROM trader_trades WHERE wallet NOT IN (SELECT address FROM keep_wallets)")
         await self.db.exec("DELETE FROM trader_stats WHERE address NOT IN (SELECT address FROM keep_wallets)")
         await self.db.exec("DELETE FROM traders WHERE address NOT IN (SELECT address FROM keep_wallets)")
+        self.known = None   # reload the in-memory set on next use
         return total - self.cap
 
     async def compute_loop(self) -> None:

@@ -204,8 +204,8 @@ class Tracker:
                                (m.get("marketCapSol"), now, m.get("vSolInBondingCurve"), curve_progress(m.get("vSolInBondingCurve")), mint))
         mc_usd = self._usd(m.get("marketCapSol"))
         # pump.fun supply is fixed at 1B, so price = market cap / 1e9 (lets open charts update on every trade)
-        await hub.publish("trade", {**trade, "usd": self._usd(m.get("solAmount")), "mcap_usd": mc_usd,
-                                    "price_usd": mc_usd / 1e9 if mc_usd else None})
+        await hub.publish_viewers("trade", {**trade, "usd": self._usd(m.get("solAmount")), "mcap_usd": mc_usd,
+                                            "price_usd": mc_usd / 1e9 if mc_usd else None}, mint)
         await self._hook("trade", trade)
 
     async def on_migrate(self, m: dict[str, Any]) -> None:
