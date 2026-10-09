@@ -67,10 +67,22 @@ def _need(r: httpx.Response, ok: str) -> str:
 
 
 async def t_anthropic(v: dict[str, str]) -> str:
-    h = {"x-api-key": v["api_key"], "anthropic-version": "2023-06-01"}
-    if v.get("workspace_id"):   # org-level keys that aren't scoped to a workspace must name one on every request
-        h["anthropic-workspace-id"] = v["workspace_id"].strip()
+    key, ws = v["api_key"].strip(), (v.get("workspace_id") or "").strip()
+    if key.startswith("sk-ant-admin"):
+        raise ValueError("That's an Admin API key — it can manage the org but can't call Claude. Create a regular API key "
+                         "inside a workspace (Console → Settings → Workspaces → your workspace → API keys).")
+    if ws and (ws.startswith("org") or ws.count("-") == 4):
+        raise ValueError("That looks like your Organization ID, not a Workspace ID. Open Console → Settings → Workspaces, "
+                         "click the workspace, and copy its ID (it usually starts with wrkspc_) — or leave this blank and use a "
+                         "key created inside a workspace.")
+    h = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    if ws:   # org-level keys that aren't scoped to a workspace must name one on every request
+        h["anthropic-workspace-id"] = ws
     r = await _get("https://api.anthropic.com/v1/models", headers=h)
+    if r.status_code >= 400 and "workspace" in r.text.lower():
+        raise ValueError("Anthropic says this key isn't tied to a workspace" + (" and didn't accept that Workspace ID" if ws else "") +
+                         ". Easiest fix: Console → Settings → Workspaces → open a workspace → create a new API key there, "
+                         "paste it here and leave Workspace ID blank. " + f"(HTTP {r.status_code}: {r.text[:160]})")
     return _need(r, f"Key valid · {len(r.json().get('data', []))} models available")
 
 
