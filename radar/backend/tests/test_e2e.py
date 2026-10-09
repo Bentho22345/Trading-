@@ -361,3 +361,15 @@ def test_mayhem_hidden_metadata_strategies_and_playbook(stack):
     assert src["kind"] == "tiktok" and {(r["metric"], r["value"]) for r in src["rules"]} >= {("top10_pct", 25), ("holders", 40)}
     assert pb["consensus"] and any(c["metric"] == "top10_pct" for c in pb["consensus"])
     assert any(s["id"] == "crowd-consensus" for s in httpx.get(f"http://{stack}/api/strategies").json())
+
+
+def test_telegram_chat_id_found_automatically(stack):
+    httpx.delete(f"http://{stack}/api/connectors/telegram_bot")
+    bad = httpx.post(f"http://{stack}/api/connectors/telegram_bot", json={"values": {"bot_token": "bad:token"}}).json()
+    assert bad["status"] == "error" and "rejected that bot token" in bad["message"]
+    httpx.delete(f"http://{stack}/api/connectors/telegram_bot")
+    r = httpx.post(f"http://{stack}/api/connectors/telegram_bot", json={"values": {"bot_token": "123:abc"}}).json()
+    assert r["status"] == "ok", r
+    conns = {c["id"]: c for c in httpx.get(f"http://{stack}/api/connectors").json()["connectors"]}
+    chat = next(f for f in conns["telegram_bot"]["fields"] if f["name"] == "chat_id")
+    assert chat["value"] == "555123"

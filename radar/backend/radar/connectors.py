@@ -91,6 +91,20 @@ async def t_x(v: dict[str, str]) -> str:
     return _need(r, "Bearer token accepted (usage endpoint, no post reads charged)")
 
 
+async def find_telegram_chat_id(token: str) -> str | None:
+    """The chat id of whoever last messaged the bot (you, after pressing Start) — so nobody has to dig for it."""
+    r = await _get(f"{os.environ.get('TELEGRAM_API_URL', 'https://api.telegram.org')}/bot{token.strip()}/getUpdates")
+    if r.status_code == 401 or r.status_code == 404:
+        raise ValueError("Telegram rejected that bot token — copy the whole line BotFather sent (digits, a colon, then ~35 characters).")
+    _need(r, "")
+    for u in reversed(r.json().get("result") or []):
+        msg = u.get("message") or u.get("my_chat_member") or u.get("edited_message") or u.get("channel_post") or {}
+        chat = msg.get("chat") or {}
+        if chat.get("id") is not None:
+            return str(chat["id"])
+    return None
+
+
 async def t_telegram_bot(v: dict[str, str]) -> str:
     r = await _post(f"{os.environ.get('TELEGRAM_API_URL', 'https://api.telegram.org')}/bot{v['bot_token']}/sendMessage",
                     json={"chat_id": v["chat_id"], "text": "✅ Memecoin Radar connected. Alerts will arrive here."})
@@ -229,8 +243,8 @@ CATALOG: list[Connector] = [
                        Field("channels", "Channels to watch (comma separated @names)", secret=False, optional=True)], t_telegram_user, "telegram"),
     Connector("telegram_bot", "Telegram alert bot", "Alerts", "key", "Sends FLASH / BUY / rug alerts to your phone.",
               "Alerts", 2, "https://t.me/BotFather",
-              "Message @BotFather → /newbot → copy token. Then message your bot once and open https://api.telegram.org/bot<TOKEN>/getUpdates to read your chat id.",
-              "free", [Field("bot_token", "Bot token", env="TELEGRAM_BOT_TOKEN"), Field("chat_id", "Chat id", secret=False, env="TELEGRAM_CHAT_ID")], t_telegram_bot),
+              "Message @BotFather → /newbot → copy the token. Open your new bot and press Start, then paste the token here and click Save & test — Radar finds your chat id by itself.",
+              "free", [Field("bot_token", "Bot token", env="TELEGRAM_BOT_TOKEN"), Field("chat_id", "Chat id (leave empty: Radar finds it)", secret=False, env="TELEGRAM_CHAT_ID", optional=True)], t_telegram_bot),
     Connector("ntfy", "ntfy.sh phone push", "Alerts", "key", "Free phone push notifications, no account needed.",
               "Alerts", 2, "https://ntfy.sh", "Install the ntfy app, subscribe to a long random topic name, paste the same name here.",
               "free", [Field("topic", "Topic name", env="NTFY_TOPIC"), Field("server", "Server", secret=False, optional=True, placeholder="https://ntfy.sh")], t_ntfy),
@@ -324,6 +338,20 @@ class ConnectorStore:
         if not c.test:
             raise ValueError("Nothing to test")
         vals = await self.values(cid)
+        if cid == "telegram_bot" and vals.get("bot_token") and not vals.get("chat_id"):
+            try:
+                found = await find_telegram_chat_id(vals["bot_token"])
+            except (httpx.HTTPError, ValueError) as e:
+                found, err = None, str(e)
+            else:
+                err = None
+            if not found:
+                msg = err or ("No chat yet: open your bot in Telegram (the t.me/… link BotFather gave you), press Start or send it "
+                              "“hi”, then click Test again — Radar will fill in the chat id itself.")
+                await self.db.upsert("connectors", {"id": cid, "status": "error", "last_test": time.time(), "last_msg": msg}, "id")
+                return {"status": "error", "message": msg}
+            await self.save(cid, {"chat_id": found})
+            vals = await self.values(cid)
         missing = [f.label for f in c.fields if not f.optional and f.name not in vals]
         if missing:
             status, msg = "error", f"Missing: {', '.join(missing)}"

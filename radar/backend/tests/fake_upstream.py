@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import uvicorn
+from fastapi.responses import JSONResponse
 import websockets
 from fastapi import FastAPI
 
@@ -129,6 +130,13 @@ async def tg_send(token: str, body: dict):
     import time
     TG_LOG.append({"ts": time.time(), "text": body.get("text", "")})
     return {"ok": True, "result": {"message_id": len(TG_LOG)}}
+
+
+@api.get("/tg/bot{token}/getUpdates")
+def tg_updates(token: str):
+    if token.startswith("bad"):
+        return JSONResponse({"ok": False, "description": "Unauthorized"}, status_code=401)
+    return {"ok": True, "result": [{"update_id": 1, "message": {"chat": {"id": 555123, "type": "private"}, "text": "/start"}}]}
 
 
 @api.get("/tg/log")
