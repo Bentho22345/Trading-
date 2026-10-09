@@ -1,9 +1,10 @@
 'use client';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Icon } from '@/components/Icon';
 import { AnimatePresence, motion } from '@/components/motion';
-import { DEFAULT_FILTERS, DET_ICON, type SnipeFilters, SnipeCard, type SnipeRow, useSnipe, useSnipeAlerts } from '@/components/snipe';
+import { DEFAULT_FILTERS, DET_ICON, type SnipeFilters, SnipeCard, type SnipeRow, TRADE_LINKS, useSnipe, useSnipeAlerts } from '@/components/snipe';
 import { CountUp, Reveal, Ring } from '@/components/whoop';
 import { api } from '@/lib/api';
 
@@ -37,10 +38,48 @@ export default function SnipePage() {
     NEW: list.filter((r) => now - r.created < 90 && r.tier !== 'SNIPE' && r.tier !== 'WATCH').sort((a, b) => b.created - a.created),
   }), [list, now]);
   const set = (p: Partial<SnipeFilters>) => setF((x) => ({ ...x, ...p }));
+
+  // keyboard sniping: J/K (or ↓/↑) move through Snipe → Heating → Just born, C copies the CA, A/P/B/G open a terminal,
+  // Enter opens the coin. The selection follows the coin (not the slot), so live re-sorting never moves it under you.
+  const router = useRouter();
+  const order = useMemo(() => [...lanes.SNIPE, ...lanes.WATCH, ...lanes.NEW].slice(0, 180).map((r) => r.mint), [lanes]);
+  const [sel, setSel] = useState<string | null>(null);
+  const [toast, setToast] = useState('');
+  const orderRef = useRef(order);
+  orderRef.current = order;
+  useEffect(() => {
+    const flash = (m: string) => { setToast(m); window.setTimeout(() => setToast(''), 1200); };
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const o = orderRef.current;
+      if (!o.length) return;
+      const k = e.key.toLowerCase();
+      const i = sel ? o.indexOf(sel) : -1;
+      if (k === 'j' || e.key === 'ArrowDown' || k === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const next = o[Math.max(0, Math.min(o.length - 1, i + (k === 'j' || e.key === 'ArrowDown' ? 1 : -1)))] ?? o[0];
+        setSel(next);
+        document.querySelector(`[data-mint="${next}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        return;
+      }
+      const m = sel && o.includes(sel) ? sel : o[0];
+      if (k === 'c') { e.preventDefault(); navigator.clipboard?.writeText(m).then(() => flash('CA copied')); }
+      else if (e.key === 'Enter') router.push(`/token?a=${m}`);
+      else if ('apbg'.includes(k) && k.length === 1) {
+        const l = TRADE_LINKS(m)[{ a: 0, p: 1, b: 2, g: 3 }[k as 'a' | 'p' | 'b' | 'g']];
+        window.open(l.href, '_blank', 'noopener');
+        flash(`Opened ${l.label}`);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sel, router]);
   const st = proof?.stats;
 
   return (
     <div className="pt-4">
+      <AnimatePresence>{toast && <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full bg-white px-4 py-2 text-[12px] font-bold text-black shadow-xl">{toast}</motion.div>}</AnimatePresence>
       <Reveal className="mb-8 grid items-end gap-8 lg:grid-cols-[1fr_auto]">
         <div>
           <div className="eyebrow mb-3 flex items-center gap-2"><span className="live-dot h-1.5 w-1.5 rounded-full bg-up" />Sniper · pump.fun · scored per trade</div>
@@ -52,7 +91,7 @@ export default function SnipePage() {
             <Link href="/proof" className="btn-ghost">See the proof <Icon name="arrow" size={14} /></Link>
           </div>
         </div>
-        <div className="flex flex-wrap gap-6">
+        <div className="flex flex-wrap gap-4 sm:gap-6 [&>div]:scale-[.82] [&>div]:origin-top-left sm:[&>div]:scale-100">
           <Ring value={meta?.tracking} max={Math.max(50, meta?.tracking || 0)} size={116} color="var(--color-accent2)" label="Scoring now"><CountUp value={meta?.tracking} className="stat text-[30px]" /></Ring>
           <Ring value={st?.calls} max={Math.max(10, st?.calls || 0)} size={116} color="var(--color-up)" label="Calls · 24h"><CountUp value={st?.calls} className="stat text-[30px]" /></Ring>
           <Ring value={st?.hit_2x_pct ?? 0} max={100} size={116} color="var(--color-flash)" label="Hit 2× · 24h">
@@ -75,6 +114,9 @@ export default function SnipePage() {
             <button key={m} onClick={() => set({ maxAgeMin: m })} className={`rounded-full px-2.5 py-1 ${f.maxAgeMin === m ? 'bg-white text-black' : 'text-white/55 hover:text-white'}`}>≤{m}m</button>
           ))}
         </div>
+        <span className="hidden items-center gap-1 text-[10.5px] text-white/40 xl:flex" title="Keyboard sniping">
+          {[['J/K', 'move'], ['C', 'copy CA'], ['A', 'Axiom'], ['P', 'Photon'], ['↵', 'open']].map(([k, l]) => <span key={k} className="ml-1.5"><kbd className="rounded border border-white/15 px-1 font-mono text-white/70">{k}</kbd> {l}</span>)}
+        </span>
         <span className="num ml-auto pr-2 text-[11px] text-white/45">{meta ? `${meta.seen.toLocaleString()} launches scored since start` : 'connecting…'}</span>
       </div>
 
@@ -106,7 +148,7 @@ export default function SnipePage() {
                 {lanes[c.key].slice(0, 60).map((r: SnipeRow) => (
                   <motion.div key={r.mint} layout="position" initial={{ opacity: 0, y: -12, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, x: 30 }} transition={{ type: 'spring', stiffness: 420, damping: 34 }}>
-                    <SnipeCard r={r} now={now} />
+                    <SnipeCard r={r} now={now} selected={r.mint === sel} />
                   </motion.div>
                 ))}
               </AnimatePresence>

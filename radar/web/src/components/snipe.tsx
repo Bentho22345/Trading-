@@ -137,11 +137,11 @@ function CopyCA({ mint }: { mint: string }) {
 }
 
 /** One launch: score dial, tier, curve/ETA, the detectors that fired, and one-click links to your own trading terminal. */
-export const SnipeCard = memo(function SnipeCard({ r, now, dense = false }: { r: SnipeRow; now: number; dense?: boolean }) {
+export const SnipeCard = memo(function SnipeCard({ r, now, dense = false, selected = false }: { r: SnipeRow; now: number; dense?: boolean; selected?: boolean }) {
   const age = Math.max(0, now - r.created);
   const fired = r.detectors.filter((d) => d.points !== 0).sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
   return (
-    <div className={`group relative rounded-2xl border px-3 py-2.5 transition-colors ${r.tier === 'SNIPE' ? 'snipe-glow border-up/40 bg-up/[0.04]' : r.tier === 'TRAP' ? 'border-down/20 bg-down/[0.025]' : 'border-white/[0.07] bg-white/[0.015] hover:border-white/20'}`}>
+    <div data-mint={r.mint} className={`group relative rounded-2xl border px-3 py-2.5 transition-colors ${selected ? 'ring-2 ring-white/70 ring-offset-2 ring-offset-[var(--color-bg)] ' : ''}${r.tier === 'SNIPE' ? 'snipe-glow border-up/40 bg-up/[0.04]' : r.tier === 'TRAP' ? 'border-down/20 bg-down/[0.025]' : 'border-white/[0.07] bg-white/[0.015] hover:border-white/20'}`}>
       <div className="flex items-center gap-3">
         <ScoreDial score={r.score} tier={r.tier} size={dense ? 38 : 44} />
         <Link href={`/token?a=${r.mint}`} className="min-w-0 flex-1">
@@ -185,7 +185,7 @@ export const SnipeCard = memo(function SnipeCard({ r, now, dense = false }: { r:
       )}
     </div>
   );
-}, (a, b) => a.r === b.r && a.dense === b.dense && Math.floor(a.now) === Math.floor(b.now));
+}, (a, b) => a.r === b.r && a.dense === b.dense && a.selected === b.selected && Math.floor(a.now) === Math.floor(b.now));
 
 /** The dedicated sniping column on the Home terminal. */
 export function SnipeColumn({ className = '' }: { className?: string }) {
