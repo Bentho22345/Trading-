@@ -54,7 +54,9 @@ def stack(tmp_path_factory):
            "RUGCHECK_URL": f"http://127.0.0.1:{up_http}/rug", "TIER3_EVERY": "1", "LOG_LEVEL": "WARNING",
            "RADAR_WEB_DIR": "/nonexistent", "HTTPS_PROXY": "", "https_proxy": "", "RADAR_ENABLE_FIXTURES": "1",
            "RADAR_DISABLE_FIREHOSE": "1", "TELEGRAM_API_URL": f"http://127.0.0.1:{up_http}/tg", "SIGNAL_EVERY": "2",
-           "TRADER_COMPUTE_EVERY": "2", "TRADER_HARVEST_EVERY": "0.3", "TRADER_GECKO_RPM": "600"}
+           "TRADER_COMPUTE_EVERY": "2", "TRADER_HARVEST_EVERY": "0.3", "TRADER_GECKO_RPM": "600",
+           "HELIUS_RPC_URL": f"http://127.0.0.1:{up_http}/helius", "YOUTUBE_API_URL": f"http://127.0.0.1:{up_http}/yt",
+           "DUNE_API_URL": f"http://127.0.0.1:{up_http}/dune", "YT_BUZZ_DELAY": "1", "YT_BUZZ_EVERY": "4"}
     app = subprocess.Popen([sys.executable, "-m", "radar"], cwd=ROOT, env=env)
     wait_http(f"http://127.0.0.1:{up_http}/dex/token-profiles/latest/v1")
     _UPSTREAM.append(f"127.0.0.1:{up_http}")
@@ -373,3 +375,68 @@ def test_telegram_chat_id_found_automatically(stack):
     conns = {c["id"]: c for c in httpx.get(f"http://{stack}/api/connectors").json()["connectors"]}
     chat = next(f for f in conns["telegram_bot"]["fields"] if f["name"] == "chat_id")
     assert chat["value"] == "555123"
+
+
+def test_engines_helius_youtube_dune_telegram(stack):
+    """Your keys at work: Helius insider scans, YouTube buzz on a live coin, Dune imports, the Telegram command bot."""
+    fake = stack_upstream()
+    for cid in ("helius", "youtube", "dune"):
+        httpx.post(f"http://{stack}/api/connectors/{cid}", json={"values": {"api_key": "test-key"}})
+    # on-chain: rocket launches have 4 brand-new early buyers funded by one wallet -> an insider cluster
+    found = None
+    for _ in range(90):
+        rows = httpx.get(f"http://{stack}/api/snipe", params={"appetite": "degen", "limit": 100}).json()["rows"]
+        found = next((r for r in rows if (r.get("intel") or {}).get("insiders", 0) >= 2), None)
+        if found:
+            break
+        time.sleep(0.5)
+    assert found, "no launch got an on-chain insider scan"
+    assert found["intel"]["fresh_pct"] > 0 and found["intel"]["chain_top10_pct"] is not None
+    assert found["metrics"]["insiders"] >= 2 and found["metrics"]["insider_hold_pct"] is not None
+    assert any(d["key"] == "onchain" for d in found["detectors"])
+    assert any("insiders" in w for w in found["why_risk"])
+    eng = httpx.get(f"http://{stack}/api/engines").json()
+    assert eng["helius"]["spent"] > 0 and eng["helius"]["intel"]["scans"] >= 1 and eng["helius"]["spent"] <= eng["helius"]["daily"]
+    # YouTube buzz: a video mentioning $HAWKTUAH + its contract attaches to the live launch
+    from .fixtures import MINT as M
+    yt = None
+    for _ in range(80):
+        one = httpx.get(f"http://{stack}/api/snipe/{M}").json()
+        yt = one.get("yt")
+        if yt:
+            break
+        time.sleep(0.5)
+    assert yt and yt["videos"] >= 1 and yt["views"] >= 42000, "YouTube buzz never reached the live coin"
+    assert any(d["key"] == "buzz" for d in one["detectors"]) and one["metrics"]["yt_videos"] >= 1
+    buzz = httpx.get(f"http://{stack}/api/youtube/buzz").json()
+    assert any(v["id"] == "buzz1" and M in v["live"] for v in buzz["videos"]) and buzz["quota"]["used"] >= 100
+    # Dune: saved query, wallets imported with PnL labels, bad query -> 400
+    r = httpx.post(f"http://{stack}/api/dune/queries", json={"query_id": "https://dune.com/queries/3456789/xyz", "label": "top pumpers"}).json()
+    assert r["imported"] == 5 and r["queries"][0]["id"] == 3456789 and r["queries"][0]["label"] == "top pumpers"
+    assert httpx.post(f"http://{stack}/api/dune/queries", json={"query_id": "404"}).status_code == 400
+    w = httpx.get(f"http://{stack}/api/traders/Dune1{'w' * 35}").json()["trader"]
+    assert w["pinned"] == 1 and "PnL $250k" in w["label"] and "WR 60%" in w["label"], w
+    # budgets
+    b = httpx.post(f"http://{stack}/api/engines/budget", json={"helius_daily_credits": 50000, "ai_daily_usd": 0.25}).json()
+    assert b["helius"]["daily"] == 50000 and b["claude"]["budget_usd"] == 0.25
+    feed = httpx.get(f"http://{stack}/api/intel").json()
+    assert any(e["engine"] == "helius" for e in feed) and any(e["engine"] == "youtube" for e in feed) and any(e["engine"] == "dune" for e in feed)
+    # Telegram bot commands in your chat
+    httpx.post(f"http://{stack}/api/connectors/telegram_bot", json={"values": {"bot_token": "123:abc", "chat_id": "555123"}})
+    n0 = len(httpx.get(f"http://{fake}/tg/log").json())
+    for cmd in ("/top degen", "/coin $HAWKTUAH", "/status", "/push balanced"):
+        httpx.post(f"http://{fake}/tg/push_update", json={"text": cmd})
+    want = {"Top launches · degen", "HAWKTUAH", "Engines", "Push mode: <b>balanced</b>"}
+    for _ in range(60):
+        texts = [x["text"] for x in httpx.get(f"http://{fake}/tg/log").json()[n0:]]
+        if all(any(w in t for t in texts) for w in want):
+            break
+        time.sleep(0.3)
+    assert all(any(w in t for t in texts) for w in want), texts
+    coin = next(x for x in httpx.get(f"http://{fake}/tg/log").json()[n0:] if "HAWKTUAH" in x["text"] and "Top launches" not in x["text"])
+    assert coin["buttons"] and coin["chat_id"] == "555123"
+    # a stranger's chat gets nothing
+    httpx.post(f"http://{fake}/tg/push_update", json={"text": "/top", "chat": 999})
+    time.sleep(2.5)
+    assert not any(x.get("chat_id") == "999" for x in httpx.get(f"http://{fake}/tg/log").json())
+    assert httpx.get(f"http://{stack}/api/engines").json()["telegram"]["push_mode"] == "balanced"

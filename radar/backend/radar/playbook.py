@@ -76,6 +76,19 @@ PRESETS: list[dict[str, Any]] = [
     {"id": "degen-lottery", "name": "Degen lottery", "appetite": "degen",
      "description": "Under 5 minutes old, under $15k market cap, showing real upside, dev not sitting on a big bag. High risk by design — size accordingly.",
      "rules": [R("age_s", "<=", 300), R("mcap_usd", "<=", 15000), R("upside", ">=", 25), R("dev_hold_pct", "<=", 20)], "sources": ["moonpay_sniper"]},
+    # ---- need your keys: Helius (on-chain), YouTube, Claude ----
+    {"id": "insider-free", "name": "Insider-free (on-chain)", "appetite": "balanced",
+     "description": "Helius checked the early buyers: no wallets sharing a funder, few brand-new wallets, real buyers and upside. Skips the coordinated launches most rugs come from.",
+     "rules": [R("insiders", "==", 0), R("fresh_pct", "<=", 35), R("buyers", ">=", 10), R("upside", ">=", 25)], "sources": ["mobula_snipers"]},
+    {"id": "degen-convergence", "name": "Degen convergence", "appetite": "degen",
+     "description": "Big upside, insiders (if any) hold little, crowd still arriving. The risky play with the obvious trap removed.",
+     "rules": [R("upside", ">=", 40), R("insider_hold_pct", "<=", 10), R("buyers", ">=", 12)], "sources": ["moonpay_sniper"]},
+    {"id": "youtube-buzz", "name": "Already on YouTube", "appetite": "degen",
+     "description": "A memecoin video in the last 48h names this coin's ticker, contract or name — attention is arriving — and the risk isn't extreme.",
+     "rules": [R("yt_videos", ">=", 1), R("risk", "<=", 55)], "sources": ["degenesis"]},
+    {"id": "strong-meme", "name": "Strong meme (Claude)", "appetite": "balanced",
+     "description": "Claude rates the meme 7/10+ and not a copy, with real buyers and no bundle: narrative first, the way the best callers pick.",
+     "rules": [R("ai_meme_score", ">=", 7), R("ai_derivative", "==", False), R("bundled", "==", False), R("buyers", ">=", 6)], "sources": ["degenesis"]},
 ]
 
 # ---- built-in parser: common phrasings in videos / guides -> rules ------------------------------------------------
@@ -200,6 +213,9 @@ class Playbook:
         self.db, self.ai, self.connectors, self.sniper, self.alerts = db, ai, connectors, sniper, alerts
         self.client = httpx.AsyncClient(timeout=15)
         self.version = 0          # bumps whenever strategies change, so cached lists never go stale
+        self.cycle = 0
+        self.channels_followed = 0
+        self.last_channels = 0.0
 
     # ---------------- strategies ----------------
     async def load(self) -> None:
@@ -313,15 +329,16 @@ class Playbook:
         s = await self.db.one("SELECT * FROM playbook_sources WHERE id=?", (sid,))
         if not s:
             return None
+        if s["kind"] == "youtube" and "[Top comments]" not in (s["text"] or ""):
+            c = await self.comments(s["url"])
+            if c:
+                await self.db.exec("UPDATE playbook_sources SET text=? WHERE id=?", (f"{s['text'] or ''}\n\n[Top comments]\n{c}"[:60000], sid))
+                s = {**s, "text": f"{s['text'] or ''}\n\n[Top comments]\n{c}"}
         text = "\n".join(x for x in (s["title"], s["text"]) if x)
         rules, unsupported, summary, extractor, err = [], [], None, "parser", None
         if self.ai and self.ai.enabled and len(text) > 40:
             try:
-                resp = await self.ai._create("playbook", model=__import__("radar.ai", fromlist=["FAST_MODEL"]).FAST_MODEL, max_tokens=2000,
-                                             system=[{"type": "text", "text": EXTRACT_SYSTEM, "cache_control": {"type": "ephemeral"}}],
-                                             output_config={"effort": "low", "format": {"type": "json_schema", "schema": EXTRACT_SCHEMA}},
-                                             messages=[{"role": "user", "content": text[:40000]}])
-                d = json.loads(self.ai._text(resp))
+                d = await self.ai.json("playbook", EXTRACT_SYSTEM, text[:24000], EXTRACT_SCHEMA, max_tokens=2000)
                 for r in d["rules"]:
                     if METRICS.get(r["metric"], ("", "", ""))[2] == "bool":
                         r["value"] = bool(r["value"])
@@ -358,51 +375,107 @@ class Playbook:
         return {"sources": [{**{k: r[k] for k in r if k not in ("rules_json", "unsupported_json")},
                              "rules": json.loads(r["rules_json"] or "[]"), "unsupported": json.loads(r["unsupported_json"] or "[]")} for r in rows],
                 "consensus": consensus(srcs), "metrics": {k: {"label": v[0], "unit": v[1], "kind": v[2]} for k, v in METRICS.items()},
-                "youtube_connected": bool(yt.get("api_key")), "ai_connected": bool(self.ai and self.ai.enabled)}
+                "youtube_connected": bool(yt.get("api_key")), "ai_connected": bool(self.ai and self.ai.enabled),
+                "youtube_quota": __import__("radar.ytbuzz", fromlist=["quota"]).quota.snapshot(), "channels_followed": self.channels_followed,
+                "queries": self.QUERIES}
 
     # ---------------- discovery ----------------
     QUERIES = ["memecoin sniping filters", "pump.fun trading strategy", "axiom pulse filters settings", "how to find memecoins early solana",
-               "gmgn trenches filters", "memecoin trading strategy 2026", "solana memecoin red flags bundles snipers"]
+               "gmgn trenches filters", "memecoin trading strategy 2026", "solana memecoin red flags bundles snipers",
+               "photon memecoin settings", "bullx neo filters", "how top memecoin traders pick coins", "memecoin insider wallets bundles explained",
+               "copy trading smart wallets solana memecoins", "pump.fun graduation strategy", "memecoin narrative trading"]
+    PER_CYCLE = 4          # 4 searches every 3h = 3,200 of YouTube's 10,000 daily units; channels + comments cost ~1 unit each
 
     async def discover(self) -> int:
+        from .ytbuzz import yt_get
         v = await self.connectors.values("youtube")
         if not v.get("api_key"):
             return 0
         added = 0
         after = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 45 * 86400))
-        for q in self.QUERIES:
+        start = self.cycle * self.PER_CYCLE % len(self.QUERIES)
+        self.cycle += 1
+        for q in (self.QUERIES * 2)[start:start + self.PER_CYCLE]:
             t0 = time.perf_counter()
-            r = await self.client.get("https://www.googleapis.com/youtube/v3/search", params={
-                "part": "snippet", "q": q, "type": "video", "order": "relevance", "publishedAfter": after, "maxResults": 15,
-                "relevanceLanguage": "en", "key": v["api_key"]})
-            r.raise_for_status()
+            j = await yt_get(self.client, "search", {"part": "snippet", "q": q, "type": "video", "order": "relevance", "publishedAfter": after,
+                                                     "maxResults": 15, "relevanceLanguage": "en"}, v["api_key"], 100, "playbook search")
             yt_h.ok((time.perf_counter() - t0) * 1000)
-            items = r.json().get("items", [])
-            ids = [i["id"]["videoId"] for i in items if (i.get("id") or {}).get("videoId")]
-            if not ids:
-                continue
-            det = await self.client.get("https://www.googleapis.com/youtube/v3/videos",
-                                        params={"part": "snippet,statistics", "id": ",".join(ids), "key": v["api_key"]})
-            det.raise_for_status()
-            for it in det.json().get("items", []):
-                sn, st = it.get("snippet") or {}, it.get("statistics") or {}
-                url = f"https://www.youtube.com/watch?v={it['id']}"
-                if await self.db.one("SELECT 1 FROM playbook_sources WHERE url=?", (url,)):
-                    continue
-                pub = sn.get("publishedAt")
-                await self.db.exec("INSERT OR IGNORE INTO playbook_sources (kind, url, title, author, published, views, text, added, status) "
-                                   "VALUES (?,?,?,?,?,?,?,?,?)", ("youtube", url, sn.get("title"), sn.get("channelTitle"),
-                                                                  time.mktime(time.strptime(pub[:19], "%Y-%m-%dT%H:%M:%S")) if pub else None,
-                                                                  float(st.get("viewCount") or 0), (sn.get("description") or "")[:8000],
-                                                                  time.time(), "new"))
-                added += 1
+            ids = [i["id"]["videoId"] for i in j.get("items", []) if (i.get("id") or {}).get("videoId")]
+            added += await self._add_videos(ids, v["api_key"])
         return added
+
+    async def _add_videos(self, ids: list[str], key: str) -> int:
+        from .ytbuzz import yt_get
+        fresh = []
+        for i in ids:
+            if not await self.db.one("SELECT 1 FROM playbook_sources WHERE url=?", (f"https://www.youtube.com/watch?v={i}",)):
+                fresh.append(i)
+        if not fresh:
+            return 0
+        det = await yt_get(self.client, "videos", {"part": "snippet,statistics", "id": ",".join(fresh[:50])}, key, 1, "playbook videos")
+        added = 0
+        for it in det.get("items", []):
+            sn, st = it.get("snippet") or {}, it.get("statistics") or {}
+            pub = sn.get("publishedAt")
+            await self.db.exec("INSERT OR IGNORE INTO playbook_sources (kind, url, title, author, published, views, text, added, status, channel_id) "
+                               "VALUES (?,?,?,?,?,?,?,?,?,?)", ("youtube", f"https://www.youtube.com/watch?v={it['id']}", sn.get("title"),
+                                                                sn.get("channelTitle"),
+                                                                __import__("calendar").timegm(time.strptime(pub[:19], "%Y-%m-%dT%H:%M:%S")) if pub else None,
+                                                                float(st.get("viewCount") or 0), (sn.get("description") or "")[:8000],
+                                                                time.time(), "new", sn.get("channelId")))
+            added += 1
+        return added
+
+    async def follow_channels(self) -> int:
+        """Creators whose videos gave real filters: read their latest uploads (1 unit per channel, vs 100 per search)."""
+        from .ytbuzz import yt_get
+        v = await self.connectors.values("youtube")
+        if not v.get("api_key"):
+            return 0
+        chans = await self.db.all("SELECT channel_id, author, COUNT(*) n, SUM(views) views FROM playbook_sources WHERE channel_id IS NOT NULL "
+                                  "AND status='digested' AND rules_json NOT IN ('[]','') GROUP BY channel_id ORDER BY n DESC, views DESC LIMIT 20")
+        added = 0
+        for c in chans:
+            cid = c["channel_id"]
+            if not cid.startswith("UC"):
+                continue
+            try:
+                j = await yt_get(self.client, "playlistItems", {"part": "contentDetails", "playlistId": "UU" + cid[2:], "maxResults": 8},
+                                 v["api_key"], 1, "channel uploads")
+            except httpx.HTTPError:
+                continue
+            ids = [(i.get("contentDetails") or {}).get("videoId") for i in j.get("items", [])]
+            added += await self._add_videos([i for i in ids if i], v["api_key"])
+        self.channels_followed = len(chans)
+        return added
+
+    async def comments(self, url: str) -> str:
+        """Top comments of a video (creators often pin their exact filter settings there). 1 unit."""
+        from .ytbuzz import yt_get
+        v = await self.connectors.values("youtube")
+        m = re.search(r"v=([\w-]{6,})", url)
+        if not v.get("api_key") or not m:
+            return ""
+        try:
+            j = await yt_get(self.client, "commentThreads", {"part": "snippet", "videoId": m.group(1), "order": "relevance",
+                                                             "maxResults": 20, "textFormat": "plainText"}, v["api_key"], 1, "comments")
+        except (httpx.HTTPError, RuntimeError):
+            return ""
+        out = []
+        for it in j.get("items", []):
+            top = ((it.get("snippet") or {}).get("topLevelComment") or {}).get("snippet") or {}
+            if top.get("textDisplay"):
+                out.append(top["textDisplay"][:600])
+        return "\n".join(out)
 
     async def loop(self) -> None:
         await asyncio.sleep(20)
         while True:
             try:
                 await self.discover()
+                if time.time() - self.last_channels > 12 * 3600:
+                    self.last_channels = time.time()
+                    await self.follow_channels()
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -414,4 +487,4 @@ class Playbook:
                 raise
             except Exception as e:  # noqa: BLE001
                 log.warning("playbook digest: %s", e)
-            await asyncio.sleep(4 * 3600)   # 7 searches × 100 units × 6/day ≈ 4.2k of YouTube's 10k daily quota
+            await asyncio.sleep(float(__import__("os").environ.get("PLAYBOOK_EVERY", str(3 * 3600))))

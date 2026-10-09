@@ -144,10 +144,11 @@ async def t_neynar(v: dict[str, str]) -> str:
 
 
 async def t_helius(v: dict[str, str]) -> str:
-    r = await _post(f"https://mainnet.helius-rpc.com/?api-key={v['api_key']}",
+    r = await _post(os.environ.get("HELIUS_RPC_URL") or f"https://mainnet.helius-rpc.com/?api-key={v['api_key']}",
                     json={"jsonrpc": "2.0", "id": 1, "method": "getHealth"})
     _need(r, "")
-    return f"RPC says: {r.json().get('result', r.json())}"
+    return (f"RPC says: {r.json().get('result', r.json())} · Radar will spend at most the daily credit budget set on the "
+            "Engines page (default 30,000/day ≈ the free plan)")
 
 
 async def t_birdeye(v: dict[str, str]) -> str:
@@ -163,13 +164,13 @@ async def t_coingecko(v: dict[str, str]) -> str:
 
 
 async def t_youtube(v: dict[str, str]) -> str:
-    r = await _get("https://www.googleapis.com/youtube/v3/videos",
+    r = await _get(f"{os.environ.get('YOUTUBE_API_URL', 'https://www.googleapis.com/youtube/v3')}/videos",
                    params={"part": "id", "chart": "mostPopular", "maxResults": 1, "key": v["api_key"]})
     return _need(r, "YouTube Data API key valid")
 
 
 async def t_dune(v: dict[str, str]) -> str:
-    r = await _get("https://api.dune.com/api/v1/query/1/results", params={"limit": 1}, headers={"X-Dune-API-Key": v["api_key"]})
+    r = await _get(f"{os.environ.get('DUNE_API_URL', 'https://api.dune.com')}/api/v1/query/1/results", params={"limit": 1}, headers={"X-Dune-API-Key": v["api_key"]})
     if r.status_code in (401, 403):
         raise ValueError(f"HTTP {r.status_code}: key rejected")
     return "Dune key accepted"

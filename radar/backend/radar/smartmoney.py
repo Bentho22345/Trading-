@@ -14,7 +14,7 @@ from .health import Health, register
 from .hub import hub
 
 log = logging.getLogger("radar.smart")
-helius_h = register(Health("helius", "rest", "Helius: tracked-wallet swap history (fills gaps beyond pump.fun)"))
+helius_h = register(Health("helius", "rest", "Helius: live swaps of followed & top wallets beyond pump.fun (budgeted)"))
 helius_h.stale_after = 900
 
 
@@ -26,6 +26,7 @@ class SmartMoney:
         self.also_follow: dict[str, dict[str, Any]] = {}  # leaderboard wallets -> {rank, period, roi}
         self.top_seen: dict[str, None] = {}
         self.push_times: list[float] = []
+        self.helius: Any = None
 
     async def load(self) -> None:
         for w in self.cfg.watch.get("kol_wallets") or []:
@@ -191,37 +192,52 @@ class SmartMoney:
         return n
 
     async def helius_loop(self) -> None:
-        """With a Helius key, pull parsed SWAP history for tracked wallets (catches Raydium/Jupiter trades too)."""
+        """Live swaps of followed / top wallets anywhere on Solana (Raydium, Jupiter, Meteora…), not just pump.fun.
+
+        Cheap by design: one 1-credit `getSignaturesForAddress(until=last seen)` per wallet check, and a 1-credit
+        `getTransaction` only for signatures that are actually new — instead of a 100-credit Enhanced call every few
+        seconds. The check rate adapts to the Helius budget's 'smart' share."""
+        from .helius import BudgetExceeded, wallet_swaps
+        last: dict[str, str] = {}
         i = 0
-        async with httpx.AsyncClient(timeout=20) as client:
-            while True:
-                try:
-                    key = (await self.connectors.values("helius")).get("api_key")
-                    wallets = list(self.tracked)
-                    if key and wallets:
-                        addr = wallets[i % len(wallets)]
-                        i += 1
-                        t0 = time.perf_counter()
-                        r = await client.get(f"https://api.helius.xyz/v0/addresses/{addr}/transactions",
-                                             params={"api-key": key, "type": "SWAP", "limit": 20})
-                        if r.status_code == 429:
-                            helius_h.fail("429", rate_limited=True)
-                            await asyncio.sleep(30)
-                            continue
-                        r.raise_for_status()
-                        helius_h.ok((time.perf_counter() - t0) * 1000)
-                        for tx in r.json():
-                            for tt in tx.get("tokenTransfers") or []:
-                                mint = tt.get("mint")
-                                if not mint or mint.startswith("So1111"):
-                                    continue
-                                side = "buy" if tt.get("toUserAccount") == addr else "sell" if tt.get("fromUserAccount") == addr else None
-                                if side:
-                                    await self.on_trade({"mint": mint, "ts": float(tx.get("timestamp") or time.time()), "side": side,
-                                                         "sol": None, "tokens": tt.get("tokenAmount"), "trader": addr,
-                                                         "mcap_sol": None, "signature": f"{tx.get('signature')}:{mint}"})
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:  # noqa: BLE001
-                    helius_h.fail(f"{type(e).__name__}: {e}")
-                await asyncio.sleep(3)
+        while True:
+            hl = self.helius
+            wait = 15.0
+            try:
+                wallets = list(self.tracked) + [w for w, _ in sorted(self.also_follow.items(), key=lambda p: p[1].get("rank") or 9999)][:60]
+                wallets = list(dict.fromkeys(wallets))
+                if hl is None or not hl.enabled or not wallets:
+                    await asyncio.sleep(30)
+                    continue
+                share = hl.daily * 0.30
+                wait = max(3.0, 86400 / max(1.0, share * 0.6))        # ~60% of the share on checks, the rest on parsing new txs
+                addr = wallets[i % len(wallets)]
+                i += 1
+                opts: dict[str, Any] = {"limit": 10}
+                if addr in last:
+                    opts["until"] = last[addr]
+                sigs = await hl.rpc("getSignaturesForAddress", [addr, opts], "smart") or []
+                helius_h.ok()
+                if sigs:
+                    first_look = addr not in last
+                    last[addr] = sigs[0]["signature"]
+                    if not first_look:                                 # first look only sets the cursor: no history spend
+                        for sg in reversed(sigs[:5]):
+                            if sg.get("err") is not None:
+                                continue
+                            tx = await hl.rpc("getTransaction", [sg["signature"], {"encoding": "jsonParsed",
+                                                                                   "maxSupportedTransactionVersion": 0}], "smart")
+                            if not tx:
+                                continue
+                            legs = wallet_swaps(tx, addr)
+                            for lg in legs:
+                                await self.on_trade({"mint": lg["mint"], "ts": float(tx.get("blockTime") or time.time()), "side": lg["side"],
+                                                     "sol": lg["sol"], "tokens": lg["tokens"], "trader": addr, "mcap_sol": None,
+                                                     "signature": sg["signature"] if len(legs) == 1 else f"{sg['signature']}:{lg['mint']}"})
+            except asyncio.CancelledError:
+                raise
+            except BudgetExceeded:
+                wait = 60.0
+            except Exception as e:  # noqa: BLE001
+                helius_h.fail(f"{type(e).__name__}: {e}")
+            await asyncio.sleep(wait)

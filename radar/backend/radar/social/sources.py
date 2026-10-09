@@ -339,9 +339,11 @@ class YouTubeSource:
             while True:
                 try:
                     v = await self.values()
-                    if v.get("api_key"):
+                    from ..ytbuzz import quota
+                    if v.get("api_key") and quota.can(1):
                         t0 = time.perf_counter()
-                        r = await client.get("https://www.googleapis.com/youtube/v3/videos",
+                        quota.spend(1, "trending chart")
+                        r = await client.get(f"{__import__('radar.ytbuzz', fromlist=['YT']).YT}/videos",
                                              params={"part": "snippet,statistics", "chart": "mostPopular", "regionCode": "US",
                                                      "maxResults": 50, "key": v["api_key"]})
                         r.raise_for_status()

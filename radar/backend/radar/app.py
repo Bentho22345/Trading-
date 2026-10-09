@@ -57,6 +57,11 @@ class State:
     sniper: Any
     playbook: Any
     metadata: Any
+    helius: Any
+    onchain: Any
+    ytbuzz: Any
+    narrator: Any
+    tgbot: Any
 
 
 S = State()
@@ -135,6 +140,25 @@ async def lifespan(app: FastAPI):
     S.playbook = Playbook(S.db, S.ai, S.connectors, S.sniper, S.alerts)
     S.sniper.on_hit = S.playbook.on_hit
     await S.playbook.load()
+    # ---- the engines behind your keys: Helius (on-chain intel), YouTube (buzz), Claude (batch reads), Telegram (bot) ----
+    from .helius import Helius
+    from .narrator import Narrator
+    from .onchain import OnChain
+    from .tgbot import TelegramBot
+    from .ytbuzz import YouTubeBuzz
+    S.helius = Helius(S.cfg)
+    await S.helius.load()
+    S.smart.helius = S.traders.helius = S.helius
+    S.onchain = OnChain(S.db, S.helius, S.sniper, S.alerts)
+    S.sniper.onchain = S.onchain
+    S.ytbuzz = YouTubeBuzz(S.db, S.connectors, S.alerts)
+    S.ytbuzz.sniper = S.sniper
+    S.sniper.ytbuzz = S.ytbuzz
+    S.narrator = Narrator(S.db, S.ai, S.sniper)
+    S.tgbot = TelegramBot(S.db, S.cfg, S.connectors, S.alerts, S.sniper)
+    from .api_engines import engines_status, load_budgets
+    S.tgbot.status_fn = engines_status
+    await load_budgets()
 
     async def load_pool() -> None:
         S.sniper.pool = {r["address"] for r in await S.db.all("SELECT address FROM traders")}
@@ -147,6 +171,7 @@ async def lifespan(app: FastAPI):
             S.ai.set_key(vals.get("api_key"), vals.get("workspace_id"))
         elif cid == "helius":
             S.tracker.extra.set_helius(vals.get("api_key"))
+            S.helius.set_key(vals.get("api_key"))
     S.connectors.listeners.append(on_change)
     for cid in ("coingecko", "anthropic", "helius"):
         await on_change(cid, await S.connectors.values(cid))
@@ -167,6 +192,7 @@ async def lifespan(app: FastAPI):
         jobs = [S.sniper.eval_loop(), loop_lag_monitor(), S.metadata.run(), S.playbook.loop(), periodic(300, load_pool), S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
+                S.onchain.run(), S.ytbuzz.loop(), S.narrator.loop(), S.tgbot.run(), S.tgbot.push_loop(), S.traders.dune_loop(),
                 soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
@@ -585,9 +611,11 @@ async def source_items(source_id: int | None = None, limit: int = 100) -> list[d
 
 from .api2 import router as _router2  # noqa: E402
 from .api_news import router as _router_news  # noqa: E402
+from .api_engines import router as _router_engines  # noqa: E402
 
 app.include_router(_router2)
 app.include_router(_router_news)
+app.include_router(_router_engines)
 
 
 # ---------------- live socket ----------------

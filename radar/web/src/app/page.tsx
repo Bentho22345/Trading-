@@ -25,6 +25,7 @@ export default function Home() {
     <div>
       <Hero s={s} feed={feed} />
       <SnipeSpotlight />
+      <EnginesStrip />
       <Buying s={s} />
       <Podium s={s} />
       <section className="mt-28">
@@ -207,7 +208,7 @@ function SnipeSpotlight() {
   return (
     <section className="mt-16">
       <SectionHead eyebrow="Sniper · live" title={<>Be first. <span className="text-white/35">Then prove it.</span></>}
-        sub="Every pump.fun launch is scored from its first trade by six live detectors — top wallets buying, curve velocity, organic flow, dev track record, meta match and social spread. Calls are logged and graded." />
+        sub="Every pump.fun launch is scored from its first trade by eight live detectors — top wallets buying, curve velocity, organic flow, dev track record, meta match, social spread, on-chain insiders (Helius) and YouTube + Claude buzz. Calls are logged and graded." />
       <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
         <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
           <AnimatePresence initial={false} mode="popLayout">
@@ -236,6 +237,50 @@ function SnipeSpotlight() {
           </div>
         </div>
       </div>
+    </section>
+  );
+}
+
+const ENG = [
+  { k: 'helius', label: 'Helius', tone: 'text-[#ff7a45]', stat: (d: any) => `${(d.helius?.intel?.scans ?? 0).toLocaleString()} scans · ${d.helius?.intel?.insider_coins ?? 0} insider clusters`, on: (d: any) => d.helius?.connected },
+  { k: 'claude', label: 'Claude', tone: 'text-accent', stat: (d: any) => `${(d.claude?.labeled ?? 0).toLocaleString()} coins read · $${(d.claude?.spent_usd ?? 0).toFixed(3)}`, on: (d: any) => d.claude?.enabled },
+  { k: 'youtube', label: 'YouTube', tone: 'text-down', stat: (d: any) => `${d.youtube?.buzz?.videos_48h ?? 0} videos · ${d.youtube?.playbook?.digested ?? 0} strategies`, on: (d: any) => d.youtube?.configured },
+  { k: 'dune', label: 'Dune', tone: 'text-warn', stat: (d: any) => `${(d.dune?.queries || []).length} saved queries`, on: (d: any) => d.dune?.configured },
+  { k: 'telegram', label: 'Telegram', tone: 'text-accent2', stat: (d: any) => `push: ${d.telegram?.push_mode ?? '—'} · ${d.telegram?.messages_sent ?? 0} sent`, on: (d: any) => d.telegram?.configured },
+];
+
+function EnginesStrip() {
+  const [d, setD] = useState<any>(null);
+  const [ev, setEv] = useState<any[]>([]);
+  const now = useNow(5000);
+  useEffect(() => {
+    const load = () => api('/api/engines').then(setD).catch(() => {});
+    load();
+    api('/api/intel?limit=6').then(setEv).catch(() => {});
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, []);
+  useLive(({ ch, data }) => { if (ch === 'intel') setEv((e) => [data, ...e].slice(0, 6)); });
+  if (!d) return null;
+  return (
+    <section className="mt-10">
+      <Link href="/engines" className="glass group block rounded-3xl p-4 transition hover:border-white/20">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+          {ENG.map((e) => (
+            <div key={e.k} className="flex items-center gap-2 rounded-2xl bg-white/[0.025] px-3 py-2">
+              <span className={`h-2 w-2 rounded-full ${e.on(d) ? 'animate-pulse bg-up' : 'bg-white/25'}`} />
+              <b className={`text-[12px] uppercase tracking-wider ${e.tone}`}>{e.label}</b>
+              <span className="num truncate text-[11px] text-white/55">{e.on(d) ? e.stat(d) : 'add key'}</span>
+            </div>
+          ))}
+        </div>
+        {ev.length > 0 && (
+          <div className="mt-3 flex gap-4 overflow-hidden whitespace-nowrap text-[12px] text-white/60">
+            {ev.slice(0, 4).map((x) => <span key={`${x.ts}${x.title}`} className="truncate"><span className="text-white/35">{ago(x.ts, now)} ·</span> {x.title}</span>)}
+            <span className="ml-auto shrink-0 font-semibold text-white/70 group-hover:text-white">Engines →</span>
+          </div>
+        )}
+      </Link>
     </section>
   );
 }

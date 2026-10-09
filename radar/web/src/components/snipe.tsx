@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
 import { AnimatePresence, motion } from '@/components/motion';
 import { api, apiCached, peek } from '@/lib/api';
@@ -13,7 +13,12 @@ export type Metrics = {
   pro_traders: number; buys_1m: number; sells_1m: number; buy_ratio_1m: number; vol_1m_usd: number; vol_5m_usd: number;
   has_twitter: boolean; has_telegram: boolean; has_website: boolean; twitter_kind?: string | null; x_community: boolean; socials: number;
   social_authors: number; social_engagement: number; meta_hot: boolean; dev_graduated: number; coverage_pct: number; metrics_basis: 'complete' | 'partial';
+  insiders?: number | null; insider_hold_pct?: number | null; fresh_pct?: number | null; fresh_hold_pct?: number | null; chain_top10_pct?: number | null;
+  bot_wallets?: number | null; yt_videos?: number; yt_views?: number; ai_meme_score?: number | null; ai_derivative?: boolean | null; ai_narrative?: string | null;
 };
+export type Intel = { scanned: number; fresh_pct?: number | null; bots?: number; chain_top10_pct?: number | null; dev_fresh?: boolean; insiders: number; fresh: number;
+  clusters?: { funder: string; wallets: string[]; n: number; link: string }[]; ts: number };
+export type AiRead = { narrative?: string; category?: string; meme_score?: number; derivative?: boolean; red_flags?: string[]; take?: string };
 export type Appetite = 'safe' | 'balanced' | 'degen';
 export type Rule = { metric: string; op: string; value: number | boolean };
 export type SnipeRow = {
@@ -24,6 +29,7 @@ export type SnipeRow = {
   confirming?: boolean; metrics?: Metrics; upside?: number; risk?: number; scores?: Record<Appetite, number>; why_up?: string[]; why_risk?: string[];
   strategies?: string[]; links?: { twitter?: string; telegram?: string; website?: string }; description?: string | null; image?: string | null;
   alpha: { wallet: string; rank?: number | null; label?: string | null; ts: number; sol: number }[]; called?: boolean;
+  intel?: Intel | null; ai?: AiRead | null; yt?: { videos: number; views: number; top?: string } | null;
 };
 export type SnipeFilters = {
   minScore: number; tiers: string[]; hideBundled: boolean; alphaOnly: boolean; provenDev: boolean; maxAgeMin: number;
@@ -37,7 +43,7 @@ export const TIER_STYLE: Record<string, string> = {
   PASS: 'bg-white/5 text-white/45',
   TRAP: 'bg-down/15 text-down ring-1 ring-down/40',
 };
-export const DET_ICON: Record<string, string> = { alpha: 'trophy', velocity: 'rocket', organic: 'social', dev: 'wallet', meta: 'narrative', social: 'signal' };
+export const DET_ICON: Record<string, string> = { alpha: 'trophy', velocity: 'rocket', organic: 'social', dev: 'wallet', meta: 'narrative', social: 'signal', onchain: 'link', buzz: 'flame' };
 export const APPETITES: { value: Appetite; label: string; sub: string }[] = [
   { value: 'safe', label: 'Safe', sub: 'Risk counts in full' },
   { value: 'balanced', label: 'Balanced', sub: 'Upside first, risk still bites' },
@@ -214,6 +220,35 @@ function MetricStrip({ m }: { m: Metrics }) {
   );
 }
 
+/** What the engines behind your keys found: on-chain insiders (Helius), YouTube buzz, Claude's read. */
+export function IntelStrip({ r, full = false }: { r: SnipeRow; full?: boolean }) {
+  const m = r.metrics, it = r.intel, ai = r.ai, yt = r.yt;
+  if (!it && !ai && !yt) return null;
+  const chip = (k: string, body: ReactNode, tone: 'up' | 'down' | 'warn' | 'accent' | 'mute', title: string) => (
+    <span key={k} title={title} className={`flex items-center gap-1 rounded-md px-1.5 py-[1px] text-[10px] font-semibold ${
+      { up: 'bg-up/10 text-up', down: 'bg-down/10 text-down', warn: 'bg-warn/10 text-warn', accent: 'bg-accent/15 text-accent', mute: 'bg-white/[0.05] text-white/60' }[tone]}`}>{body}</span>
+  );
+  const chips: ReactNode[] = [];
+  if (it) {
+    if (it.insiders) chips.push(chip('ins', <>🧬 {it.insiders} insiders · {(m?.insider_hold_pct ?? 0).toFixed(0)}%</>, (m?.insider_hold_pct ?? 0) >= 10 ? 'down' : 'warn',
+      `On-chain: ${it.insiders} early buyers share a funding wallet${(it.clusters || []).some((c) => c.link !== 'shared funder') ? ' tied to the dev' : ''}; they hold ${(m?.insider_hold_pct ?? 0).toFixed(1)}% now`));
+    else if (it.scanned >= 5 && (it.fresh_pct ?? 0) < 35) chips.push(chip('clean', <>⛓ clean buyers</>, 'up', `On-chain: ${it.scanned} early buyers checked — no shared funders, few fresh wallets`));
+    if (it.fresh_pct != null && it.fresh_pct > 0) chips.push(chip('fresh', <>🆕 {it.fresh_pct}% fresh</>, it.fresh_pct >= 50 ? 'down' : 'mute', `${it.fresh} of ${it.scanned} early buyers were created in the last 24h`));
+    if (it.chain_top10_pct != null) chips.push(chip('t10', <>⛓ T10 {it.chain_top10_pct.toFixed(0)}%</>, it.chain_top10_pct <= 30 ? 'up' : 'down', 'Top 10 holders read from the chain (bonding curve excluded)'));
+    if (it.dev_fresh) chips.push(chip('devfresh', <>dev wallet new</>, 'warn', "The deployer's wallet was created in the last 24h"));
+  }
+  if (yt?.videos) chips.push(chip('yt', <>▶ {yt.videos} video{yt.videos > 1 ? 's' : ''} · {Intl.NumberFormat('en', { notation: 'compact' }).format(yt.views)}</>, 'up', `YouTube (48h): ${yt.top || ''}`));
+  if (ai?.meme_score != null) chips.push(chip('ai', <>✦ {ai.meme_score}/10{ai.narrative ? ` · ${ai.narrative}` : ''}</>, ai.meme_score >= 7 ? 'accent' : 'mute',
+    `Claude's read: ${ai.take || ''}${ai.derivative ? ' · looks like a copy' : ''}`));
+  for (const f of ai?.red_flags || []) chips.push(chip(`rf${f}`, <>🚩 {f}</>, 'down', 'Red flag spotted by Claude'));
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1">{chips}</div>
+      {full && ai?.take && <p className="mt-1 text-[11px] text-white/55"><span className="text-accent">✦</span> {ai.take}</p>}
+    </div>
+  );
+}
+
 function Socials({ r }: { r: SnipeRow }) {
   const l = r.links || {};
   const a = (href: string | undefined, label: string, title: string) => href
@@ -274,7 +309,8 @@ export const SnipeCard = memo(function SnipeCard({ r, now, dense = false, select
       </div>
       <div className="mt-2"><CurveBar r={r} /></div>
       {r.metrics && <div className="mt-2"><MetricStrip m={r.metrics} /></div>}
-      {!dense && r.description && <p className="mt-1.5 line-clamp-1 text-[11px] italic text-white/45" title={r.description}>“{r.description}”</p>}
+      {(r.intel || r.ai || r.yt) && <div className="mt-1.5"><IntelStrip r={r} full={!dense} /></div>}
+      {!dense && r.description && !r.ai?.take && <p className="mt-1.5 line-clamp-1 text-[11px] italic text-white/45" title={r.description}>“{r.description}”</p>}
       {(fired.length > 0 || (!!r.strategies?.length && !!names)) && (
         <div className="mt-2 flex flex-wrap gap-1">
           {names && (r.strategies || []).slice(0, dense ? 2 : 4).map((s) => (

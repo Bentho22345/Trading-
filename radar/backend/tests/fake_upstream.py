@@ -123,20 +123,124 @@ def rug(mint: str):
 
 
 TG_LOG: list[dict] = []
+SWAP_N = [0]
+
+
+def _funder(w: str) -> str | None:
+    """Rocket buyers Fan{n}x{i} with i < 6 are brand-new wallets all funded by Insider{n} (an insider cluster)."""
+    import re
+    m = re.match(r"Fan(\d+)x(\d+)", w)
+    return f"Insider{m.group(1)}{'q' * 34}"[:40] if m and int(m.group(2)) < 6 else None
+
+
+@api.post("/helius")
+async def helius_rpc(body: dict):
+    """Solana JSON-RPC as Helius serves it: signatures, parsed transactions, largest token accounts."""
+    import time
+    method, params = body.get("method"), body.get("params") or []
+    now = int(time.time())
+    if method == "getSignaturesForAddress":
+        w, opts = params[0], (params[1] if len(params) > 1 else {})
+        if w.startswith("Trader") and opts.get("until"):          # a followed wallet: one new swap per check
+            SWAP_N[0] += 1
+            return {"result": [{"signature": f"sw{SWAP_N[0]}-{w}", "blockTime": now, "err": None}]}
+        if _funder(w):
+            return {"result": [{"signature": f"buy-{w}", "blockTime": now - 30, "err": None},
+                               {"signature": f"first-{w}", "blockTime": now - 900, "err": None}]}
+        return {"result": [{"signature": f"old{i}-{w[:8]}", "blockTime": now - 86400 * (i + 1), "err": None}
+                           for i in range(min(40, int(opts.get("limit", 40))))]}
+    if method == "getTransaction":
+        sig = params[0]
+        if sig.startswith("first-"):
+            w = sig[6:]
+            f = _funder(w)
+            return {"result": {"blockTime": now - 900, "meta": {"err": None, "fee": 5000, "innerInstructions": [],
+                                                                "preBalances": [5e9, 0], "postBalances": [4e9, 1e9]},
+                               "transaction": {"message": {"accountKeys": [{"pubkey": f}, {"pubkey": w}], "instructions": [
+                                   {"program": "system", "parsed": {"type": "transfer", "info": {"source": f, "destination": w,
+                                                                                                "lamports": 1_000_000_000}}}]}}}}
+        if sig.startswith("sw"):
+            w = sig.split("-", 1)[1]
+            mint = "SWAPmint" + "s" * 32 + "pump"
+            return {"result": {"blockTime": now, "meta": {"err": None, "fee": 5000, "preBalances": [3_000_005_000], "postBalances": [1_000_000_000],
+                                                          "preTokenBalances": [], "postTokenBalances": [
+                                                              {"owner": w, "mint": mint, "uiTokenAmount": {"uiAmount": 1234567.0}}]},
+                               "transaction": {"message": {"accountKeys": [{"pubkey": w}], "instructions": []}}}}
+        return {"result": None}
+    if method == "getTokenLargestAccounts":
+        return {"result": {"value": [{"address": "CurveATA", "uiAmount": 7.5e8}] +
+                           [{"address": f"H{i}", "uiAmount": 2.0e7 - i * 1e6} for i in range(12)]}}
+    if method == "getHealth":
+        return {"result": "ok"}
+    return {"result": None}
+
+
+@api.get("/yt/search")
+def yt_search(q: str = "", order: str = ""):
+    if order == "date":     # buzz search: fresh memecoin videos, one about the live HAWKTUAH launch
+        return {"items": [{"id": {"videoId": "buzz1"}}, {"id": {"videoId": "buzz2"}}]}
+    return {"items": [{"id": {"videoId": f"strat{abs(hash(q)) % 5}"}}]}
+
+
+@api.get("/yt/videos")
+def yt_videos(id: str = "", chart: str = ""):
+    out = []
+    for vid in (id.split(",") if id else []):
+        if vid == "buzz1":
+            sn = {"title": "$HAWKTUAH is the next 100x memecoin?!", "description": f"CA: {fx.MINT}", "channelTitle": "Degen TV",
+                  "channelId": "UCdegen", "publishedAt": "2026-10-09T00:00:00Z"}
+        elif vid == "buzz2":
+            sn = {"title": "Solana memecoins today: $WIF $BONK and $ZORP", "description": "", "channelTitle": "Coin Daily",
+                  "channelId": "UCdaily", "publishedAt": "2026-10-09T00:00:00Z"}
+        else:
+            sn = {"title": f"My memecoin sniping filters ({vid})", "description": "I only buy when top 10 holders are under 25% and there are at least 60 holders.",
+                  "channelTitle": "Trench Coach", "channelId": "UCcoach", "publishedAt": "2026-10-01T00:00:00Z"}
+        out.append({"id": vid, "snippet": sn, "statistics": {"viewCount": "42000", "likeCount": "900", "commentCount": "120"}})
+    return {"items": out}
+
+
+@api.get("/yt/commentThreads")
+def yt_comments(videoId: str = ""):
+    return {"items": [{"snippet": {"topLevelComment": {"snippet": {"textDisplay": "Pinned: my settings — snipers under 15%, dev holding under 4%"}}}}]}
+
+
+@api.get("/yt/playlistItems")
+def yt_uploads(playlistId: str = ""):
+    return {"items": [{"contentDetails": {"videoId": "upload1"}}]}
+
+
+@api.get("/dune/api/v1/query/{qid}/results")
+def dune_results(qid: int):
+    if qid == 404:
+        return JSONResponse({"error": "Query not found"}, status_code=404)
+    return {"execution_ended_at": "2026-10-09T00:00:00Z", "result": {"rows": [
+        {"trader": f"Dune{i + 1}{'w' * 36}"[:40], "name": f"whale {i}", "pnl_usd": 250000.0 - i * 1000, "win_rate": 0.6} for i in range(5)]}}
 
 
 @api.post("/tg/bot{token}/sendMessage")
 async def tg_send(token: str, body: dict):
     import time
-    TG_LOG.append({"ts": time.time(), "text": body.get("text", "")})
+    TG_LOG.append({"ts": time.time(), "text": body.get("text", ""), "chat_id": body.get("chat_id"),
+                   "buttons": bool(body.get("reply_markup"))})
     return {"ok": True, "result": {"message_id": len(TG_LOG)}}
 
 
+TG_UPDATES: list[dict] = []
+
+
 @api.get("/tg/bot{token}/getUpdates")
-def tg_updates(token: str):
+def tg_updates(token: str, offset: int = 0):
     if token.startswith("bad"):
         return JSONResponse({"ok": False, "description": "Unauthorized"}, status_code=401)
-    return {"ok": True, "result": [{"update_id": 1, "message": {"chat": {"id": 555123, "type": "private"}, "text": "/start"}}]}
+    base = [{"update_id": 1, "message": {"chat": {"id": 555123, "type": "private"}, "text": "/start"}}]
+    return {"ok": True, "result": [u for u in base + TG_UPDATES if u["update_id"] >= offset]}
+
+
+@api.post("/tg/push_update")
+def tg_push_update(body: dict):
+    """Test hook: the user typed a command in the bot chat."""
+    TG_UPDATES.append({"update_id": 100 + len(TG_UPDATES), "message": {"chat": {"id": int(body.get("chat", 555123))}, "text": body["text"]}})
+    return {"ok": True}
 
 
 @api.get("/tg/log")

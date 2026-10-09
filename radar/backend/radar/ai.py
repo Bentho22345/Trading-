@@ -1,6 +1,8 @@
-"""Claude: Haiku for high-volume post classification, Sonnet for write-ups, brief and Ask Radar.
+"""Claude, in economy mode: every call defaults to Claude Haiku 5.5 ($0.10 / $0.50 per 1M tokens) at low effort, with
+thinking off for structured extraction, batched (many launches per request) and cached in the database.
 
-Spend is metered into api_usage (cost_usd) and capped by AI_DAILY_BUDGET_USD.
+Spend is metered into api_usage (cost_usd) and capped by AI_DAILY_BUDGET_USD (default $1/day; typical use is cents).
+Set RADAR_SMART_MODEL=claude-sonnet-5-5 if you want richer write-ups / Ask Radar answers and don't mind paying more.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ health = register(Health("anthropic", "rest", "Claude: narrative extraction, wri
 health.stale_after = 6 * 3600
 
 FAST_MODEL = os.environ.get("RADAR_FAST_MODEL", "claude-haiku-5-5")
-SMART_MODEL = os.environ.get("RADAR_SMART_MODEL", "claude-sonnet-5-5")
+SMART_MODEL = os.environ.get("RADAR_SMART_MODEL", "claude-haiku-5-5")
 # $ per 1M tokens (input, output) — update if pricing changes
 PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
 
@@ -52,12 +54,47 @@ narrative in hours (typical memecoin narratives last 24-72h), and flag breaking 
 Be conservative: ordinary market commentary is not tokenizable."""
 
 
+LABEL_SCHEMA = {
+    "type": "object",
+    "properties": {"coins": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "mint": {"type": "string"},
+            "narrative": {"type": "string"},
+            "category": {"type": "string", "enum": ["politifi", "ai", "animal", "celebrity", "news", "culture", "brainrot", "gaming",
+                                                     "crypto", "community", "other"]},
+            "meme_score": {"type": "integer"},
+            "derivative": {"type": "boolean"},
+            "red_flags": {"type": "array", "items": {"type": "string"}},
+            "take": {"type": "string"},
+        },
+        "required": ["mint", "narrative", "category", "meme_score", "derivative", "red_flags", "take"],
+        "additionalProperties": False}}},
+    "required": ["coins"],
+    "additionalProperties": False,
+}
+
+LABEL_SYSTEM = """You rate brand-new pump.fun memecoin launches for a risk-tolerant memecoin trader, from the name, ticker,
+description and links only. One JSON line per coin. For each coin return:
+- narrative: 2-5 words naming the meme / story it rides (e.g. "Elon dog tweet", "AI agent", "viral cat video")
+- category
+- meme_score 0-10: how strong and spreadable the meme is (catchy, funny, timely, ties to a live story or community) —
+  most launches are 1-4; reserve 8-10 for genuinely strong, timely memes
+- derivative: true if it is a low-effort copy of an existing / trending coin or a generic template
+- red_flags: short phrases only for concrete problems (impersonates a real company or person's official token, promises
+  returns, "presale", gibberish, offensive, scam wording); empty list if none
+- take: one line, max 90 characters, what a trader should know
+Judge the meme, not the price. Never invent facts about the coin."""
+
+
 class AI:
     def __init__(self, db: DB) -> None:
         self.db = db
         self.key: str | None = None
         self.client: anthropic.AsyncAnthropic | None = None
-        self.daily_budget = float(os.environ.get("AI_DAILY_BUDGET_USD", "3"))
+        self.daily_budget = float(os.environ.get("AI_DAILY_BUDGET_USD", "1"))
+        self.day = int(time.time() // 86400)
+        self.today = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "by_path": {}}
 
     def set_key(self, key: str | None, workspace_id: str | None = None) -> None:
         self.key = key or None
@@ -79,6 +116,13 @@ class AI:
         inp = (usage.input_tokens or 0) + (getattr(usage, "cache_creation_input_tokens", 0) or 0) * 1.25 \
             + (getattr(usage, "cache_read_input_tokens", 0) or 0) * 0.1
         cost = (inp * pin + (usage.output_tokens or 0) * pout) / 1e6
+        d = int(time.time() // 86400)
+        if d != self.day:
+            self.day, self.today = d, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "by_path": {}}
+        self.today["calls"] += 1
+        self.today["input_tokens"] += int(inp)
+        self.today["output_tokens"] += int(usage.output_tokens or 0)
+        self.today["by_path"][path] = self.today["by_path"].get(path, 0) + 1
         await self.db.exec("INSERT INTO api_usage (ts, adapter, path, status, latency_ms, cost_usd) VALUES (?,?,?,?,?,?)",
                            (time.time(), "anthropic", path, 200, ms, cost))
 
@@ -110,14 +154,35 @@ class AI:
     def _text(resp: Any) -> str:
         return "".join(b.text for b in resp.content if b.type == "text")
 
-    async def classify(self, text: str, source: str, author: str | None) -> dict[str, Any]:
-        resp = await self._create(
-            "classify", model=FAST_MODEL, max_tokens=1024,
-            system=[{"type": "text", "text": CLASSIFY_SYSTEM, "cache_control": {"type": "ephemeral"}}],
-            output_config={"effort": "low", "format": {"type": "json_schema", "schema": CLASSIFY_SCHEMA}},
-            messages=[{"role": "user", "content": f"Source: {source}\nAuthor: {author or 'unknown'}\nPost:\n{text[:2000]}"}],
-        )
+    def _economy(self, model: str) -> dict[str, Any]:
+        """Thinking off for extraction on Haiku (allowed at low effort): no hidden reasoning tokens billed."""
+        return {"thinking": {"type": "disabled"}} if model.startswith("claude-haiku") else {}
+
+    async def json(self, path: str, system: str, user: str, schema: dict[str, Any], max_tokens: int = 1500) -> dict[str, Any]:
+        """One structured extraction on the cheapest model: Haiku, low effort, no thinking, schema-constrained output."""
+        resp = await self._create(path, model=FAST_MODEL, max_tokens=max_tokens,
+                                  system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                                  output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+                                  messages=[{"role": "user", "content": user}], **self._economy(FAST_MODEL))
+        if resp.stop_reason == "max_tokens":
+            raise RuntimeError("output cut off")
         return json.loads(self._text(resp))
+
+    async def classify(self, text: str, source: str, author: str | None) -> dict[str, Any]:
+        return await self.json("classify", CLASSIFY_SYSTEM, f"Source: {source}\nAuthor: {author or 'unknown'}\nPost:\n{text[:1500]}",
+                               CLASSIFY_SCHEMA, max_tokens=600)
+
+    async def label_launches(self, coins: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Up to ~25 brand-new launches in ONE request (≈ $0.001): narrative, meme potential, copycat & red flags."""
+        lines = [json.dumps({"mint": c["mint"], "name": (c.get("name") or "")[:40], "symbol": (c.get("symbol") or "")[:14],
+                             "description": (c.get("description") or "")[:220], "x": c.get("twitter_kind"),
+                             "socials": c.get("socials", 0), "hot_metas": c.get("metas", [])[:2]}, ensure_ascii=False) for c in coins]
+        out = await self.json("label", LABEL_SYSTEM, "\n".join(lines), LABEL_SCHEMA, max_tokens=170 * len(coins) + 200)
+        return out.get("coins") or []
+
+    def snapshot(self) -> dict[str, Any]:
+        return {"enabled": self.enabled, "fast_model": FAST_MODEL, "smart_model": SMART_MODEL, "budget_usd": self.daily_budget,
+                **self.today}
 
     async def write(self, system: str, prompt: str, path: str, max_tokens: int = 2000, effort: str = "low") -> str:
         resp = await self._create(path, model=SMART_MODEL, max_tokens=max_tokens,
@@ -133,7 +198,7 @@ class AI:
         for _ in range(8):
             resp = await self._create("ask", model=SMART_MODEL, max_tokens=4000, tools=tools,
                                       system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                                      output_config={"effort": "medium"}, messages=messages)
+                                      output_config={"effort": "low"}, messages=messages)
             messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason != "tool_use":
                 return self._text(resp).strip()

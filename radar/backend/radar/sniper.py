@@ -80,6 +80,9 @@ class Launch:
     block: set[str] = field(default_factory=set)                       # buyers in the first 2.5s
     observed_sol: float = 0.0                                          # net SOL seen trading (coverage check), kept incrementally
     early_frozen: dict[str, Any] | None = None                         # launch-window stats, fixed once the window has passed
+    intel: dict[str, Any] | None = None                                # on-chain scan (Helius): fresh wallets, insider clusters, chain top-10
+    ai: dict[str, Any] | None = None                                   # Claude's batch read: narrative, meme score, red flags
+    yt: dict[str, Any] | None = None                                   # YouTube videos mentioning the coin (last 48h)
 
 
 def _slope(pts: list[tuple[float, float]]) -> float:
@@ -229,8 +232,50 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
         det.append({"key": "social", "label": "Social spread", "points": float(spts), "good": True, "value": a,
                     "detail": f"{a} author{'s' if a > 1 else ''} on {', '.join(sorted(soc['sources'])[:3])}" + (" · VIP posted" if soc.get("vip") else "")})
 
+    # 7 · on-chain intel: are the early buyers who they look like? ------------------------------------------------------
+    it = L.intel or {}
+    if it:
+        ins = it.get("insiders") or []
+        ihold = sum(L.balances.get(w, 0.0) for w in ins) / 1e9 * 100
+        fresh = it.get("fresh") or []
+        fhold = sum(L.balances.get(w, 0.0) for w in fresh) / 1e9 * 100
+        opts, oparts = 0.0, []
+        if ins:
+            opts -= min(25.0, 4 + ihold * 1.2)
+            oparts.append(f"{len(ins)} linked wallets (shared funder{', tied to dev' if any(c['link'] != 'shared funder' for c in it.get('clusters', [])) else ''}) hold {ihold:.0f}%")
+            if ihold >= 25:
+                flags.append("insider cluster")
+        if it.get("fresh_pct") is not None:
+            oparts.append(f"{it['fresh_pct']}% of {it['scanned']} early buyers are fresh wallets" + (f" (hold {fhold:.0f}%)" if fresh else ""))
+            if it["fresh_pct"] >= 60 and fhold >= 10:
+                opts -= 8
+        if it.get("dev_fresh"):
+            oparts.append("dev wallet is brand new")
+        if it.get("bots"):
+            oparts.append(f"{it['bots']} bot wallets")
+        if it.get("chain_top10_pct") is not None:
+            oparts.append(f"on-chain top 10 = {it['chain_top10_pct']:.0f}%")
+        if not ins and (it.get("fresh_pct") or 0) < 35 and it.get("scanned", 0) >= 5:
+            opts += 6
+            oparts.insert(0, "early buyers look independent")
+        det.append({"key": "onchain", "label": "On-chain intel", "points": round(opts, 1), "good": opts >= 0 and not ins,
+                    "detail": " · ".join(oparts) or "scanned", "value": len(ins)})
+
+    # 8 · buzz: YouTube videos + Claude's narrative read --------------------------------------------------------------------
+    yt, ai = L.yt or {}, L.ai or {}
+    bpts, bparts = 0.0, []
+    if yt.get("videos"):
+        bpts += min(12.0, yt["videos"] * 4 + yt.get("views", 0) / 2500)
+        bparts.append(f"{yt['videos']} YouTube video{'s' if yt['videos'] > 1 else ''} · {yt.get('views', 0):,} views")
+    if ai.get("meme_score") is not None:
+        ms = float(ai["meme_score"])
+        bpts += max(-4.0, min(10.0, (ms - 5) * 2.5))
+        bparts.append(f"AI meme score {ms:.0f}/10" + (f" · {ai['narrative']}" if ai.get("narrative") else "") + (" · derivative" if ai.get("derivative") else ""))
+    if bparts:
+        det.append({"key": "buzz", "label": "Buzz & narrative", "points": round(bpts, 1), "good": bpts > 0, "detail": " · ".join(bparts)})
+
     score = max(0.0, min(100.0, sum(x["points"] for x in det)))
-    hard = {"bundled launch", "dev dumped", "serial launcher, nothing graduated"} & set(flags)
+    hard = {"bundled launch", "dev dumped", "serial launcher, nothing graduated", "insider cluster"} & set(flags)
     enough = len(trades) >= MIN_TRADES_FOR_CALL and len(L.buyers) >= MIN_BUYERS_FOR_CALL and age >= MIN_AGE_FOR_CALL
     tier = "TRAP" if hard else "SNIPE" if score >= SNIPE_AT and enough else "WATCH" if score >= WATCH_AT else "PASS"
     sol_usd = ctx.get("sol_usd")
@@ -249,14 +294,19 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
         "confirming": tier == "WATCH" and score >= SNIPE_AT and not enough,
     }
     # trader-terminal metrics + the two-axis read (upside vs risk) + every strategy this launch matches right now
-    mx = sm.compute(L, now, sol_usd, {"social": {"authors": soc["authors"], "engagement": soc.get("engagement", 0)} if soc else {}})
+    mx = sm.compute(L, now, sol_usd, {"social": {"authors": soc["authors"], "engagement": soc.get("engagement", 0)} if soc else {},
+                                      "yt": yt})
     mx["net_sol_1m"] = res["net_sol_1m"]
     up, risk, why_up, why_risk = sm.upside_risk(res, mx)
     res.update(metrics=mx, upside=up, risk=risk, why_up=why_up, why_risk=why_risk,
                scores={k: sm.appetite_score(up, risk, k) for k in sm.APPETITE},
                description=(L.metadata.get("description") or "")[:280] or None,
                links={k: L.metadata.get(k) for k in ("twitter", "telegram", "website") if L.metadata.get(k)},
-               image=L.metadata.get("image"))
+               image=L.metadata.get("image"),
+               intel=({k: it.get(k) for k in ("scanned", "fresh_pct", "bots", "chain_top10_pct", "dev_fresh", "clusters", "ts")}
+                      | {"insiders": len(it.get("insiders") or []), "fresh": len(it.get("fresh") or [])}) if it else None,
+               ai={k: ai.get(k) for k in ("narrative", "category", "meme_score", "derivative", "red_flags", "take")} if ai else None,
+               yt=({"videos": yt.get("videos"), "views": yt.get("views"), "top": yt.get("top")}) if yt.get("videos") else None)
     row = flat(res)
     res["strategies"] = [st["id"] for st in ctx.get("strategies", []) if sm.matches(st["rules"], row, st.get("mode", "all"))]
     return res
@@ -291,6 +341,8 @@ class Sniper:
         self.hits_by_mint: dict[str, list[tuple[str, str]]] = {}
         self.dirty: set[str] = set()
         self.stats = {"evals": 0, "eval_ms": 0.0, "batches": 0, "last_tick_ms": 0.0, "backlog": 0}
+        self.onchain: Any = None                             # Helius intel: queues launches worth scanning
+        self.ytbuzz: Any = None                              # YouTube buzz index (tickers / contracts / names in video titles)
 
     # ---------------- stream hooks (hot path: memory only) ----------------
     async def on_launch(self, row: dict[str, Any]) -> None:
@@ -444,6 +496,8 @@ class Sniper:
                 L.hits[sid] = now
                 await self._hit(L, sid, now)
         L.dirty = False
+        if self.onchain is not None:
+            self.onchain.consider(L)
         tier = L.result["tier"]
         if tier in ("SNIPE", "WATCH"):
             # keep its trades streaming past the 90s launch window
@@ -671,6 +725,13 @@ class Sniper:
                     if r["sym"] and r["sym"] not in clones and r["sym"] not in COMMON_TICKERS:
                         clones[r["sym"]] = {"address": r["address"], "symbol": r["sym"], "vol_h1": r["vol_h1"]}
                 self.clones = clones
+                if self.ytbuzz is not None:
+                    for L in list(self.launches.values()):
+                        y = self.ytbuzz.match(L.mint, L.symbol, L.name)
+                        if (y or {}).get("videos") != (L.yt or {}).get("videos"):
+                            L.yt = y
+                            L.dirty = True
+                            self.dirty.add(L.mint)
                 for L in list(self.launches.values()):
                     if now - L.last_eval > 5:
                         self.dirty.add(L.mint)
@@ -742,7 +803,12 @@ class Sniper:
 
     def one(self, mint: str) -> dict[str, Any] | None:
         L = self.launches.get(mint)
-        return {**L.result, "dev": L.dev, "meta": L.meta, "clone_of": L.clone_of} if L and L.result else None
+        if not (L and L.result):
+            return None
+        it = L.intel or {}
+        return {**L.result, "dev": L.dev, "meta": L.meta, "clone_of": L.clone_of, "yt_videos": (L.yt or {}).get("list"),
+                "intel_detail": {"clusters": it.get("clusters"), "insiders": it.get("insiders"), "fresh": it.get("fresh"),
+                                 "dev_funder": it.get("dev_funder")} if it else None}
 
     async def proof(self, hours: float = 24 * 7) -> dict[str, Any]:
         """Real outcomes of every call, against the base rate of all launches Radar saw in the same window."""

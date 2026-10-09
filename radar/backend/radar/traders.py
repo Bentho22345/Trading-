@@ -64,6 +64,26 @@ def parse_gecko_trades(payload: dict[str, Any], base_token: str) -> list[dict[st
     return out
 
 
+def dune_label(row: dict[str, Any]) -> str:
+    """'Dune · <name> · PnL $1.2M · WR 64%' from whatever label / profit / win-rate columns the query has."""
+    name = next((str(row[k]) for k in ("label", "name", "trader_label", "owner_name", "trader", "ens") if row.get(k) and
+                 not B58.fullmatch(str(row[k]))), "")
+    parts = [name] if name else []
+
+    def num(keys: tuple[str, ...]) -> float | None:
+        for k, v in row.items():
+            if any(x in k.lower() for x in keys) and isinstance(v, (int, float)):
+                return float(v)
+        return None
+    pnl = num(("pnl", "profit", "realized"))
+    if pnl is not None:
+        parts.append(f"PnL ${pnl / 1e6:.1f}M" if abs(pnl) >= 1e6 else f"PnL ${pnl / 1e3:.0f}k" if abs(pnl) >= 1e3 else f"PnL ${pnl:.0f}")
+    wr = num(("win_rate", "winrate", "win_pct"))
+    if wr is not None:
+        parts.append(f"WR {wr * 100 if wr <= 1 else wr:.0f}%")
+    return ("Dune · " + " · ".join(parts)) if parts else "Dune"
+
+
 def parse_helius_swaps(txs: list[dict[str, Any]], wallet: str) -> list[dict[str, Any]]:
     """Helius enhanced transactions (type=SWAP) → per-token buy/sell legs priced in SOL (WSOL counts as SOL)."""
     out = []
@@ -233,6 +253,7 @@ class Traders:
         self.client = httpx.AsyncClient(timeout=20, headers={"User-Agent": USER_AGENT})
         self.gecko_bucket = TokenBucket(float(__import__("os").environ.get("TRADER_GECKO_RPM", "6")), burst=1)
         self.helius_calls_today = 0
+        self.helius: Any = None
         self.helius_day = int(time.time() // 86400)
         self.sol_days: dict[int, float] = {}
         self.known: set[str] | None = None              # every wallet in the pool, so most trades skip the DB entirely
@@ -376,24 +397,65 @@ class Traders:
             await self.add_candidate(addr, source, label, pinned=True)
         return len(rows)
 
-    async def import_dune(self, query_id: str) -> int:
+    async def import_dune(self, query_id: str, label: str | None = None) -> int:
+        """Pull a Dune query's latest saved results (cheap: reading results doesn't re-run the query). The query is
+        remembered and re-pulled every 12h, so a 'top Solana memecoin traders' query keeps the pool fresh by itself."""
+        m = re.search(r"(\d{3,})", str(query_id))
+        if not m:
+            raise ValueError("Paste a Dune query number or link, e.g. dune.com/queries/1234567")
+        qid = int(m.group(1))
         key = (await self.connectors.values("dune")).get("api_key")
         if not key:
             raise ValueError("Add your Dune API key on Connectors first")
-        r = await self.client.get(f"https://api.dune.com/api/v1/query/{int(query_id)}/results", params={"limit": 5000},
-                                  headers={"X-Dune-API-Key": key})
+        base = __import__("os").environ.get("DUNE_API_URL", "https://api.dune.com")
+        r = await self.client.get(f"{base}/api/v1/query/{qid}/results", params={"limit": 5000}, headers={"X-Dune-API-Key": key})
+        saved = {q["id"]: q for q in await self.dune_queries()}
+        q = saved.get(qid) or {"id": qid, "label": label, "added": time.time()}
+        q["pulled"] = time.time()
         if r.status_code >= 400:
             dune_h.fail(f"HTTP {r.status_code}: {r.text[:120]}")
-            raise ValueError(f"Dune: HTTP {r.status_code} — run the query on dune.com first so it has results")
+            q["error"] = f"HTTP {r.status_code}"
+            saved[qid] = q
+            await self.cfg.kv_set("dune:queries", list(saved.values()))
+            raise ValueError(f"Dune: HTTP {r.status_code} — check the query id, and run it once on dune.com so it has results")
         dune_h.ok()
-        rows = ((r.json().get("result") or {}).get("rows")) or []
+        res = r.json()
+        rows = ((res.get("result") or {}).get("rows")) or []
         lines = []
         for row in rows:
             addr = next((str(v) for v in row.values() if isinstance(v, str) and B58.fullmatch(v)), None)
             if addr:
-                label = next((str(row[k]) for k in ("label", "name", "trader_label", "owner_name") if row.get(k)), "")
-                lines.append(f"{addr} {label}")
-        return await self.import_text("\n".join(lines), "dune")
+                lines.append(f"{addr} {dune_label(row)}".strip())
+        n = await self.import_text("\n".join(lines), "dune")
+        q.update({"rows": len(rows), "wallets": n, "error": None, "label": label or q.get("label"),
+                  "columns": list(rows[0].keys())[:12] if rows else [], "executed_at": res.get("execution_ended_at")})
+        saved[qid] = q
+        await self.cfg.kv_set("dune:queries", list(saved.values()))
+        await __import__("radar.feed", fromlist=["push"]).push("dune", "import", f"🔮 Dune query {qid}: {n} wallets in the pool",
+                                                                 q.get("label") or "")
+        return n
+
+    async def dune_queries(self) -> list[dict[str, Any]]:
+        return list(await self.cfg.kv_get("dune:queries", []) or [])
+
+    async def forget_dune(self, qid: int) -> None:
+        await self.cfg.kv_set("dune:queries", [q for q in await self.dune_queries() if q["id"] != qid])
+
+    async def dune_loop(self) -> None:
+        await asyncio.sleep(90)
+        while True:
+            try:
+                for q in await self.dune_queries():
+                    if time.time() - (q.get("pulled") or 0) > 12 * 3600:
+                        try:
+                            await self.import_dune(str(q["id"]))
+                        except ValueError as e:
+                            log.info("dune refresh %s: %s", q["id"], e)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                dune_h.fail(f"{type(e).__name__}: {e}")
+            await asyncio.sleep(1800)
 
     # ---------------- Helius 1-year backfill ----------------
     async def load_sol_history(self) -> None:
@@ -423,13 +485,13 @@ class Traders:
                 if time.time() - last_px > 86400:
                     await self.load_sol_history()
                     last_px = time.time()
-                key = (await self.connectors.values("helius")).get("api_key")
-                budget = int(__import__("os").environ.get("HELIUS_BACKFILL_CALLS_PER_DAY", "3000"))
+                hl = self.helius
                 day = int(time.time() // 86400)
                 if day != self.helius_day:
                     self.helius_day, self.helius_calls_today = day, 0
-                if not key or self.helius_calls_today >= budget:
-                    helius_bf_h.last_error_msg = "add a Helius key to backfill 1-year history" if not key else "daily backfill budget used"
+                if hl is None or not hl.enabled or not hl.can("backfill", 100):
+                    helius_bf_h.last_error_msg = ("add a Helius key to backfill 1-year history" if hl is None or not hl.enabled
+                                                  else "waiting for Helius budget (Engines page)")
                     await asyncio.sleep(60)
                     continue
                 w = await self.db.one(
@@ -438,19 +500,18 @@ class Traders:
                 if not w:
                     await asyncio.sleep(120)
                     continue
-                params = {"api-key": key, "type": "SWAP", "limit": 100}
+                params = {"type": "SWAP", "limit": 100}
                 if w["backfill_cursor"]:
                     params["before"] = w["backfill_cursor"]
                 t0 = time.perf_counter()
-                r = await self.client.get(f"https://api.helius.xyz/v0/addresses/{w['address']}/transactions", params=params)
-                self.helius_calls_today += 1
-                if r.status_code == 429:
-                    helius_bf_h.fail("429", rate_limited=True)
-                    await asyncio.sleep(20)
+                try:
+                    txs = await hl.enhanced(f"/v0/addresses/{w['address']}/transactions", params, "backfill")
+                except __import__("radar.helius", fromlist=["BudgetExceeded"]).BudgetExceeded:
+                    helius_bf_h.fail("Helius rate limit / budget", rate_limited=True)
+                    await asyncio.sleep(30)
                     continue
-                r.raise_for_status()
+                self.helius_calls_today += 1
                 helius_bf_h.ok((time.perf_counter() - t0) * 1000)
-                txs = r.json()
                 legs = parse_helius_swaps(txs, w["address"])
                 await self.record(legs, admit=False)
                 oldest = min((float(t.get("timestamp") or time.time()) for t in txs), default=None)

@@ -32,8 +32,9 @@ export default function PlaybookPage() {
           (top-10 %, dev bag, bundlers, snipers, holders, socials, dev sold…) and keeps a live <b className="text-white">crowd consensus</b> strategy from what most of them agree on.
           Every strategy is then run on every new launch and graded on <Link href="/proof" className="underline decoration-white/30 underline-offset-4">Proof</Link> — so you learn which advice actually works.</p>
         <div className="mt-5 flex flex-wrap gap-2 text-[12px]">
-          <span className={`rounded-full px-3 py-1 font-semibold ${d?.youtube_connected ? 'bg-up/15 text-up' : 'bg-white/[0.06] text-white/55'}`}>{d?.youtube_connected ? '● YouTube search on (every 4h)' : '○ YouTube: add a key in Connectors for automatic discovery'}</span>
+          <span className={`rounded-full px-3 py-1 font-semibold ${d?.youtube_connected ? 'bg-up/15 text-up' : 'bg-white/[0.06] text-white/55'}`}>{d?.youtube_connected ? `● YouTube search on (${d?.queries?.length ?? 14} queries, rotating every 3h)` : '○ YouTube: add a key in Connectors for automatic discovery'}</span>
           <span className={`rounded-full px-3 py-1 font-semibold ${d?.ai_connected ? 'bg-up/15 text-up' : 'bg-white/[0.06] text-white/55'}`}>{d?.ai_connected ? '● Claude extraction on' : '○ Built-in parser (connect Anthropic for Claude extraction)'}</span>
+          {d?.youtube_quota && <span className="num rounded-full bg-white/[0.06] px-3 py-1 font-semibold text-white/60">YouTube quota {d.youtube_quota.used.toLocaleString()} / {d.youtube_quota.cap.toLocaleString()} units today · {d.channels_followed} creators followed · top comments digested</span>}
           {d?.youtube_connected && <button onClick={() => api('/api/playbook/discover', { method: 'POST' }).then(load).catch(() => {})} className="rounded-full border border-white/15 px-3 py-1 text-white/70 hover:text-white">Search YouTube now</button>}
         </div>
       </Reveal>

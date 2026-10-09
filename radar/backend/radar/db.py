@@ -272,8 +272,25 @@ CREATE INDEX IF NOT EXISTS strategy_hits_ts ON strategy_hits(ts DESC);
 CREATE TABLE IF NOT EXISTS playbook_sources (
   id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, url TEXT UNIQUE, title TEXT, author TEXT, published REAL,
   views REAL, text TEXT, added REAL, digested REAL, status TEXT, summary TEXT, rules_json TEXT, unsupported_json TEXT,
-  extractor TEXT, error TEXT
+  extractor TEXT, error TEXT, channel_id TEXT
 );
+
+-- on-chain intel (Helius): one row per wallet looked up, cached for days (the same snipers / insiders recur)
+CREATE TABLE IF NOT EXISTS wallet_intel (
+  wallet TEXT PRIMARY KEY, checked REAL NOT NULL, tx_count INTEGER, first_ts REAL, last_ts REAL, funder TEXT,
+  funded_sol REAL, fresh INTEGER DEFAULT 0, bot INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS wallet_intel_funder ON wallet_intel(funder);
+
+-- YouTube buzz: recent memecoin videos and what they mention
+CREATE TABLE IF NOT EXISTS yt_videos (
+  id TEXT PRIMARY KEY, title TEXT, channel TEXT, channel_id TEXT, published REAL, views REAL, likes REAL, comments REAL,
+  tickers_json TEXT, cas_json TEXT, fetched REAL
+);
+CREATE INDEX IF NOT EXISTS yt_videos_pub ON yt_videos(published DESC);
+
+-- Claude's batch read of launches (narrative, meme score, red flags), so a restart doesn't pay for it twice
+CREATE TABLE IF NOT EXISTS ai_labels (mint TEXT PRIMARY KEY, ts REAL NOT NULL, label_json TEXT);
 
 CREATE TABLE IF NOT EXISTS token_stories (
   token_address TEXT PRIMARY KEY, ts REAL NOT NULL, story_json TEXT, method TEXT

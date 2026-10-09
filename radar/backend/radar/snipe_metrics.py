@@ -26,6 +26,13 @@ METRICS: dict[str, tuple[str, str, str]] = {
     "socials": ("Social links", "", "num"), "social_authors": ("People posting it", "", "num"), "social_engagement": ("Post engagement", "", "num"),
     "meta_hot": ("Hot meta", "", "bool"), "x_community": ("X community link", "", "bool"), "organic": ("Organic score", "", "num"), "bundled": ("Bundled", "", "bool"),
     "dev_graduated": ("Dev's past graduations", "", "num"), "upside": ("Upside", "", "num"), "risk": ("Risk", "", "num"),
+    # on-chain intel (Helius) — only present once the launch was scanned; missing never matches a rule
+    "insiders": ("Linked insider wallets", "", "num"), "insider_hold_pct": ("Insiders holding", "%", "num"),
+    "fresh_pct": ("Fresh wallets among early buyers", "%", "num"), "fresh_hold_pct": ("Fresh wallets holding", "%", "num"),
+    "chain_top10_pct": ("Top 10 (on-chain)", "%", "num"), "bot_wallets": ("Bot wallets early", "", "num"),
+    # buzz (YouTube + Claude)
+    "yt_videos": ("YouTube videos (48h)", "", "num"), "yt_views": ("YouTube views", "", "num"),
+    "ai_meme_score": ("AI meme score", "/10", "num"), "ai_derivative": ("AI: derivative / copy", "", "bool"),
 }
 OPS = {"<=": lambda a, b: a <= b, ">=": lambda a, b: a >= b, "<": lambda a, b: a < b, ">": lambda a, b: a > b,
        "==": lambda a, b: a == b, "!=": lambda a, b: a != b}
@@ -61,7 +68,21 @@ def compute(L: Any, now: float, sol_usd: float | None, ctx: dict[str, Any]) -> d
     soc = ctx.get("social") or {}
     meta = getattr(L, "meta", []) or []
     md = L.metadata or {}
-    return {
+    it = getattr(L, "intel", None) or {}
+    ai = getattr(L, "ai", None) or {}
+    yt = ctx.get("yt") or {}
+    ins, fresh = it.get("insiders") or [], it.get("fresh") or []
+    intel = {
+        "insiders": len(ins) if it else None,
+        "insider_hold_pct": round(sum(bal.get(w, 0.0) for w in ins) / PUMP_SUPPLY * 100, 1) if it else None,
+        "fresh_pct": it.get("fresh_pct"), "bot_wallets": it.get("bots") if it else None,
+        "fresh_hold_pct": round(sum(bal.get(w, 0.0) for w in fresh) / PUMP_SUPPLY * 100, 1) if it else None,
+        "chain_top10_pct": it.get("chain_top10_pct"),
+        "yt_videos": yt.get("videos") or 0, "yt_views": yt.get("views") or 0,
+        "ai_meme_score": ai.get("meme_score"), "ai_derivative": ai.get("derivative") if ai else None,
+        "ai_narrative": ai.get("narrative"),
+    }
+    return {**intel,
         "holders": len(bal), "top10_pct": round(sum(top[:10]) / PUMP_SUPPLY * 100, 1),
         "dev_hold_pct": round(dev_hold / PUMP_SUPPLY * 100, 2),
         "dev_sold": bool(L.dev_tokens and L.dev_sold_tokens >= 0.5 * L.dev_tokens),
@@ -112,6 +133,12 @@ def upside_risk(r: dict[str, Any], mx: dict[str, Any]) -> tuple[float, float, li
     add(min(6.0, mx["holders"] / 10), f"{mx['holders']} holders" if mx["holders"] >= 20 else "")
     if mx["dev_graduated"]:
         add(min(8.0, 4 + 2 * mx["dev_graduated"]), "dev has graduated coins")
+    if mx.get("yt_videos"):
+        add(min(12.0, mx["yt_videos"] * 4 + (mx.get("yt_views") or 0) / 2500), f"{mx['yt_videos']} YouTube video{'s' if mx['yt_videos'] > 1 else ''}")
+    if mx.get("ai_meme_score") is not None and mx["ai_meme_score"] >= 6:
+        add(min(12.0, (mx["ai_meme_score"] - 5) * 2.5), f"AI meme score {mx['ai_meme_score']:.0f}/10")
+    if mx.get("insiders") == 0 and (mx.get("fresh_pct") or 0) < 35:
+        add(5, "independent buyers (on-chain)")
 
     risk, why_risk = 0.0, []
 
@@ -123,7 +150,15 @@ def upside_risk(r: dict[str, Any], mx: dict[str, Any]) -> tuple[float, float, li
 
     bad(min(30.0, max(0.0, mx["bundle_hold_pct"] - 5) * 2), f"bundlers hold {mx['bundle_hold_pct']:.0f}%")
     bad(min(20.0, max(0.0, mx["snipers_hold_pct"] - 10) * 1.2), f"snipers hold {mx['snipers_hold_pct']:.0f}%")
-    bad(min(25.0, max(0.0, mx["top10_pct"] - 30) * 0.9), f"top 10 hold {mx['top10_pct']:.0f}%")
+    chain = mx.get("chain_top10_pct")
+    t10 = chain if chain is not None and mx["metrics_basis"] == "partial" else mx["top10_pct"]
+    bad(min(25.0, max(0.0, t10 - 30) * 0.9), f"top 10 hold {t10:.0f}%" + (" (on-chain)" if t10 is chain else ""))
+    ihp = mx.get("insider_hold_pct")
+    if ihp is not None and mx.get("insiders"):
+        bad(min(35.0, 4 + max(0.0, ihp - 3) * 1.5), f"{mx['insiders']} linked insiders hold {ihp:.0f}%")
+    fhp = mx.get("fresh_hold_pct")
+    if fhp is not None:
+        bad(min(15.0, max(0.0, fhp - 10)), f"fresh wallets hold {fhp:.0f}%")
     if not mx["dev_sold"]:
         bad(min(20.0, max(0.0, mx["dev_hold_pct"] - 5) * 1.2), f"dev holds {mx['dev_hold_pct']:.0f}%")
     flags = set(r.get("flags", []))
@@ -131,7 +166,7 @@ def upside_risk(r: dict[str, Any], mx: dict[str, Any]) -> tuple[float, float, li
     bad(18 if "serial launcher, nothing graduated" in flags else 0, "serial launcher")
     bad(8 if mx["socials"] == 0 and r.get("age_s", 0) > 60 else 0, "no socials")
     bad(10 if mx["sells_1m"] > mx["buys_1m"] * 2 and mx["sells_1m"] >= 6 else 0, "sell-off")
-    bad(10 if mx["metrics_basis"] == "partial" else 0, "partial data")
+    bad((5 if chain is not None else 10) if mx["metrics_basis"] == "partial" else 0, "partial data")
     if det.get("meta") and "copies trending" in det["meta"]["detail"]:
         bad(6, "copycat ticker")
     return round(min(100.0, up), 1), round(min(100.0, risk), 1), [w for w in why_up if w], why_risk

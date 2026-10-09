@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from './motion';
 export const LINKS = [
   { href: '/', label: 'Home', key: 'd', icon: 'dashboard', primary: true },
   { href: '/snipe', label: 'Snipe', key: 'x', icon: 'target', primary: true },
+  { href: '/engines', label: 'Engines', key: 'o', icon: 'bolt', primary: true },
   { href: '/traders', label: 'Top Traders', key: 'w', icon: 'trophy', primary: true },
   { href: '/pulse', label: 'Pulse', key: 'u', icon: 'pulse', primary: true },
   { href: '/trending', label: 'Trending', key: 't', icon: 'trending', primary: true },
