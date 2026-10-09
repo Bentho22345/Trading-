@@ -72,7 +72,7 @@ function WalletInner() {
           <div className="flex items-center border-b border-white/[0.06] px-5 py-4"><span className="eyebrow !text-white">Positions</span><span className="ml-auto text-[11px] text-white/40">avg-cost P&L · only coins whose buys Radar saw</span></div>
           <div className="max-h-[520px] overflow-auto">
             <table className="w-full text-[13px]">
-              <thead className="eyebrow sticky top-0 bg-[#0c0c0d] text-left [&>tr>th]:px-4 [&>tr>th]:py-2"><tr><th>Coin</th><th className="text-right">Invested</th><th className="text-right">Realized</th><th className="text-right">Open</th><th className="text-right">ROI</th><th>Last</th></tr></thead>
+              <thead className="eyebrow sticky top-0 bg-panel text-left [&>tr>th]:px-4 [&>tr>th]:py-2"><tr><th>Coin</th><th className="text-right">Invested</th><th className="text-right">Realized</th><th className="text-right">Open</th><th className="text-right">ROI</th><th>Last</th></tr></thead>
               <tbody>{d.positions.map((p: any) => (
                 <tr key={p.mint} className="border-t border-white/[0.04] [&>td]:px-4 [&>td]:py-2.5">
                   <td><Link href={`/token?a=${p.mint}`} className="flex items-center gap-2"><TokenIcon src={p.image} symbol={p.symbol} size={22} /><b>{p.symbol || short(p.mint)}</b></Link></td>

@@ -1,6 +1,6 @@
 'use client';
 import { animate, AnimatePresence, motion, useMotionValue, useTransform } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useId, useRef, useState } from 'react';
 
 export { AnimatePresence, motion };
 
@@ -52,14 +52,15 @@ export function Chips<T extends string>({ value, options, onChange, id }: { valu
 }
 
 /** Area sparkline with gradient fill. */
-export function AreaSpark({ data, w = 96, h = 28, up }: { data: number[]; w?: number; h?: number; up?: boolean }) {
+export const AreaSpark = memo(function AreaSpark({ data, w = 96, h = 28, up }: { data: number[]; w?: number; h?: number; up?: boolean }) {
+  const id = useId();
   if (!data || data.length < 2) return <span className="inline-block skeleton opacity-40" style={{ width: Math.min(w, 96), height: h }} />;
   const min = Math.min(...data), max = Math.max(...data), span = max - min || 1;
   const pts = data.map((d, i) => [(i / (data.length - 1)) * w, h - 3 - ((d - min) / span) * (h - 6)]);
   const line = pts.map((p) => p.join(',')).join(' ');
   const rising = up ?? data[data.length - 1] >= data[0];
   const color = rising ? 'var(--color-up)' : 'var(--color-down)';
-  const gid = `g${Math.round(data[0] * 1e6) % 100000}${data.length}${rising ? 'u' : 'd'}`;
+  const gid = `sp${id.replace(/:/g, '')}`;
   return (
     <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} preserveAspectRatio="none" className="max-w-full overflow-visible" role="img" aria-label={`trend ${rising ? 'up' : 'down'}`}>
       <defs><linearGradient id={gid} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity={0.35} /><stop offset="100%" stopColor={color} stopOpacity={0} /></linearGradient></defs>
@@ -68,6 +69,6 @@ export function AreaSpark({ data, w = 96, h = 28, up }: { data: number[]; w?: nu
       <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r={2.5} fill={color} />
     </svg>
   );
-}
+}, (a, b) => a.data === b.data && a.w === b.w && a.h === b.h && a.up === b.up);
 
 export const fadeUp = { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -6 }, transition: { duration: 0.25 } };

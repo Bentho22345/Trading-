@@ -1,9 +1,10 @@
 'use client';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Chart, type ChartMarker } from '@/components/Chart';
 import { SignalCard, useAction } from '@/components/radar';
+import { SnipeCard, type SnipeRow } from '@/components/snipe';
 import { StoryDrawer } from '@/components/discover';
 import { AsOf, Copy, DISCLAIMER, Panel, SafetyFlags, safetyFlags, TokenIcon } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -21,6 +22,8 @@ function TokenInner() {
   const [d, setD] = useState<any>(null);
   const [err, setErr] = useState('');
   const [story, setStory] = useState(false);
+  const [snipe, setSnipe] = useState<SnipeRow | null>(null);
+  useEffect(() => { setSnipe(null); if (a) api(`/api/snipe/${a}`).then(setSnipe).catch(() => {}); }, [a]);
 
   const load = useCallback(() => {
     if (!a) return;
@@ -34,6 +37,7 @@ function TokenInner() {
   }, [a, load]);
 
   useLive(({ ch, data }) => {
+    if (ch === 'snipe' && data.mint === a) setSnipe((p) => ({ ...(p || {}), ...data }));
     if (!d) return;
     if (ch === 'tokens') {
       const t = (data as any[]).find((x) => x.address === a);
@@ -48,6 +52,9 @@ function TokenInner() {
       setD((p: any) => ({ ...p, social: [data, ...(p.social || [])] }));
     }
   });
+
+  // only rebuild chart markers when their inputs change, not on every streamed trade
+  const chartMarkers = useMemo(() => (d ? markers(d) : []), [d?.social, d?.signals, d?.smart_trades]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!a) return <p className="p-6 text-mute">Paste a contract address in the search box.</p>;
   if (err) return <p className="p-6 text-down">Couldn’t load {short(a)}: {err}</p>;
@@ -96,11 +103,17 @@ function TokenInner() {
           </div>
         ))}
       </div>
+      {snipe && (
+        <div className="grid gap-2 lg:grid-cols-[1fr_auto] lg:items-center">
+          <SnipeCard r={snipe} now={now} />
+          <Link href="/snipe" className="hidden text-[11px] uppercase tracking-[0.14em] text-white/45 hover:text-white lg:block">Snipe board →</Link>
+        </div>
+      )}
       <p className="text-[11px]"><AsOf ts={t.as_of} now={now} staleAfter={30} source={`DexScreener ${t.dex || ''}`} /></p>
 
       <div className="grid gap-2 xl:grid-cols-[1fr_380px]">
         <Panel title="Chart · social timeline overlay" className="h-[460px]" right={<span><span className="text-flash">●</span> VIP <span className="text-accent">●</span> post <span className="text-warn">▲</span> signal <span className="text-up">●</span> smart $ <span className="text-[#facc15]">▲▼</span> top wallets</span>}>
-          <Chart address={a} markers={markers(d)} />
+          <Chart address={a} markers={chartMarkers} />
         </Panel>
         <Panel title="Safety report" className="h-[460px]" right={<>
           {s && <AsOf ts={s.as_of} now={now} staleAfter={600} source="RugCheck" />}

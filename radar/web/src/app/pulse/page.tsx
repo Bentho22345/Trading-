@@ -5,7 +5,7 @@ import { NarrativeTags } from '@/components/discover';
 import { AnimatePresence, motion } from '@/components/motion';
 import { Copy, SafetyFlags, TokenIcon } from '@/components/ui';
 import { onSpot, Reveal } from '@/components/whoop';
-import { api } from '@/lib/api';
+import { api, apiCached, peek } from '@/lib/api';
 import { ago, pct, pctClass, short, usd } from '@/lib/format';
 import { tokenLinks } from '@/lib/links';
 import { useLive, useNow } from '@/lib/live';
@@ -19,7 +19,8 @@ const COLS = [
 export default function PulsePage() {
   const [d, setD] = useState<any>(null);
   const [paused, setPaused] = useState(false);
-  const load = useCallback(() => api('/api/pulse').then(setD).catch(() => {}), []);
+  const load = useCallback(() => apiCached('/api/pulse').then(setD).catch(() => {}), []);
+  useEffect(() => { const c = peek('/api/pulse'); if (c) setD(c); }, []);
   useEffect(() => { if (paused) return; load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load, paused]);
   useLive(({ ch }) => { if (!paused && (ch === 'launch' || ch === 'graduated')) load(); });
   return (

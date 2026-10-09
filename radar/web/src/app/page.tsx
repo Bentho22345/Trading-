@@ -2,18 +2,20 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Terminal } from '@/components/home/Terminal';
+import { DEFAULT_FILTERS, SnipeCard, useSnipe } from '@/components/snipe';
 import { Icon } from '@/components/Icon';
 import { AnimatePresence, AreaSpark, Chips, motion } from '@/components/motion';
 import { TokenIcon } from '@/components/ui';
 import { CountUp, money, onSpot, PnlLine, Reveal, Ring, SectionHead, WalletAvatar } from '@/components/whoop';
-import { api } from '@/lib/api';
+import { api, apiCached, peek } from '@/lib/api';
 import { ago, pct, pctClass, short, usd } from '@/lib/format';
 import { useLive, useNow } from '@/lib/live';
 
 export default function Home() {
   const [s, setS] = useState<any>(null);
   const [feed, setFeed] = useState<any[]>([]);
-  const load = useCallback(() => api('/api/traders/summary').then((d) => { setS(d); setFeed((f) => (f.length ? f : d.recent)); }).catch(() => {}), []);
+  const load = useCallback(() => apiCached('/api/traders/summary').then((d) => { setS(d); setFeed((f) => (f.length ? f : d.recent)); }).catch(() => {}), []);
+  useEffect(() => { const c = peek('/api/traders/summary'); if (c) { setS(c); setFeed(c.recent || []); } }, []);
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
   useLive(({ ch, data }) => {
     if (ch === 'trader_trade') setFeed((f) => [{ ...data, _new: Date.now() }, ...f].slice(0, 40));
@@ -22,6 +24,7 @@ export default function Home() {
   return (
     <div>
       <Hero s={s} feed={feed} />
+      <SnipeSpotlight />
       <Buying s={s} />
       <Podium s={s} />
       <section className="mt-28">
@@ -37,6 +40,8 @@ function Hero({ s, feed }: { s: any; feed: any[] }) {
   const now = useNow();
   return (
     <section className="relative grid min-h-[calc(100vh-90px)] items-center gap-10 pb-10 pt-6 xl:grid-cols-[1.15fr_0.85fr]">
+      <div className="hero-orb" aria-hidden />
+      <div className="hero-grid" aria-hidden />
       <div>
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.8 }} className="eyebrow mb-6 flex items-center gap-2">
           <span className="live-dot h-1.5 w-1.5 rounded-full bg-up" /> Live · Solana memecoins
@@ -106,7 +111,7 @@ function Hero({ s, feed }: { s: any; feed: any[] }) {
             </AnimatePresence>
             {!feed.length && <li className="p-10 text-center text-white/40">Waiting for the first trade from a ranked wallet…<br /><span className="text-[12px]">Rankings build as Radar observes trades (every few minutes).</span></li>}
           </ul>
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-[#0b0b0c] to-transparent" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-[var(--color-surface2)] to-transparent" />
         </div>
       </motion.div>
     </section>
@@ -187,6 +192,49 @@ function Podium({ s }: { s: any }) {
           </Reveal>
         ))}
         {!top.length && <div className="p-10 text-center text-white/40">The leaderboard fills in as Radar observes trades. Add a Helius key for 1-year history, or import wallets on Top Traders.</div>}
+      </div>
+    </section>
+  );
+}
+
+const SPOT_FILTERS = { ...DEFAULT_FILTERS, tiers: ['SNIPE', 'WATCH'] };
+
+function SnipeSpotlight() {
+  const { list, meta, now } = useSnipe(SPOT_FILTERS);
+  const [proof, setProof] = useState<any>(null);
+  useEffect(() => { api('/api/snipe/proof?hours=24').then(setProof).catch(() => {}); }, []);
+  const st = proof?.stats;
+  return (
+    <section className="mt-16">
+      <SectionHead eyebrow="Sniper · live" title={<>Be first. <span className="text-white/35">Then prove it.</span></>}
+        sub="Every pump.fun launch is scored from its first trade by six live detectors — top wallets buying, curve velocity, organic flow, dev track record, meta match and social spread. Calls are logged and graded." />
+      <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
+        <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+          <AnimatePresence initial={false} mode="popLayout">
+            {list.slice(0, 6).map((r) => (
+              <motion.div key={r.mint} layout="position" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 32 }}>
+                <SnipeCard r={r} now={now} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          {!list.length && <div className="glass col-span-full rounded-3xl p-10 text-center text-white/45">Scoring {meta?.tracking ?? 0} live launches — nothing is hot this second.</div>}
+        </div>
+        <div className="glass spotlight flex flex-col justify-between rounded-3xl p-6" onMouseMove={onSpot}>
+          <div>
+            <div className="eyebrow mb-4">Last 24 hours</div>
+            <div className="space-y-4">
+              <div><div className="stat text-[48px] leading-none">{st?.calls ?? '—'}</div><div className="text-[12px] text-white/50">SNIPE calls from {st?.launches_seen?.toLocaleString() ?? '—'} launches</div></div>
+              <div><div className="stat text-[48px] leading-none text-up">{st?.hit_2x_pct != null ? `${Math.round(st.hit_2x_pct)}%` : '—'}</div><div className="text-[12px] text-white/50">peaked at 2× or more after the call</div></div>
+              <div><div className="stat text-[48px] leading-none text-accent2">{st?.call_graduation_pct != null ? `${st.call_graduation_pct}%` : '—'}</div>
+                <div className="text-[12px] text-white/50">graduated{st?.base_graduation_pct != null ? ` (vs ${st.base_graduation_pct}% of all launches)` : ''}</div></div>
+            </div>
+          </div>
+          <div className="mt-6 flex flex-wrap gap-2">
+            <Link href="/snipe" className="btn-primary">Open Snipe <Icon name="arrow" size={14} /></Link>
+            <Link href="/proof" className="btn-ghost">Proof</Link>
+          </div>
+        </div>
       </div>
     </section>
   );

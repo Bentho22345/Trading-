@@ -5,7 +5,7 @@ import { FlashPrefs } from '@/components/FlashPrefs';
 import { Icon } from '@/components/Icon';
 import { AnimatePresence, AreaSpark, Chips, motion } from '@/components/motion';
 import { CountUp, money, Reveal, Ring, WalletAvatar } from '@/components/whoop';
-import { api } from '@/lib/api';
+import { api, apiCached, peek } from '@/lib/api';
 import { ago, short } from '@/lib/format';
 import { useLive, useNow } from '@/lib/live';
 
@@ -24,7 +24,8 @@ export default function TradersPage() {
   const [showImport, setShowImport] = useState(false);
   const sentinel = useRef<HTMLDivElement>(null);
   const qs = `win=${win}&sort=${sort}&q=${encodeURIComponent(q)}&followed=${followed}&min_tokens=${minTokens}&limit=${pages * 100}`;
-  const load = useCallback(() => api(`/api/traders?${qs}`).then(setData).catch(() => {}), [qs]);
+  const load = useCallback(() => apiCached(`/api/traders?${qs}`).then(setData).catch(() => {}), [qs]);
+  useEffect(() => { const c = peek(`/api/traders?${qs}`); if (c) setData(c); }, [qs]);
   useEffect(() => { load(); const t = setInterval(load, 20000); return () => clearInterval(t); }, [load]);
   useEffect(() => setPages(1), [win, sort, q, followed, minTokens]);
   useLive(({ ch }) => { if (ch === 'traders_ranked') load(); });

@@ -229,6 +229,8 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
         "dev_buy_pct": L.dev_buy_pct, "organic": round(organic) if len(buys) >= 5 else None, "bundled": bundled,
         "early_supply_pct": round(early_supply, 1),
         "alpha": L.alpha[:6],
+        # high score but not yet enough trades / buyers / age to call: shown as "confirming" instead of a call
+        "confirming": tier == "WATCH" and score >= SNIPE_AT and not enough,
     }
 
 
@@ -382,8 +384,9 @@ class Sniper:
         await self.db.upsert("snipe_calls", call, "mint")
         await hub.publish("snipe_call", {**r, "call_ts": now})
         top = max(r["detectors"], key=lambda x: x["points"], default=None)
-        await self.alerts.send("info", f"🎯 SNIPE {L.symbol or L.mint[:6]} · score {r['score']:.0f}",
-                               f"{top['label']}: {top['detail']}" if top else "", token=L.mint, dedupe=f"snipe:{L.mint}", ttl=86400)
+        # delivery (Telegram / ntfy / Discord) runs off the hot path: the next trade must never wait on an HTTP call
+        asyncio.get_running_loop().create_task(self.alerts.send("info", f"🎯 SNIPE {L.symbol or L.mint[:6]} · score {r['score']:.0f}",
+                               f"{top['label']}: {top['detail']}" if top else "", token=L.mint, dedupe=f"snipe:{L.mint}", ttl=86400))
 
     def _call_mark(self, call: dict[str, Any], mcap_sol: float, ts: float) -> None:
         call["last_mcap_sol"], call["last_ts"] = mcap_sol, ts

@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { NarrativeRadar } from '@/components/discover';
+import { SnipeColumn } from '@/components/snipe';
 import { Icon } from '@/components/Icon';
 import { LiveTape } from '@/components/LiveTape';
 import { MarketBar } from '@/components/MarketBar';
@@ -86,7 +87,7 @@ export function Terminal() {
     <div id="terminal" className="scroll-mt-20">
       <MarketBar />
       <LiveTape />
-      <div className="grid gap-3 2xl:grid-cols-[1fr_420px] xl:grid-cols-[1fr_380px]">
+      <div className="grid gap-3 xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_400px_380px]">
         <section className="glass flex min-h-[520px] min-w-0 flex-col overflow-hidden rounded-2xl xl:h-[calc(100vh-200px)]">
           <header className="panel-head flex flex-wrap items-center gap-2 px-3.5 py-2">
             <Icon name="flame" size={15} className="text-up" />
@@ -130,7 +131,7 @@ export function Terminal() {
           </ul>
           <div className="hidden min-h-0 flex-1 overflow-auto md:block">
             <table className="data-table w-full min-w-[1080px] border-collapse num text-[12.5px]">
-              <thead className="sticky top-0 z-10 bg-panel text-[11px] text-mute shadow-[0_1px_0_rgba(255,255,255,.05)]">
+              <thead className="sticky top-0 z-10 bg-panel text-[11px] text-mute shadow-[0_1px_0_var(--hair)]">
                 <tr>{COLS.map((c) => (
                   <th key={c.label} onClick={() => c.key && setSort(c.key)}
                     className={`whitespace-nowrap px-2 py-2 text-left font-medium ${c.key ? 'cursor-pointer hover:text-fg' : ''} ${sort === c.key ? 'text-accent2' : ''}`}>
@@ -172,7 +173,8 @@ export function Terminal() {
             </table>
           </div>
         </section>
-        <div className="min-h-[520px] xl:h-[calc(100vh-200px)]"><NarrativeRadar /></div>
+        <SnipeColumn className="h-[560px] xl:h-[calc(100vh-200px)]" />
+        <div className="min-h-[520px] xl:col-span-2 xl:h-[480px] 2xl:col-span-1 2xl:h-[calc(100vh-200px)]"><NarrativeRadar /></div>
       </div>
 
       <div className="cv-auto mt-3 grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">

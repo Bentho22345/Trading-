@@ -3,18 +3,21 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useConnected } from '@/lib/live';
+import { useTheme } from '@/lib/theme';
 import { CommandPalette } from './CommandPalette';
 import { Icon } from './Icon';
 import { AnimatePresence, motion } from './motion';
 
 export const LINKS = [
   { href: '/', label: 'Home', key: 'd', icon: 'dashboard', primary: true },
+  { href: '/snipe', label: 'Snipe', key: 'x', icon: 'target', primary: true },
   { href: '/traders', label: 'Top Traders', key: 'w', icon: 'trophy', primary: true },
   { href: '/pulse', label: 'Pulse', key: 'u', icon: 'pulse', primary: true },
   { href: '/trending', label: 'Trending', key: 't', icon: 'trending', primary: true },
   { href: '/launching', label: 'Launching', key: 'l', icon: 'rocket', primary: true },
   { href: '/narratives', label: 'Narratives', key: 'n', icon: 'narrative', primary: true },
   { href: '/signals', label: 'Signals', key: 's', icon: 'signal', primary: true },
+  { href: '/proof', label: 'Proof', key: 'v', icon: 'check' },
   { href: '/news', label: 'News', key: 'e', icon: 'news' },
   { href: '/social', label: 'Social', key: 'f', icon: 'social' },
   { href: '/scorecard', label: 'Scorecard', key: 'p', icon: 'score' },
@@ -35,6 +38,7 @@ export function Nav() {
   const [mobile, setMobile] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [theme, setTheme] = useTheme();
 
   useEffect(() => {
     fetch('/api/session').then((r) => r.json()).then((s) => setAuthed(s.auth_required && s.authed)).catch(() => {});
@@ -68,7 +72,7 @@ export function Nav() {
             </span>
             <span className="display text-[22px] tracking-wide">Radar</span>
           </Link>
-          <nav className="hidden items-center gap-1 lg:flex">
+          <nav className="hidden items-center gap-0.5 xl:flex">
             {LINKS.filter((l) => l.primary).map((l) => (
               <Link key={l.href} href={l.href} className={`relative px-3 py-2 text-[12px] font-semibold uppercase tracking-[0.14em] transition-colors ${active(l.href) ? 'text-white' : 'text-white/50 hover:text-white'}`}>
                 {l.label}
@@ -96,11 +100,19 @@ export function Nav() {
             <button onClick={() => setPalette(true)} className="flex items-center gap-2 rounded-full border border-white/15 px-3 py-1.5 text-[12px] text-white/60 transition hover:border-white/40 hover:text-white">
               <Icon name="search" size={14} /><span className="hidden sm:inline">Search</span><kbd className="hidden text-[10px] text-white/40 sm:inline">⌘K</kbd>
             </button>
+            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+              title={`${theme === 'dark' ? 'Light' : 'Dark'} theme`}
+              className="relative flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-white/15 text-white/70 transition hover:border-white/40 hover:text-white">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span key={theme} initial={{ y: 14, rotate: -90, opacity: 0 }} animate={{ y: 0, rotate: 0, opacity: 1 }} exit={{ y: -14, rotate: 90, opacity: 0 }}
+                  transition={{ duration: 0.25 }}><Icon name={theme === 'dark' ? 'moon' : 'sun'} size={15} /></motion.span>
+              </AnimatePresence>
+            </button>
             <span className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] sm:flex ${live ? 'text-up' : 'text-down'}`} title="Live socket">
               <span className={`h-1.5 w-1.5 rounded-full ${live ? 'live-dot bg-up' : 'bg-down'}`} />{live ? 'Live' : 'Offline'}
             </span>
             {authed && <button onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { location.href = '/login'; })} className="hidden text-[11px] uppercase tracking-[0.14em] text-white/40 hover:text-white md:block">Log out</button>}
-            <button onClick={() => setMobile(true)} className="rounded-full p-2 text-white lg:hidden" aria-label="Menu"><Icon name="menu" size={20} /></button>
+            <button onClick={() => setMobile(true)} className="rounded-full p-2 text-white xl:hidden" aria-label="Menu"><Icon name="menu" size={20} /></button>
           </div>
         </div>
       </header>

@@ -3,7 +3,7 @@ import { animate, motion, useInView, useMotionValue, useTransform } from 'motion
 import { useEffect, useRef } from 'react';
 
 /** Whoop-style ring gauge: animated stroke on scroll-in, big condensed value in the middle. */
-export function Ring({ value, max = 100, size = 120, stroke = 9, color = 'var(--color-up)', label, children, track = '#1d1d20' }: {
+export function Ring({ value, max = 100, size = 120, stroke = 9, color = 'var(--color-up)', label, children, track = 'var(--color-edge)' }: {
   value: number | null | undefined; max?: number; size?: number; stroke?: number; color?: string; label?: string; children?: React.ReactNode; track?: string;
 }) {
   const ref = useRef<SVGSVGElement>(null);
@@ -99,7 +99,7 @@ export function PnlLine({ series, w = 600, h = 160 }: { series: [number, number]
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full" preserveAspectRatio="none" role="img" aria-label="cumulative realized P&L">
       <defs><linearGradient id="pnlg" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity={0.25} /><stop offset="100%" stopColor={color} stopOpacity={0} /></linearGradient></defs>
-      <line x1={0} x2={w} y1={y(0)} y2={y(0)} stroke="#2a2a2e" strokeDasharray="4 4" />
+      <line x1={0} x2={w} y1={y(0)} y2={y(0)} stroke="var(--color-edge-hi)" strokeDasharray="4 4" />
       <motion.polygon points={`0,${h} ${line} ${w},${h}`} fill="url(#pnlg)" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 1 }} />
       <motion.polyline points={line} fill="none" stroke={color} strokeWidth={2.2} vectorEffect="non-scaling-stroke"
         initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 1.4, ease: [0.2, 0.8, 0.2, 1] }} />

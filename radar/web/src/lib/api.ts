@@ -34,3 +34,23 @@ export type Token = {
   rug_score?: number; mint_authority?: string; freeze_authority?: string; lp_locked_pct?: number; top10_pct?: number;
   holders?: number; rugged?: number; safety_as_of?: number;
 };
+
+// ---- instant page loads: last response per URL kept in memory (and sessionStorage), shown first, then refreshed ----
+const MEM = new Map<string, { at: number; data: unknown }>();
+function readSession(path: string): { at: number; data: unknown } | undefined {
+  try { const v = sessionStorage.getItem(`radar:api:${path}`); return v ? JSON.parse(v) : undefined; } catch { return undefined; }
+}
+/** Synchronous peek at the last known response for `path` (memory, then this tab's session storage). */
+export function peek<T = any>(path: string): T | undefined {
+  const hit = MEM.get(path) ?? (typeof window !== 'undefined' ? readSession(path) : undefined);
+  if (hit) MEM.set(path, hit);
+  return hit?.data as T | undefined;
+}
+/** `api()` that also remembers the response, so the next visit to the page paints immediately. */
+export async function apiCached<T = any>(path: string): Promise<T> {
+  const data = await api<T>(path);
+  const entry = { at: Date.now(), data };
+  MEM.set(path, entry);
+  try { const s = JSON.stringify(entry); if (s.length < 400_000) sessionStorage.setItem(`radar:api:${path}`, s); } catch { /* quota / private mode */ }
+  return data;
+}
