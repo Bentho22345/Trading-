@@ -1,0 +1,188 @@
+# Memecoin metas: the recurring themes coins launch and rotate around.
+# Radar matches every tracked coin (name/symbol), every social post and every headline against these keywords,
+# then ranks the metas by live heat (mentions, launches, volume, price). Edit freely; restart to apply.
+#
+#   keywords: matched as whole words in text and coin names, and as a prefix/suffix of coin symbols (POPCAT -> cat)
+#   tickers:  exact symbols of the meta's known leaders
+#   phrases:  matched anywhere in text only (multi-word or non-Latin)
+families:
+  animals: Animals
+  ai: AI
+  politics: Politics
+  people: People & celebs
+  culture: Internet culture
+  topics: Topics
+  chains: Chains & launchpads
+  catalysts: Catalysts & news
+
+metas:
+  # ---------------- animals ----------------
+  - { id: dogs, name: Dogs, family: animals, emoji: "🐕",
+      keywords: [dog, dogs, doge, dogecoin, dogwifhat, inu, shiba, shib, puppy, pup, doggo, corgi, husky, pitbull, wif, bonk, floki, neiro, kabosu],
+      phrases: [shiba inu, baby doge],
+      tickers: [DOGE, SHIB, WIF, BONK, FLOKI, MYRO, NEIRO, BABYDOGE] }
+  - { id: cats, name: Cats, family: animals, emoji: "🐈",
+      keywords: [cat, cats, kitty, kitten, meow, popcat, mew, nyan, michi, catwifhat, toshi, mog],
+      tickers: [POPCAT, MEW, MOG, MICHI, TOSHI, CAT] }
+  - { id: frogs, name: Frogs & Pepe, family: animals, emoji: "🐸",
+      keywords: [pepe, pepecoin, frog, frogs, kek, toad, brett, landwolf, apu, ribbit],
+      tickers: [PEPE, BRETT, APU, PONKE] }
+  - { id: apes, name: Monkeys & apes, family: animals, emoji: "🐒",
+      keywords: [monkey, monke, ape, apes, chimp, gorilla, harambe, ponke, orangutan],
+      tickers: [PONKE, APE] }
+  - { id: zoo, name: Viral zoo animals, family: animals, emoji: "🦛",
+      keywords: [hippo, moodeng, pnut, peanut, squirrel, capybara, penguin, pengu, otter, seal, goat, raccoon, hamster, giraffe, koala, sloth, panda, rabbit, bunny],
+      tickers: [MOODENG, PNUT, PENGU, GOAT] }
+  - { id: birds, name: Birds, family: animals, emoji: "🦅",
+      keywords: [bird, birds, parrot, eagle, hawk, duck, chicken, pigeon, owl, crow, rooster],
+      tickers: [HAWK, DUCK] }
+  - { id: sea, name: Sea creatures, family: animals, emoji: "🐋",
+      keywords: [fish, shark, whale, dolphin, crab, octopus, lobster, shrimp, jellyfish],
+      tickers: [WHALE] }
+
+  # ---------------- AI ----------------
+  - { id: ai_agents, name: AI agents, family: ai, emoji: "🤖",
+      keywords: [agent, agents, ai16z, eliza, virtuals, aixbt, zerebro, griffain, autonomous, swarm, agentic],
+      phrases: [truth terminal, ai agent],
+      tickers: [AI16Z, AIXBT, VIRTUAL, GOAT, ZEREBRO, GRIFFAIN] }
+  - { id: ai_models, name: AI models & labs, family: ai, emoji: "🧠",
+      keywords: [ai, gpt, chatgpt, openai, claude, anthropic, grok, gemini, deepseek, llm, agi, sora, nvidia, altman],
+      tickers: [GROK, AI, GPT] }
+  - { id: robots, name: Robots & humanoids, family: ai, emoji: "🦾",
+      keywords: [robot, robots, optimus, humanoid, droid, android, cyborg, robotaxi],
+      tickers: [ROBOT] }
+
+  # ---------------- politics ----------------
+  - { id: trump, name: Trump & MAGA, family: politics, emoji: "🇺🇸",
+      keywords: [trump, maga, melania, barron, donald, magacoin, mar-a-lago],
+      tickers: [TRUMP, MELANIA, MAGA, BARRON] }
+  - { id: us_politics, name: US politics, family: politics, emoji: "🏛",
+      keywords: [election, vance, kamala, biden, senate, congress, republican, democrat, governor, mayor, president, potus, impeach],
+      phrases: [white house],
+      tickers: [VANCE] }
+  - { id: geopolitics, name: Geopolitics & world, family: politics, emoji: "🌍",
+      keywords: [tariff, tariffs, war, ceasefire, sanctions, nato, putin, zelensky, xi, milei, bukele, israel, iran, ukraine, russia],
+      tickers: [] }
+  - { id: gov_efficiency, name: DOGE & government, family: politics, emoji: "📉",
+      keywords: [efficiency, bureaucracy, irs, taxes, shutdown],
+      phrases: [department of government efficiency, d.o.g.e],
+      tickers: [] }
+
+  # ---------------- people ----------------
+  - { id: elon, name: Elon & X, family: people, emoji: "🚀",
+      keywords: [elon, musk, tesla, spacex, starship, neuralink, xai, cybertruck],
+      tickers: [KEKIUS, X] }
+  - { id: celebrities, name: Celebrities, family: people, emoji: "⭐",
+      keywords: [celebrity, kanye, drake, swift, snoop, kardashian, rihanna, beyonce, jayz, bieber, iggy, caitlyn],
+      tickers: [MOTHER, YZY] }
+  - { id: streamers, name: Streamers & influencers, family: people, emoji: "🎥",
+      keywords: [streamer, streamers, livestream, twitch, ishowspeed, kaicenat, adin, mrbeast, influencer, youtuber, tiktoker],
+      phrases: [kai cenat, adin ross, mr beast],
+      tickers: [] }
+  - { id: crypto_figures, name: Crypto personalities, family: people, emoji: "👤",
+      keywords: [cz, saylor, vitalik, toly, ansem, murad, sbf, kwon, hayden, armstrong],
+      phrases: [justin sun],
+      tickers: [] }
+
+  # ---------------- internet culture ----------------
+  - { id: brainrot, name: Brainrot & Gen-Z slang, family: culture, emoji: "🧃",
+      keywords: [skibidi, rizz, sigma, gyatt, fanum, ohio, mewing, aura, delulu, brainrot, npc, based, cooked, goon],
+      phrases: [chill guy, italian brainrot],
+      tickers: [CHILLGUY, SIGMA, RIZZ, SKIBIDI] }
+  - { id: viral, name: Viral moments, family: culture, emoji: "📈",
+      keywords: [viral, tiktok, trend, trending, challenge, knowyourmeme, hawktuah, meme, memes],
+      phrases: [hawk tuah, know your meme, went viral],
+      tickers: [HAWKTUAH] }
+  - { id: absurd, name: Absurd & shitposts, family: culture, emoji: "💨",
+      keywords: [fart, fartcoin, poop, toilet, butt, useless, nothing, retard, retardio, unicorn],
+      tickers: [FARTCOIN, USELESS, RETARDIO, SPX] }
+  - { id: classic_memes, name: Classic memes, family: culture, emoji: "🗿",
+      keywords: [wojak, chad, gigachad, giga, trollface, rickroll, doomer, bloomer, moai, stonks],
+      tickers: [WOJAK, CHAD, GIGA, SPX] }
+  - { id: religion, name: Religion & cults, family: culture, emoji: "🙏",
+      keywords: [jesus, god, bible, cult, church, pope, buddha, prophet, christ, satan, heaven, angel, holy],
+      tickers: [JESUS, GOD] }
+  - { id: degen_finance, name: Degen finance satire, family: culture, emoji: "🎰",
+      keywords: [ponzi, jeet, degen, wagmi, ngmi, cope, fud, printer, stimulus, casino, gamble, lambo],
+      tickers: [DEGEN, PONZI] }
+
+  # ---------------- topics ----------------
+  - { id: sports, name: Sports, family: topics, emoji: "🏆",
+      keywords: [nfl, nba, superbowl, fifa, olympics, ufc, f1, soccer, football, messi, ronaldo, lebron, boxing, mma, worldcup],
+      phrases: [world cup, super bowl],
+      tickers: [] }
+  - { id: gaming, name: Gaming, family: topics, emoji: "🎮",
+      keywords: [game, gaming, minecraft, roblox, fortnite, steam, nintendo, gta, playstation, xbox, esports],
+      tickers: [] }
+  - { id: food, name: Food & drink, family: topics, emoji: "🍕",
+      keywords: [pizza, burger, taco, banana, sushi, bread, coffee, beer, cheese, ramen, donut],
+      tickers: [] }
+  - { id: music, name: Music, family: topics, emoji: "🎵",
+      keywords: [rapper, album, song, music, concert, grammy, mixtape],
+      tickers: [] }
+  - { id: screen, name: "Movies, TV & anime", family: topics, emoji: "🎬",
+      keywords: [movie, film, netflix, anime, marvel, disney, cartoon, simpsons, pokemon, naruto, oscar, shrek],
+      tickers: [] }
+  - { id: holidays, name: Holidays & seasonal, family: topics, emoji: "🎃",
+      keywords: [christmas, xmas, halloween, thanksgiving, easter, valentine, santa, pumpkin, spooky, turkey],
+      phrases: [new year, 4th of july, independence day, lunar new year],
+      tickers: [] }
+  - { id: asia, name: Chinese & Asian memes, family: topics, emoji: "🐉",
+      keywords: [chinese, china, asia, korea, korean, japan, japanese, dragon, yuan, hongkong],
+      phrases: ["中文", "币安", "人生", "龙"],
+      tickers: [] }
+  - { id: space, name: Space & aliens, family: topics, emoji: "👽",
+      keywords: [nasa, alien, aliens, ufo, uap, asteroid, mars, astronaut, cosmos, galaxy],
+      tickers: [] }
+  - { id: desci, name: DeSci & longevity, family: topics, emoji: "🧬",
+      keywords: [desci, longevity, biotech, research, science, urolithin, rif, pump.science],
+      tickers: [RIF, URO] }
+
+  # ---------------- chains & launchpads ----------------
+  - { id: pumpfun, name: pump.fun ecosystem, family: chains, emoji: "💊",
+      keywords: [pump.fun, pumpfun, pumpswap, graduated, migrated, bonding],
+      phrases: [bonding curve, king of the hill],
+      tickers: [PUMP] }
+  - { id: letsbonk, name: LetsBonk & Raydium launchpads, family: chains, emoji: "🦴",
+      keywords: [letsbonk, bonkfun, launchlab, raydium],
+      phrases: [bonk.fun],
+      tickers: [] }
+  - { id: base_memes, name: Base memes, family: chains, emoji: "🔵",
+      keywords: [zora, clanker, basechain, farcaster, baseapp, onbase],
+      phrases: [on base, base app, base chain, coinbase wallet],
+      tickers: [BRETT, TOSHI, DEGEN, CLANKER, ZORA] }
+  - { id: bnb_memes, name: BNB Chain memes, family: chains, emoji: "🟡",
+      keywords: [bnb, bsc, fourmeme, four.meme, pancakeswap],
+      phrases: [binance alpha, bnb chain],
+      tickers: [BNB, CAKE] }
+  - { id: other_chains, name: "Tron, SUI, TON & others", family: chains, emoji: "⛓",
+      keywords: [tron, sunpump, sui, aptos, ton, hyperliquid, hype, abstract, monad, berachain, sonic],
+      tickers: [SUI, TON, HYPE, TRX] }
+  - { id: solana, name: Solana memes, family: chains, emoji: "◎",
+      keywords: [solana, sol, jupiter, meteora, phantom, axiom, photon, bullx],
+      tickers: [SOL, JUP] }
+
+  # ---------------- catalysts & news ----------------
+  - { id: listings, name: Exchange listings, family: catalysts, emoji: "🏦",
+      keywords: [listing, listings, lists, listed, upbit, bithumb, robinhood, okx, bybit, kraken],
+      phrases: [will list, binance alpha, coinbase roadmap, now available, trading opens],
+      tickers: [] }
+  - { id: etfs, name: ETFs & institutions, family: catalysts, emoji: "🏛",
+      keywords: [etf, etfs, blackrock, grayscale, 21shares, vaneck, bitwise, canary, treasury, reserve, institutional],
+      phrases: [strategic reserve, spot etf],
+      tickers: [] }
+  - { id: regulation, name: Regulation & courts, family: catalysts, emoji: "⚖",
+      keywords: [sec, cftc, lawsuit, court, ruling, ban, regulation, regulator, bill, gensler, atkins, subpoena],
+      phrases: [genius act, clarity act, market structure],
+      tickers: [] }
+  - { id: hacks, name: "Hacks, rugs & exploits", family: catalysts, emoji: "🚨",
+      keywords: [hack, hacked, exploit, exploited, drained, rug, rugged, rugpull, scam, phishing, stolen, attacker, vulnerability],
+      tickers: [] }
+  - { id: airdrops, name: Airdrops & token launches, family: catalysts, emoji: "🪂",
+      keywords: [airdrop, airdrops, tge, claim, snapshot, points, presale],
+      phrases: [token launch, launches token, launched a token, launches memecoin, official token],
+      tickers: [] }
+  - { id: macro, name: Macro & market moves, family: catalysts, emoji: "📊",
+      keywords: [fed, fomc, powell, cpi, inflation, recession, rates, liquidation, liquidations, crash, rally, ath],
+      phrases: [rate cut, jobs report, all-time high],
+      tickers: [BTC, ETH] }

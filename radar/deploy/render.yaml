@@ -1,0 +1,35 @@
+# Render Blueprint: Dashboard → New → Blueprint → pick this repo. Deploys Memecoin Radar as one Docker web service.
+# Starter plan (always on) + persistent disk: free instances sleep after 15 min and can't attach disks.
+services:
+  - type: web
+    name: memecoin-radar
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/healthz
+    autoDeploy: true
+    disk:
+      name: radar-data
+      mountPath: /app/data
+      sizeGB: 2
+    envVars:
+      - key: RADAR_PASSWORD        # REQUIRED: the login password (the URL is public)
+        sync: false
+      - key: RADAR_SECRET          # encrypts API keys saved on the Connectors page
+        generateValue: true
+      - key: AI_DAILY_BUDGET_USD   # hard daily cap on Claude spend
+        value: "3"
+      - key: RADAR_CORS_ORIGINS
+        value: ""
+      # Optional — or paste them later on the in-app Connectors page:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: X_BEARER_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: NTFY_TOPIC
+        sync: false

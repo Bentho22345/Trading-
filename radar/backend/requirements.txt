@@ -1,0 +1,11 @@
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+websockets==17.2
+aiosqlite==0.22.1
+PyYAML==6.0.3
+feedparser==6.0.14
+cryptography==50.0.2
+anthropic==1.12.1
+telethon==1.45.0
+orjson==3.11.3

@@ -1,0 +1,44 @@
+# High-impact accounts & wallets. Edit here or on Settings → Watchlists.
+x_vips:            # X handles polled via the X API (needs X bearer token)
+  - { handle: realDonaldTrump, tier: vip }
+  - { handle: elonmusk, tier: vip }
+  - { handle: cz_binance, tier: vip }
+  - { handle: saylor, tier: vip }
+  - { handle: VitalikButerin, tier: vip }
+  - { handle: aeyakovenko, tier: vip }
+  - { handle: pumpdotfun, tier: vip }
+  - { handle: solana, tier: vip }
+  - { handle: WhiteHouse, tier: vip }
+  - { handle: POTUS, tier: vip }
+  - { handle: JDVance, tier: vip }
+  - { handle: Reuters, tier: news }
+  - { handle: AP, tier: news }
+  - { handle: BBCBreaking, tier: news }
+  - { handle: WatcherGuru, tier: news }
+  - { handle: tier10k, tier: news }
+  - { handle: unusual_whales, tier: news }
+  - { handle: coinbase, tier: news }
+  - { handle: binance, tier: news }
+  - { handle: Robinhood, tier: news }
+x_search_terms:    # recent-search queries (cashtags & hot words); each poll costs reads
+  - "(pump.fun OR pumpfun) (CA OR contract) -is:retweet"
+  - "memecoin launch -is:retweet"
+x_poll_every_s: 30
+x_search_every_s: 120
+x_cost_per_post_read_usd: 0.005   # set to your X pay-per-use price; drives the cost meter
+telegram_channels: []              # public @channels, e.g. [solanadaily, pumpfunlaunches]
+kol_wallets: []                    # - { address: ..., handle: someKOL, label: "KOL name" }
+smart_wallets: []                  # manually tracked wallets in addition to auto-discovered ones
+exchange_listing_words: [listing, "will list", lists, "now available", "trading opens"]
+category_keywords:
+  politifi: [trump, maga, biden, election, vote, president, senate, congress, kamala, vance, politic, government, tariff, fed]
+  ai: [ai, agent, agents, gpt, chatgpt, llm, openai, claude, grok, gemini, deepseek, robot, humanoid, neural, agi, bot, ai16z, aixbt, virtuals]
+  animal: [dog, cat, frog, pepe, doge, shiba, inu, monkey, ape, bird, hawk, hippo, penguin, bear, bull, wif, bonk, fish, goat,
+           kitty, puppy, squirrel, capybara, otter, raccoon, hamster, moodeng, pnut, popcat, pengu, whale, shark, duck, chicken]
+  celebrity: [elon, musk, kanye, drake, taylor, swift, celebrity, rapper, star, influencer, tiktok, streamer, mrbeast, ishowspeed,
+              snoop, kardashian, twitch]
+  meme: [skibidi, rizz, sigma, gyatt, brainrot, aura, npc, wojak, chad, gigachad, fart, fartcoin, viral, hawk tuah, chill guy,
+         knowyourmeme, shitpost, absurd]
+  sports: [nfl, nba, superbowl, world cup, fifa, olympic, ufc, f1, soccer, football, messi, ronaldo, lebron, boxing]
+  gaming: [game, gaming, play, minecraft, roblox, fortnite, steam, nintendo, gta, playstation, xbox, pokemon]
+  news: [breaking, war, court, ruling, fed, rates, cpi, strike, crash, hack]

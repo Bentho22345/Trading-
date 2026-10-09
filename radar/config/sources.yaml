@@ -1,0 +1,95 @@
+# Keyless feeds polled automatically. Edit freely; restart to apply.
+# Add your own feeds/APIs in the app under Connectors -> "Add your own" (no restart needed).
+#
+# Every feed is polled with conditional GETs (ETag / Last-Modified), so an unchanged feed costs one tiny 304.
+# A feed that errors backs off (1, 2, 4 ... 30 min) instead of being retried every cycle.
+# group decides the News page tab, the headline's base impact score and which alerts it can raise.
+rss:
+  every_s: 60
+  feeds:
+    # ---------------- Crypto newsrooms (fastest first) ----------------
+    - { name: CoinDesk,       url: "https://www.coindesk.com/arc/outboundfeeds/rss/", group: crypto, every_s: 30 }
+    - { name: Cointelegraph,  url: "https://cointelegraph.com/rss", group: crypto, every_s: 30 }
+    - { name: Decrypt,        url: "https://decrypt.co/feed", group: crypto, every_s: 30 }
+    - { name: The Block,      url: "https://www.theblock.co/rss.xml", group: crypto, every_s: 30 }
+    - { name: Blockworks,     url: "https://blockworks.co/feed", group: crypto, every_s: 45 }
+    - { name: DL News,        url: "https://www.dlnews.com/arc/outboundfeeds/rss/", group: crypto, every_s: 60 }
+    - { name: The Defiant,    url: "https://thedefiant.io/api/feed", group: crypto, every_s: 60 }
+    - { name: CryptoSlate,    url: "https://cryptoslate.com/feed/", group: crypto, every_s: 60 }
+    - { name: BeInCrypto,     url: "https://beincrypto.com/feed/", group: crypto, every_s: 45 }
+    - { name: U.Today,        url: "https://u.today/rss", group: crypto, every_s: 60 }
+    - { name: CryptoPotato,   url: "https://cryptopotato.com/feed/", group: crypto, every_s: 60 }
+    - { name: Bitcoinist,     url: "https://bitcoinist.com/feed/", group: crypto, every_s: 90 }
+    - { name: NewsBTC,        url: "https://www.newsbtc.com/feed/", group: crypto, every_s: 90 }
+    - { name: crypto.news,    url: "https://crypto.news/feed/", group: crypto, every_s: 60 }
+    - { name: CoinGape,       url: "https://coingape.com/feed/", group: crypto, every_s: 60 }
+    - { name: Protos,         url: "https://protos.com/feed/", group: crypto, every_s: 120 }
+    - { name: Bitcoin Magazine, url: "https://bitcoinmagazine.com/.rss/full/", group: crypto, every_s: 120 }
+
+    # ---------------- Memecoin-specific searches (Google News) ----------------
+    - { name: "GNews: memecoin",          url: "https://news.google.com/rss/search?q=memecoin+OR+%22meme+coin%22+when:1d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 60 }
+    - { name: "GNews: Solana memecoin",   url: "https://news.google.com/rss/search?q=solana+%28memecoin+OR+%22meme+coin%22%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 90 }
+    - { name: "GNews: Base memecoin",     url: "https://news.google.com/rss/search?q=%28%22Base+chain%22+OR+Zora+OR+Clanker%29+memecoin+when:2d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 180 }
+    - { name: "GNews: BNB memecoin",      url: "https://news.google.com/rss/search?q=%28BNB+OR+%22four.meme%22+OR+%22Binance+Alpha%22%29+memecoin+when:2d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 180 }
+    - { name: "GNews: pump.fun",          url: "https://news.google.com/rss/search?q=%22pump.fun%22+OR+pumpfun+OR+PumpSwap+when:1d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 90 }
+    - { name: "GNews: LetsBonk",          url: "https://news.google.com/rss/search?q=LetsBonk+OR+%22bonk.fun%22+when:3d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 300 }
+    - { name: "GNews: Dogecoin",          url: "https://news.google.com/rss/search?q=Dogecoin+when:1d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 120 }
+    - { name: "GNews: Shiba/PEPE/BONK",   url: "https://news.google.com/rss/search?q=%28%22Shiba+Inu%22+OR+PEPE+OR+BONK+OR+dogwifhat+OR+Floki%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 120 }
+    - { name: "GNews: Fartcoin/Popcat/Pengu", url: "https://news.google.com/rss/search?q=%28Fartcoin+OR+Popcat+OR+%22Pudgy+Penguins%22+OR+SPX6900+OR+Mog%29+when:2d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 180 }
+    - { name: "GNews: TRUMP coin",        url: "https://news.google.com/rss/search?q=%28%22TRUMP+coin%22+OR+%22%24TRUMP%22+OR+%22Trump+memecoin%22+OR+%22Melania+coin%22%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 120 }
+    - { name: "GNews: AI agent tokens",   url: "https://news.google.com/rss/search?q=%28%22AI+agent%22+token%29+OR+ai16z+OR+aixbt+OR+Virtuals+when:2d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 180 }
+    - { name: "GNews: official token launch", url: "https://news.google.com/rss/search?q=%28%22launches+memecoin%22+OR+%22launched+a+memecoin%22+OR+%22official+token%22+OR+%22launches+token%22%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 90 }
+    - { name: "GNews: memecoin ETF",      url: "https://news.google.com/rss/search?q=%28Dogecoin+OR+memecoin+OR+TRUMP+OR+BONK%29+ETF+when:2d&hl=en-US&gl=US&ceid=US:en", group: memecoin, every_s: 300 }
+    - { name: "GNews: Solana",            url: "https://news.google.com/rss/search?q=Solana+when:1d&hl=en-US&gl=US&ceid=US:en", group: solana, every_s: 120 }
+
+    # ---------------- Exchange listings (the classic pump catalyst) ----------------
+    - { name: "GNews: Binance listing",   url: "https://news.google.com/rss/search?q=%22Binance+will+list%22+OR+%22Binance+Alpha%22+OR+%22Binance+Futures+will+launch%22+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 60 }
+    - { name: "GNews: Coinbase listing",  url: "https://news.google.com/rss/search?q=Coinbase+%28listing+OR+roadmap+OR+%22adds+support%22%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 60 }
+    - { name: "GNews: Robinhood listing", url: "https://news.google.com/rss/search?q=Robinhood+%28lists+OR+listing+OR+adds%29+crypto+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 120 }
+    - { name: "GNews: Upbit/Bithumb",     url: "https://news.google.com/rss/search?q=%28Upbit+OR+Bithumb%29+listing+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 90 }
+    - { name: "GNews: OKX/Bybit/Kraken",  url: "https://news.google.com/rss/search?q=%28OKX+OR+Bybit+OR+Kraken+OR+KuCoin%29+%28%22will+list%22+OR+listing%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 120 }
+    - { name: "GNews: delisting",         url: "https://news.google.com/rss/search?q=crypto+%28delist+OR+delisting%29+when:2d&hl=en-US&gl=US&ceid=US:en", group: listings, every_s: 300 }
+
+    # ---------------- Risk: hacks, rugs, regulation ----------------
+    - { name: "GNews: crypto hack",       url: "https://news.google.com/rss/search?q=crypto+%28hack+OR+exploit+OR+drained+OR+%22rug+pull%22%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: hacks, every_s: 120 }
+    - { name: "GNews: SEC crypto",        url: "https://news.google.com/rss/search?q=%28SEC+OR+CFTC%29+crypto+when:1d&hl=en-US&gl=US&ceid=US:en", group: regulation, every_s: 180 }
+    - { name: "GNews: crypto bill",       url: "https://news.google.com/rss/search?q=crypto+%28bill+OR+%22market+structure%22+OR+stablecoin%29+Senate+OR+Congress+when:2d&hl=en-US&gl=US&ceid=US:en", group: regulation, every_s: 300 }
+
+    # ---------------- Politics, celebrities, culture (where memecoin narratives are born) ----------------
+    - { name: "GNews: Reuters",           url: "https://news.google.com/rss/search?q=when:1h+site:reuters.com&hl=en-US&gl=US&ceid=US:en", group: breaking, every_s: 60 }
+    - { name: "GNews: AP",                url: "https://news.google.com/rss/search?q=when:1h+site:apnews.com&hl=en-US&gl=US&ceid=US:en", group: breaking, every_s: 60 }
+    - { name: "GNews: Trump crypto",      url: "https://news.google.com/rss/search?q=Trump+crypto+when:1d&hl=en-US&gl=US&ceid=US:en", group: politics, every_s: 90 }
+    - { name: "GNews: White House",       url: "https://news.google.com/rss/search?q=%22White+House%22+when:1h&hl=en-US&gl=US&ceid=US:en", group: politics, every_s: 120 }
+    - { name: "GNews: Elon Musk",         url: "https://news.google.com/rss/search?q=%22Elon+Musk%22+when:1d&hl=en-US&gl=US&ceid=US:en", group: celebrity, every_s: 90 }
+    - { name: "GNews: celebrity crypto",  url: "https://news.google.com/rss/search?q=%28celebrity+OR+rapper+OR+influencer+OR+streamer%29+%28crypto+OR+memecoin+OR+token%29+when:2d&hl=en-US&gl=US&ceid=US:en", group: celebrity, every_s: 180 }
+    - { name: "GNews: viral",             url: "https://news.google.com/rss/search?q=%28%22goes+viral%22+OR+%22went+viral%22+OR+%22viral+video%22+OR+%22internet+sensation%22%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: viral, every_s: 180 }
+    - { name: "GNews: viral animal",      url: "https://news.google.com/rss/search?q=%28zoo+OR+animal+OR+pet%29+viral+when:1d&hl=en-US&gl=US&ceid=US:en", group: viral, every_s: 300 }
+    - { name: "GNews: AI launches",       url: "https://news.google.com/rss/search?q=%28OpenAI+OR+Anthropic+OR+xAI+OR+Grok+OR+DeepSeek+OR+Gemini%29+launch+when:1d&hl=en-US&gl=US&ceid=US:en", group: viral, every_s: 300 }
+    - { name: Hacker News (300+),         url: "https://hnrss.org/frontpage?points=300", group: viral, every_s: 300 }
+    - { name: Bloomberg Markets,          url: "https://feeds.bloomberg.com/markets/news.rss", group: macro, every_s: 120 }
+    - { name: "GNews: Fed / CPI",         url: "https://news.google.com/rss/search?q=%28Fed+OR+FOMC+OR+CPI+OR+Powell%29+when:1d&hl=en-US&gl=US&ceid=US:en", group: macro, every_s: 300 }
+
+    # ---------------- Reddit (official RSS; the Reddit OAuth connector upgrades this) ----------------
+    - { name: r/memecoins,          url: "https://www.reddit.com/r/memecoins/new/.rss", group: reddit, every_s: 120 }
+    - { name: r/memecoin,           url: "https://www.reddit.com/r/memecoin/new/.rss", group: reddit, every_s: 180 }
+    - { name: r/SolanaMemeCoins,    url: "https://www.reddit.com/r/SolanaMemeCoins/new/.rss", group: reddit, every_s: 180 }
+    - { name: r/pumpfun,            url: "https://www.reddit.com/r/pumpfun/new/.rss", group: reddit, every_s: 240 }
+    - { name: r/solana,             url: "https://www.reddit.com/r/solana/new/.rss", group: reddit, every_s: 120 }
+    - { name: r/CryptoCurrency,     url: "https://www.reddit.com/r/CryptoCurrency/rising/.rss", group: reddit, every_s: 120 }
+    - { name: r/CryptoMoonShots,    url: "https://www.reddit.com/r/CryptoMoonShots/new/.rss", group: reddit, every_s: 180 }
+    - { name: r/SatoshiStreetBets,  url: "https://www.reddit.com/r/SatoshiStreetBets/new/.rss", group: reddit, every_s: 180 }
+    - { name: r/dogecoin,           url: "https://www.reddit.com/r/dogecoin/rising/.rss", group: reddit, every_s: 300 }
+    - { name: r/wallstreetbets,     url: "https://www.reddit.com/r/wallstreetbets/rising/.rss", group: reddit, every_s: 180 }
+    - { name: r/OutOfTheLoop,       url: "https://www.reddit.com/r/OutOfTheLoop/rising/.rss", group: reddit, every_s: 300 }
+    - { name: r/memes (rising),     url: "https://www.reddit.com/r/memes/rising/.rss", group: reddit, every_s: 300 }
+
+    # ---------------- Fediverse ----------------
+    - { name: "Mastodon #memecoin", url: "https://mastodon.social/tags/memecoin.rss", group: social, every_s: 120 }
+    - { name: "Mastodon #solana",   url: "https://mastodon.social/tags/solana.rss", group: social, every_s: 180 }
+    - { name: "Mastodon #crypto",   url: "https://mastodon.social/tags/crypto.rss", group: social, every_s: 180 }
+
+    # ---------------- Google Trends "trending now": is mainstream attention moving? ----------------
+    - { name: Google Trends US, url: "https://trends.google.com/trending/rss?geo=US", group: trends, every_s: 180 }
+    - { name: Google Trends UK, url: "https://trends.google.com/trending/rss?geo=GB", group: trends, every_s: 600 }
+    - { name: Google Trends KR, url: "https://trends.google.com/trending/rss?geo=KR", group: trends, every_s: 900 }
+    - { name: Google Trends JP, url: "https://trends.google.com/trending/rss?geo=JP", group: trends, every_s: 900 }

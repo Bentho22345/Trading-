@@ -1,0 +1,150 @@
+# Radar Score config. Every number here is tunable (also from the Settings page; UI edits are
+# stored as overrides in the DB and win over this file). Bump `version` when you change logic.
+version: v2
+
+weights:            # sub-score weights (re-normalised to sum to 1)
+  narrative: 0.30
+  catalyst: 0.15
+  momentum: 0.20
+  smart_money: 0.15
+  safety: 0.20
+
+verdict:
+  buy_min_score: 70        # >= -> BUY SIGNAL (if no veto and confidence >= medium)
+  watch_min_score: 50      # >= -> WATCH, else AVOID
+  buy_min_confidence: medium
+
+vetoes:             # hard AVOID, regardless of score
+  mint_authority_active: true
+  freeze_authority_active: true
+  max_top10_pct: 30        # top-10 holders (excluding AMM/bonding-curve vaults)
+  min_liquidity_usd: 8000
+  deployer_rug_history: true
+  likely_fake_of_vip: true
+  rugged: true
+  max_rugcheck_score_normalised: 80   # RugCheck normalised score, higher = riskier
+  require_safety_report: true          # no report yet -> cannot be BUY (WATCH at most)
+  max_liq_removed_pct_1h: 50           # LP withdrawn beyond the price move in the last hour (slow rug)
+
+momentum:
+  vol_mcap_good: 0.5       # 24h volume / mcap >= this earns full credit (20-50% healthy)
+  buy_sell_good: 1.4       # 5m buys/sells ratio for full credit
+  min_txns_5m: 20
+  liquidity_good_usd: 75000
+  unique_buyers_per_min_good: 10
+
+safety:
+  lp_locked_good_pct: 95
+  top10_good_pct: 15
+  insiders_bad: 3
+  boost_penalty: 10        # points off safety when paid boosts are active (often exit liquidity)
+  dev_buy_bad_pct: 10      # dev bought more than this % of supply in the create tx
+  dev_sold_bad_pct: 50     # dev has sold this % of their tokens
+  sniper_bad_pct: 15       # % of supply bought by non-dev wallets in the first 5 seconds (bundles/snipers)
+
+narrative:
+  stage_scores: { birth: 55, ignition: 100, peak: 60, fading: -40 }
+  velocity_good_per_min: 5       # mentions/min for full velocity credit
+  cross_platform_good: 3         # distinct sources for full spread credit
+  breakout_sigma: 3.0            # velocity z-score that triggers FLASH
+  expected_life_hours: 48
+
+catalyst:
+  vip_ca: 100              # CA posted by VIP / official account
+  vip_mention: 75
+  breaking_news: 55
+  exchange_listing: 60     # narrative-level listing chatter
+  cex_listing: 80          # a listing headline that names this token (Binance, Coinbase, Upbit, OKX, Bybit...)
+  coingecko_trending: 45   # token is on CoinGecko's trending list (name + ticker match)
+  graduation: 40           # pump.fun bonding curve completed -> DEX pool, within drivers.graduation_window_h
+  kol_call: 35             # a KOL-tier account posted this token's CA in the last hour (often paid; also check smart money)
+  paid_promo: 10           # boosts / KOL calls: weak signal (and a risk flag)
+
+drivers:            # price drivers read from Radar's own data (radar/drivers.py)
+  liq_mcap_good: 0.10      # liquidity >= 10% of market cap earns full depth credit (momentum)
+  liq_mcap_thin: 0.03      # below 3% -> safety penalty (one wallet can move the price)
+  liq_removed_bad_pct: 20  # LP withdrawn beyond the price move in 1h -> safety penalty (veto at vetoes.max_liq_removed_pct_1h)
+  max_holder_bad_pct: 5    # a single non-AMM wallet above this % of supply -> safety penalty
+  top10_rise_bad_pts: 5    # top-10 share rising this many points in 1h -> supply concentrating
+  mentions_good_per_h: 30  # posts naming the CA (1.0) or $TICKER (0.5) per hour for full social-volume credit
+  mention_accel_good: 2.0  # this hour vs the hour before for full acceleration credit
+  social_blend: 0.25       # share of the narrative sub-score taken by token-level social volume
+  dev_selling_now_penalty: 20   # deployer sold in the last 15 minutes
+  serial_launcher_7d: 5    # deployer launched this many tokens in 7 days
+  serial_launcher_penalty: 15
+  graduation_window_h: 6
+  vol_accel_good: 2.0      # 5m volume x12 vs 1h (or 1h x6 vs 6h) for full acceleration credit (momentum)
+  net_sol_good: 20         # net SOL bought in 15m on pump.fun for full order-flow credit
+  whale_buy_sol: 5         # a single trade this size or larger counts as a whale (also triggers instant re-scoring)
+  whale_sells_bad: 2       # this many whale sells in 15m -> safety penalty
+  churn_bad_trades_per_wallet: 6   # trades per wallet in 15m above this looks like wash/bot volume
+  churn_min_trades: 30
+  extended_h1_pct: 300     # already up this much in 1h -> chasing risk
+  negative_news_penalty: 30        # headline naming the token with delist/exploit/hack/rug/lawsuit words
+  negative_sentiment: -0.3         # narrative sentiment (-1..1) at or below this -> narrative penalty
+
+smart_money:
+  wallet_min_score: 60     # tracked wallets above this count as smart money
+  full_credit_wallets: 3   # this many distinct smart wallets buying = full credit
+  kol_sell_penalty: 50     # KOL selling into own post
+
+regime:            # multiplier applied to the final score
+  btc_down_24h_pct: -3     # below -> risk-off
+  sol_down_24h_pct: -5
+  fear_greed_low: 25
+  meme_down_24h_pct: -8    # meme sector market cap 24h change below this -> risk-off
+  risk_off_multiplier: 0.8
+  risk_on_multiplier: 1.05
+
+confidence:        # how many independent inputs are present
+  high_min_inputs: 5
+  medium_min_inputs: 3
+
+plan:              # trade plan attached to every signal
+  entry_zone_pct: 8        # entry zone = price .. price * (1 + x%)
+  stop_pct: 30             # stop/invalidation below entry
+  take_profit_ladder:      # [multiple, fraction of ORIGINAL position to sell]
+    - [2.0, 0.5]           # sell half at 2x = initial stake back
+    - [4.0, 0.25]
+    - [8.0, 0.15]
+  time_stop_hours: 24      # exit if the narrative lifecycle runs out
+
+engine:
+  evaluate_every_s: 10
+  resignal_after_s: 1800   # re-emit a signal for the same token if verdict changes or after this long
+  min_score_to_log: 0      # log every evaluation that changes verdict (honest scorecard)
+  paper_trade_verdicts: [BUY, WATCH, AVOID]   # paper-trade every signal; scorecard splits by verdict
+  paper_size_usd: 100
+
+rug_shield:
+  liquidity_drop_pct: 30   # alert if liquidity falls this much between refreshes
+  dev_sell_pct_alert: 20   # alert if dev sells >= this % of their tracked buys
+  top_holder_drop_pct: 5   # alert if a top holder's share drops by >= this many points
+
+alerts:
+  buy_signal: true
+  flash: true
+  exits: true
+  rug: true
+  cooldown_mutes_buy: true
+
+leaderboard:        # top wallets ranked by realized return on observed pump.fun trades (Smart money → Top wallets)
+  size: 1000               # wallets ranked per period (1d / 7d / 30d)
+  follow: 1000             # top wallets streamed live (PumpPortal account trades)
+  min_basis_sol: {1d: 0.5, 7d: 2, 30d: 5}   # cost basis closed in the window to qualify
+  min_closes: {1d: 2, 7d: 3, 30d: 5}        # exits in the window to qualify
+  bot_trades_per_day: 400  # above this the wallet is flagged as a bot and hidden by default
+  refresh_s: 300
+  sources:                 # top traders from outside Radar's own pump.fun stream
+    gecko_pools: 40        # hottest SOL pools whose recent trades feed the ledger (GeckoTerminal, no key)
+    gecko_every_s: 20      # one pool per tick
+    birdeye_pages: 30      # Birdeye leaderboards (needs key): 10 traders/page -> 300 per period
+    birdeye_every_s: 3600
+    birdeye_token_traders: 20  # hot coins whose top traders are pulled
+    follow_external: 300   # of the followed wallets, this many come from Birdeye's lists
+  flash:                   # every followed top-wallet trade flashes in the UI; these limit phone/Telegram pushes
+    push: true
+    push_min_sol: 1.0
+    push_max_per_min: 12
+    cluster_wallets: 3     # this many top wallets buying one coin within cluster_minutes = full-screen FLASH
+    cluster_minutes: 10
