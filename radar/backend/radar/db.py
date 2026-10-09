@@ -292,6 +292,31 @@ CREATE INDEX IF NOT EXISTS yt_videos_pub ON yt_videos(published DESC);
 -- Claude's batch read of launches (narrative, meme score, red flags), so a restart doesn't pay for it twice
 CREATE TABLE IF NOT EXISTS ai_labels (mint TEXT PRIMARY KEY, ts REAL NOT NULL, label_json TEXT);
 
+-- X Radar: the roster of accounts that move memecoins, every tweet scored, the coins tweets spawn, graded calls
+CREATE TABLE IF NOT EXISTS x_accounts (
+  key TEXT PRIMARY KEY, handle TEXT NOT NULL, user_id TEXT, category TEXT, tier TEXT, replies INTEGER DEFAULT 0, source TEXT,
+  added REAL, enabled INTEGER DEFAULT 1, name TEXT, bio TEXT, avatar TEXT, followers INTEGER, tweets INTEGER DEFAULT 0,
+  spawns INTEGER DEFAULT 0, last_tweet REAL, follows_json TEXT
+);
+CREATE TABLE IF NOT EXISTS x_tweets (
+  id TEXT PRIMARY KEY, handle TEXT, author_name TEXT, avatar TEXT, tier TEXT, category TEXT, text TEXT, ts REAL, url TEXT,
+  media_url TEXT, likes INTEGER, rts INTEGER, replies INTEGER, quotes INTEGER, velocity REAL, heur REAL, ai_json TEXT, score REAL,
+  terms_json TEXT, tickers_json TEXT, cas_json TEXT, coinable INTEGER, spawns INTEGER DEFAULT 0, kind TEXT, alerted INTEGER DEFAULT 0,
+  updated REAL, followers INTEGER
+);
+CREATE INDEX IF NOT EXISTS x_tweets_ts ON x_tweets(ts DESC);
+CREATE TABLE IF NOT EXISTS x_spawns (
+  tweet_id TEXT NOT NULL, mint TEXT NOT NULL, symbol TEXT, name TEXT, ts REAL, delay_s REAL, rank INTEGER, term TEXT,
+  PRIMARY KEY (tweet_id, mint)
+);
+CREATE INDEX IF NOT EXISTS x_spawns_ts ON x_spawns(ts DESC);
+CREATE TABLE IF NOT EXISTS x_calls (
+  tweet_id TEXT NOT NULL, handle TEXT, mint TEXT NOT NULL, symbol TEXT, ts REAL, mcap_at_call REAL, peak_mcap REAL, last_mcap REAL,
+  mcap_1h REAL, updated REAL, PRIMARY KEY (tweet_id, mint)
+);
+CREATE INDEX IF NOT EXISTS x_calls_ts ON x_calls(ts DESC);
+CREATE TABLE IF NOT EXISTS x_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, handle TEXT, kind TEXT, detail TEXT);
+
 CREATE TABLE IF NOT EXISTS token_stories (
   token_address TEXT PRIMARY KEY, ts REAL NOT NULL, story_json TEXT, method TEXT
 );

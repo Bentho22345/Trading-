@@ -6,6 +6,8 @@ Commands (only answered in your own chat):
   /coin <CA or $TICKER>        full read of one coin: detectors, on-chain intel, AI take, YouTube
   /wallets                     latest buys and sells of top / smart wallets
   /intel                       what the engines just found (insider clusters, YouTube mentions, strong memes)
+  /x                           the hottest tweet narratives right now (X Radar) and the coins they spawned
+  /callers                     X accounts ranked by how their coin calls actually did
   /push <safe|balanced|degen|off>  auto-push coins that clear your appetite's bar (default: degen)
   /mute [minutes] · /unmute    silence pushes (rug / flash warnings still come through)
   /status                      engines, credits and budgets
@@ -36,7 +38,8 @@ bot_h.stale_after = 3600
 PUSH_BAR = {"safe": 38.0, "balanced": 34.0, "degen": 30.0}
 HELP = ("<b>Memecoin Radar</b> 🛰\n"
         "/top [safe|balanced|degen] — best live launches\n/calls — today's snipe calls &amp; results\n"
-        "/coin &lt;CA or $TICKER&gt; — full read of one coin\n/wallets — top-wallet trades\n/intel — engine finds\n"
+        "/coin &lt;CA or $TICKER&gt; — full read of one coin\n/x — hottest tweet narratives\n/callers — best X callers\n"
+        "/wallets — top-wallet trades\n/intel — engine finds\n"
         "/push degen|balanced|safe|off — auto-push coins at your appetite\n/mute 60 · /unmute\n/status — engines &amp; credits\n"
         "<i>Not financial advice. Radar never trades.</i>")
 
@@ -110,6 +113,7 @@ class TelegramBot:
         self.push_times: list[float] = []
         self.last_cmd: dict[str, Any] | None = None
         self.max_per_hour = int(os.environ.get("TG_PUSH_MAX_PER_HOUR", "8"))
+        self.xradar: Any = None
 
     @property
     def base(self) -> str:
@@ -224,6 +228,28 @@ class TelegramBot:
         elif cmd == "/intel":
             ev = feed.recent(10)
             await send("🛰 <b>Engine finds</b>\n" + ("\n".join(f"• {esc(e['title'])}" for e in ev) if ev else "Nothing yet."))
+        elif cmd == "/x":
+            rows = await self.xradar.board(hours=6, limit=6) if self.xradar else []
+            if not rows:
+                await send("No tweet narratives yet — connect X on Connectors (it can take a minute to fill).")
+                return
+            lines = []
+            for i, t in enumerate(rows, 1):
+                ai = t.get("ai") or {}
+                coins = t.get("coins") or []
+                lines.append(f"{i}. <b>@{esc(t['handle'])}</b> · {t['score']:.0f} pts · {age(time.time() - t['ts'])} ago\n"
+                             f"   “{esc(t['text'][:160])}”"
+                             + (f"\n   ✦ {esc(ai.get('narrative'))} · meme {ai.get('meme_potential')}/10" if ai else "")
+                             + (f"\n   🏁 {len(coins)} coins: " + ", ".join(f"${esc(c.get('symbol'))}" for c in coins[:5]) if coins else ""))
+            await send("🐦 <b>Tweet radar</b>\n\n" + "\n\n".join(lines), [[{"text": f"@{t['handle']}", "url": t["url"]} for t in rows[:3]]])
+        elif cmd == "/callers":
+            rows = await self.xradar.callers(days=7, min_calls=2) if self.xradar else []
+            if not rows:
+                await send("Not enough graded calls yet — every $ticker / contract a tracked account tweets is logged and graded.")
+                return
+            await send("📣 <b>Best X callers (7d)</b>\n" + "\n".join(
+                f"{i}. @{esc(r['handle'])} · {r['calls']} calls · {r['hit_2x_pct']}% hit 2× · avg peak {r['avg_peak_x']}×"
+                for i, r in enumerate(rows[:10], 1)))
         elif cmd == "/push":
             mode = arg.lower()
             if mode not in (*PUSH_BAR, "off"):
@@ -241,11 +267,12 @@ class TelegramBot:
             await send("🔔 Unmuted.")
         elif cmd == "/status":
             s = await self.status_fn() if self.status_fn else {}
-            h, c, y = s.get("helius") or {}, s.get("claude") or {}, s.get("youtube") or {}
+            h, c, y, xs = s.get("helius") or {}, s.get("claude") or {}, s.get("youtube") or {}, s.get("x") or {}
             await send("⚙️ <b>Engines</b>\n"
                        f"Helius: {h.get('spent', 0):,}/{h.get('daily', 0):,} credits today\n"
                        f"Claude: ${c.get('spent_usd', 0):.3f}/${c.get('budget_usd', 0):.2f} · {c.get('labeled', 0)} coins read\n"
                        f"YouTube: {(y.get('quota') or {}).get('used', 0):,}/{(y.get('quota') or {}).get('cap', 0):,} units\n"
+                       f"X: ${xs.get('spent_usd', 0):.2f}/${xs.get('budget_usd', 0):.2f} · {xs.get('accounts', 0)} accounts · {xs.get('posts', 0)} posts read\n"
                        f"Launches tracked: {len(self.sniper.launches)} · push: {self.push_mode}")
         else:
             await send("Unknown command.\n\n" + HELP)

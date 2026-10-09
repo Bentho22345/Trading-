@@ -15,6 +15,7 @@ const ENGINE: Record<string, { label: string; tone: string; icon: string }> = {
   youtube: { label: 'YouTube', tone: 'text-down', icon: 'flame' },
   dune: { label: 'Dune', tone: 'text-warn', icon: 'trophy' },
   telegram: { label: 'Telegram', tone: 'text-accent2', icon: 'signal' },
+  x: { label: 'X', tone: 'text-flash', icon: 'x' },
 };
 const nf = (v?: number | null) => (v == null ? '—' : Intl.NumberFormat('en').format(Math.round(v)));
 const compact = (v?: number | null) => (v == null ? '—' : Intl.NumberFormat('en', { notation: 'compact' }).format(v));
@@ -74,14 +75,14 @@ export default function EnginesPage() {
   useEffect(() => { setD((x: any) => x ?? peek('/api/engines') ?? null); api<Ev[]>('/api/intel?limit=120').then(setFeed).catch(() => {}); }, []);
   useLive((m) => { if (m.ch === 'intel') setFeed((f) => [m.data as Ev, ...f].slice(0, 200)); });
 
-  const h = d?.helius || {}, c = d?.claude || {}, y = d?.youtube || {}, du = d?.dune || {}, tg = d?.telegram || {}, sn = d?.snipe || {};
-  const firing = [h.connected, c.enabled, y.configured, du.configured, tg.configured].filter(Boolean).length;
+  const h = d?.helius || {}, c = d?.claude || {}, y = d?.youtube || {}, du = d?.dune || {}, tg = d?.telegram || {}, sn = d?.snipe || {}, xs = d?.x || {};
+  const firing = [xs.connected, h.connected, c.enabled, y.configured, du.configured, tg.configured].filter(Boolean).length;
 
   return (
     <div className="pt-4">
       <Reveal className="mb-8">
         <div className="eyebrow mb-3">Engines · everything your keys power</div>
-        <h1 className="display text-[60px] md:text-[104px]">{firing}/5 <span className="text-up">firing.</span></h1>
+        <h1 className="display text-[60px] md:text-[104px]">{firing}/6 <span className="text-up">firing.</span></h1>
         <p className="mt-4 max-w-3xl text-[16px] text-white/60">
           Helius checks a launch&apos;s early buyers on chain for <b className="text-white">insider clusters and fresh wallets</b>. YouTube finds which
           coins new videos are talking about. Claude reads every promising launch&apos;s meme in batches for fractions of a cent. Dune keeps
@@ -92,11 +93,28 @@ export default function EnginesPage() {
           <span className="rounded-full bg-[#ff7a45]/15 px-3 py-1 text-[#ff7a45]">⛓ {nf(sn.with_intel)} scanned on chain</span>
           <span className="rounded-full bg-accent/15 px-3 py-1 text-accent">✦ {nf(sn.with_ai)} read by Claude</span>
           <span className="rounded-full bg-down/15 px-3 py-1 text-down">▶ {nf(sn.with_yt)} on YouTube</span>
+          <span className="rounded-full bg-flash/15 px-3 py-1 text-flash">🐦 {nf(sn.with_x)} launched off tweets</span>
           <Link href="/snipe" className="rounded-full border border-white/15 px-3 py-1 text-white/70 hover:text-white">Open Snipe →</Link>
         </div>
       </Reveal>
 
       <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+        <Card id="x" title="X Radar" on={!!xs.connected} configured={!!xs.connected} what={[
+          `${xs.accounts ?? '—'} accounts that move memecoins, polled by tier (S ~10s, A ~30s, B ~90s)`,
+          'Every tweet scored for coinability; the promising ones read by Claude in batches',
+          'Coin races: launches spawned off a tweet, boosted in Snipe, raced to your Telegram',
+          'Callers graded from the market cap at their tweet; the roster promotes / demotes itself',
+          'Name / bio / picture changes on S-tier accounts and Elon\u2019s newest follows',
+        ]}>
+          <Row k="Spent today" v={<>${(xs.spent_usd || 0).toFixed(3)} <span className="text-white/40">/ ${(xs.budget_usd ?? 5).toFixed(2)}</span></>} />
+          <Meter used={xs.spent_usd || 0} cap={xs.budget_usd || 1} />
+          <Row k="Tweets read" v={<>{nf(xs.posts)} <span className="text-white/40">· {nf(xs.empty)} empty checks (free)</span></>} />
+          <Row k="Read by Claude" v={nf(xs.ai_read)} />
+          <Row k="Coins spawned / races" v={<>{nf(xs.spawns)} / {nf(xs.races)}</>} tone="text-flash" />
+          <Row k="Calls graded" v={nf(xs.calls)} />
+          <Row k="Big-tweet alerts" v={nf(xs.alerts)} />
+          <Link href="/x" className="text-[12px] font-semibold text-white/70 underline decoration-white/30 underline-offset-4 hover:text-white">Open X Radar →</Link>
+        </Card>
         <Card id="helius" title="Helius" on={!!h.connected} configured={!!h.configured} what={[
           'Insider clusters: early buyers funded by the same wallet (or the dev’s funder)',
           'Fresh-wallet % and bot wallets among the first buyers',

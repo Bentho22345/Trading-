@@ -209,6 +209,59 @@ def yt_uploads(playlistId: str = ""):
     return {"items": [{"contentDetails": {"videoId": "upload1"}}]}
 
 
+X_STATE = {"users_by": 0, "following": 0}
+
+
+def _xuser(h: str) -> dict:
+    name = h
+    if h.lower() == "elonmusk" and X_STATE["users_by"] >= 2:
+        name = "Zorblax Maximus"            # the Kekius move: a profile rename
+    return {"id": f"u{h.lower()}", "username": h, "name": name, "description": f"bio of {h}",
+            "profile_image_url": f"https://pbs.example/{h}.jpg", "public_metrics": {"followers_count": 1_000_000}}
+
+
+@api.get("/x/2/users/by")
+def x_users_by(usernames: str = ""):
+    X_STATE["users_by"] += 1
+    return {"data": [_xuser(h) for h in usernames.split(",") if h]}
+
+
+@api.get("/x/2/users/{uid}/following")
+def x_following(uid: str):
+    X_STATE["following"] += 1
+    base = [{"id": "f1", "username": "nasa", "name": "NASA", "description": "space", "public_metrics": {"followers_count": 9e7}}]
+    if X_STATE["following"] >= 2:
+        base.insert(0, {"id": "f2", "username": "ZorpCoinSol", "name": "Zorp", "description": "$ZORP the alien coin. CA soon on pump",
+                        "public_metrics": {"followers_count": 812}})
+    return {"data": base}
+
+
+@api.get("/x/2/tweets/search/recent")
+def x_search(query: str = "", since_id: str = ""):
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    posts, users = [], []
+    if "from:elonmusk" in query and not since_id:
+        posts.append({"id": "9001", "author_id": "uelonmusk", "created_at": now, "text": "My new dog is named Zorblax 🐕",
+                      "public_metrics": {"like_count": 90000, "retweet_count": 12000, "reply_count": 8000, "quote_count": 3000},
+                      "attachments": {"media_keys": ["m1"]}})
+        users.append(_xuser("elonmusk"))
+    if "from:blknoiz06" in query and not since_id:
+        posts.append({"id": "9002", "author_id": "ublknoiz06", "created_at": now, "text": "$ZORBLAX is the only play today",
+                      "public_metrics": {"like_count": 900, "retweet_count": 100, "reply_count": 50, "quote_count": 10}})
+        users.append(_xuser("blknoiz06"))
+    if not posts:
+        return {"meta": {"result_count": 0}}
+    return {"data": posts, "includes": {"users": users, "media": [{"media_key": "m1", "type": "photo", "url": "https://pbs.example/dog.jpg"}]},
+            "meta": {"newest_id": max(p["id"] for p in posts), "result_count": len(posts)}}
+
+
+@api.get("/x/2/tweets")
+def x_tweets(ids: str = ""):
+    return {"data": [{"id": i, "public_metrics": {"like_count": 150000, "retweet_count": 20000, "reply_count": 9000, "quote_count": 4000}}
+                     for i in ids.split(",") if i]}
+
+
 @api.get("/dune/api/v1/query/{qid}/results")
 def dune_results(qid: int):
     if qid == 404:
@@ -290,6 +343,8 @@ async def pump_ws(ws):
                   "name": fx.PUMP_CREATE["name"] if n == 1 else f"Fake {mint[:4]}", "symbol": fx.PUMP_CREATE["symbol"] if n == 1 else mint[:5].upper(),
                   **({} if n == 1 else {"traderPublicKey": f"Dev{n % 7}{'d' * 36}"[:40]}),
                   "uri": f"http://127.0.0.1:{sys.argv[1]}/meta/{mint}"}
+            if n > 1 and n % 6 == 3:   # deployers racing to tokenize the tweet the fake X serves ("Zorblax")
+                ev["name"], ev["symbol"] = "Zorblax", "ZORBLAX"
             if n > 1 and n % 9 == 0:   # a Mayhem Mode launch: 2B supply, so market cap is twice the 1B-supply value
                 ev["marketCapSol"] = ev["vSolInBondingCurve"] / ev["vTokensInBondingCurve"] * 2e9
                 ev["symbol"] = "MAYHM"

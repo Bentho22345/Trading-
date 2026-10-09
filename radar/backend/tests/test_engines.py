@@ -185,3 +185,22 @@ def test_narrator_batches_once_and_feeds_the_score():
         assert L.ai["meme_score"] == 10 and len(L.ai["take"]) == 120 and L.mint in sn.dirty
         assert any(e["engine"] == "claude" for e in feed.recent())
     asyncio.run(run())
+
+
+def test_x_tweet_scoring_terms_and_batches():
+    from radar.xradar import XRadar, coinable_terms, final_score, heuristic_score
+    terms = coinable_terms('My new puppy is named "Floki Jr" — say hi to Zorblax #MarsDog https://t.co/x', {"animal": ["puppy"]})
+    assert {"Floki Jr", "Zorblax", "MarsDog", "puppy"} <= set(terms)
+    assert "Say" not in terms and len(terms) <= 8
+    hot, v = heuristic_score("Zorblax 🐕", "S", True, {"like_count": 6000, "retweet_count": 1000}, 2, 0, 0, 2)
+    meh, _ = heuristic_score("@someone thanks for the update on the market today, great discussion everyone", "B", False, {}, 30, 0, 0, 0)
+    assert hot > 75 and meh < 20 and v > 1000
+    assert final_score(60, {"meme_potential": 9, "coinable": True}, 2) > final_score(60, {"meme_potential": 1, "coinable": False}, 0)
+    xr = XRadar.__new__(XRadar)
+    xr.roster = {f"h{i}": {"handle": f"Handle{i:03d}", "tier": "A", "replies": 0} for i in range(60)}
+    xr.roster["e"] = {"handle": "elonmusk", "tier": "S", "replies": 1}
+    b = xr.batches()
+    assert all(len(q) <= 482 for qs in b.values() for q, _ in qs)
+    assert sum(len(h) for q, h in b["A"]) == 60 and len(b["A"]) >= 2
+    assert b["S"][0][0] == "(from:elonmusk) -is:retweet"                 # replies kept for accounts whose replies matter
+    assert all(q.endswith("-is:reply") for q, _ in b["A"])

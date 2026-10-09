@@ -83,6 +83,7 @@ class Launch:
     intel: dict[str, Any] | None = None                                # on-chain scan (Helius): fresh wallets, insider clusters, chain top-10
     ai: dict[str, Any] | None = None                                   # Claude's batch read: narrative, meme score, red flags
     yt: dict[str, Any] | None = None                                   # YouTube videos mentioning the coin (last 48h)
+    x: dict[str, Any] | None = None                                    # the tweet this launch was spawned from (X Radar coin race)
 
 
 def _slope(pts: list[tuple[float, float]]) -> float:
@@ -274,6 +275,15 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
     if bparts:
         det.append({"key": "buzz", "label": "Buzz & narrative", "points": round(bpts, 1), "good": bpts > 0, "detail": " · ".join(bparts)})
 
+    # 9 · X narrative: launched off a tweet Radar is tracking ----------------------------------------------------------
+    xr = L.x or {}
+    if xr:
+        xpts = min(22.0, xr.get("score", 0) / 4.5) + (6 if xr.get("rank") == 1 else 2 if (xr.get("rank") or 9) <= 3 else 0) \
+            + {"S": 6, "A": 3}.get(xr.get("tier"), 0)
+        det.append({"key": "x", "label": "X narrative", "points": round(xpts, 1), "good": True, "value": xr.get("rank"),
+                    "detail": f"coin #{xr.get('rank')} off @{xr.get('handle')}'s tweet ({xr.get('delay_s', 0) // 60:.0f}m "
+                              f"{xr.get('delay_s', 0) % 60:.0f}s after) · “{(xr.get('text') or '')[:80]}”"})
+
     score = max(0.0, min(100.0, sum(x["points"] for x in det)))
     hard = {"bundled launch", "dev dumped", "serial launcher, nothing graduated", "insider cluster"} & set(flags)
     enough = len(trades) >= MIN_TRADES_FOR_CALL and len(L.buyers) >= MIN_BUYERS_FOR_CALL and age >= MIN_AGE_FOR_CALL
@@ -295,7 +305,7 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
     }
     # trader-terminal metrics + the two-axis read (upside vs risk) + every strategy this launch matches right now
     mx = sm.compute(L, now, sol_usd, {"social": {"authors": soc["authors"], "engagement": soc.get("engagement", 0)} if soc else {},
-                                      "yt": yt})
+                                      "yt": yt, "x": xr})
     mx["net_sol_1m"] = res["net_sol_1m"]
     up, risk, why_up, why_risk = sm.upside_risk(res, mx)
     res.update(metrics=mx, upside=up, risk=risk, why_up=why_up, why_risk=why_risk,
@@ -306,7 +316,8 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
                intel=({k: it.get(k) for k in ("scanned", "fresh_pct", "bots", "chain_top10_pct", "dev_fresh", "clusters", "ts")}
                       | {"insiders": len(it.get("insiders") or []), "fresh": len(it.get("fresh") or [])}) if it else None,
                ai={k: ai.get(k) for k in ("narrative", "category", "meme_score", "derivative", "red_flags", "take")} if ai else None,
-               yt=({"videos": yt.get("videos"), "views": yt.get("views"), "top": yt.get("top")}) if yt.get("videos") else None)
+               yt=({"videos": yt.get("videos"), "views": yt.get("views"), "top": yt.get("top")}) if yt.get("videos") else None,
+               x={k: xr.get(k) for k in ("handle", "tier", "score", "rank", "delay_s", "url", "text", "narrative")} if xr else None)
     row = flat(res)
     res["strategies"] = [st["id"] for st in ctx.get("strategies", []) if sm.matches(st["rules"], row, st.get("mode", "all"))]
     return res

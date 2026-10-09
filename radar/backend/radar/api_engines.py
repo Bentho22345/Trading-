@@ -38,10 +38,12 @@ async def engines_status() -> dict[str, Any]:
                                  "channels_followed": S.playbook.channels_followed}},
         "dune": {"configured": conn["dune"], "queries": await S.traders.dune_queries()},
         "telegram": {"configured": conn["telegram_bot"], **S.tgbot.snapshot()},
+        "x": await S.xradar.status(),
         "snipe": {"tracking": len(S.sniper.launches), "calls_24h": len(S.sniper.calls),
                   "with_intel": sum(1 for L in S.sniper.launches.values() if L.intel),
                   "with_ai": sum(1 for L in S.sniper.launches.values() if L.ai),
-                  "with_yt": sum(1 for L in S.sniper.launches.values() if L.yt)},
+                  "with_yt": sum(1 for L in S.sniper.launches.values() if L.yt),
+                  "with_x": sum(1 for L in S.sniper.launches.values() if L.x)},
         "counts": dict(feed.COUNTS), "as_of": time.time(),
     }
 

@@ -56,7 +56,8 @@ def stack(tmp_path_factory):
            "RADAR_DISABLE_FIREHOSE": "1", "TELEGRAM_API_URL": f"http://127.0.0.1:{up_http}/tg", "SIGNAL_EVERY": "2",
            "TRADER_COMPUTE_EVERY": "2", "TRADER_HARVEST_EVERY": "0.3", "TRADER_GECKO_RPM": "600",
            "HELIUS_RPC_URL": f"http://127.0.0.1:{up_http}/helius", "YOUTUBE_API_URL": f"http://127.0.0.1:{up_http}/yt",
-           "DUNE_API_URL": f"http://127.0.0.1:{up_http}/dune", "YT_BUZZ_DELAY": "1", "YT_BUZZ_EVERY": "4"}
+           "DUNE_API_URL": f"http://127.0.0.1:{up_http}/dune", "YT_BUZZ_DELAY": "1", "YT_BUZZ_EVERY": "4",
+           "X_API_URL": f"http://127.0.0.1:{up_http}/x/2", "X_PROFILE_EVERY": "4", "X_FOLLOW_EVERY": "4"}
     app = subprocess.Popen([sys.executable, "-m", "radar"], cwd=ROOT, env=env)
     wait_http(f"http://127.0.0.1:{up_http}/dex/token-profiles/latest/v1")
     _UPSTREAM.append(f"127.0.0.1:{up_http}")
@@ -440,3 +441,65 @@ def test_engines_helius_youtube_dune_telegram(stack):
     time.sleep(2.5)
     assert not any(x.get("chat_id") == "999" for x in httpx.get(f"http://{fake}/tg/log").json())
     assert httpx.get(f"http://{stack}/api/engines").json()["telegram"]["push_mode"] == "balanced"
+
+
+def test_x_radar_tweets_races_callers_watchers(stack):
+    """X: a top account's tweet is scored, the coins launched off it are found and boosted, calls are logged,
+    a profile rename and a new follow are caught, and Telegram gets the big ones."""
+    fake = stack_upstream()
+    httpx.post(f"http://{stack}/api/connectors/telegram_bot", json={"values": {"bot_token": "123:abc", "chat_id": "555123"}})
+    n0 = len(httpx.get(f"http://{fake}/tg/log").json())
+    httpx.post(f"http://{stack}/api/connectors/x", json={"values": {"bearer_token": "x-test"}})
+    st = httpx.get(f"http://{stack}/api/x/status").json()
+    assert st["accounts"] >= 70 and st["tiers"]["S"] >= 10
+    tw = None
+    for _ in range(60):
+        rows = httpx.get(f"http://{stack}/api/x/tweets").json()
+        tw = next((t for t in rows if t["id"] == "9001"), None)
+        if tw:
+            break
+        time.sleep(0.5)
+    assert tw and tw["handle"] == "elonmusk" and tw["tier"] == "S" and "Zorblax" in tw["terms"] and tw["media_url"]
+    assert tw["score"] >= 50 and tw["velocity"] > 0
+    race = None
+    for _ in range(80):
+        race = next((t for t in httpx.get(f"http://{stack}/api/x/races").json() if t["id"] == "9001" and len(t["coins"]) >= 3), None)
+        if race:
+            break
+        time.sleep(0.5)
+    assert race, "no coin race off the tweet"
+    c = race["coins"][0]
+    assert c["symbol"] == "ZORBLAX" and c["rank"] == 1 and c["delay_s"] >= 0
+    one = httpx.get(f"http://{stack}/api/snipe/{c['mint']}").json()
+    assert one and any(d["key"] == "x" for d in one["detectors"]) and one["x"]["handle"] == "elonmusk"
+    assert one["metrics"]["x_spawn_rank"] == 1 and one["metrics"]["x_top_account"] is True
+    ev = []
+    for _ in range(40):
+        ev = httpx.get(f"http://{stack}/api/x/events").json()
+        if {"profile", "follow"} <= {e["kind"] for e in ev}:
+            break
+        time.sleep(0.5)
+    assert any(e["kind"] == "profile" and "Zorblax Maximus" in e["detail"] for e in ev), ev
+    assert any(e["kind"] == "follow" and "ZorpCoinSol" in e["detail"] for e in ev), ev
+    texts = []
+    for _ in range(40):
+        texts = [x["text"] for x in httpx.get(f"http://{fake}/tg/log").json()[n0:]]
+        if any("Tweet race" in t for t in texts) and any("@elonmusk" in t for t in texts):
+            break
+        time.sleep(0.5)
+    assert any("Tweet race" in t for t in texts) and any("changed their profile" in t for t in texts), texts
+    feed = httpx.get(f"http://{stack}/api/intel", params={"engine": "x"}).json()
+    assert {"race", "profile", "follow"} <= {e["kind"] for e in feed}
+    assert httpx.get(f"http://{stack}/api/x/status").json()["spent_usd"] > 0
+    # roster management
+    assert httpx.post(f"http://{stack}/api/x/accounts", json={"handle": "https://x.com/SomeCaller", "tier": "a"}).json()["tier"] == "A"
+    assert httpx.post(f"http://{stack}/api/x/accounts", json={"handle": "not a handle!"}).status_code == 400
+    httpx.delete(f"http://{stack}/api/x/accounts/SomeCaller")
+    assert not any(a["handle"] == "SomeCaller" for a in httpx.get(f"http://{stack}/api/x/accounts").json())
+    # /x in Telegram
+    httpx.post(f"http://{fake}/tg/push_update", json={"text": "/x"})
+    for _ in range(30):
+        if any("Tweet radar" in x["text"] for x in httpx.get(f"http://{fake}/tg/log").json()[n0:]):
+            break
+        time.sleep(0.3)
+    assert any("Tweet radar" in x["text"] and "Zorblax" in x["text"] for x in httpx.get(f"http://{fake}/tg/log").json()[n0:])

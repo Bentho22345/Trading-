@@ -62,6 +62,7 @@ class State:
     ytbuzz: Any
     narrator: Any
     tgbot: Any
+    xradar: Any
 
 
 S = State()
@@ -156,6 +157,10 @@ async def lifespan(app: FastAPI):
     S.sniper.ytbuzz = S.ytbuzz
     S.narrator = Narrator(S.db, S.ai, S.sniper)
     S.tgbot = TelegramBot(S.db, S.cfg, S.connectors, S.alerts, S.sniper)
+    from .xradar import XRadar
+    S.xradar = XRadar(S.db, S.cfg, S.connectors, S.social, S.sniper, S.alerts, S.ai, S.tracker)
+    S.tracker.hooks["launch"].append(S.xradar.on_launch)
+    S.tgbot.xradar = S.xradar
     from .api_engines import engines_status, load_budgets
     S.tgbot.status_fn = engines_status
     await load_budgets()
@@ -193,7 +198,7 @@ async def lifespan(app: FastAPI):
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
                 S.onchain.run(), S.ytbuzz.loop(), S.narrator.loop(), S.tgbot.run(), S.tgbot.push_loop(), S.traders.dune_loop(),
-                soc.XSource(S.social.ingest, S.cfg, lambda: vals("x"), S.db).run(),
+                S.xradar.run(), S.xradar.grade_loop(),       # X Radar replaces the old VIP poller (same budget, far more accounts)
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
                 soc.YouTubeSource(S.social.ingest, lambda: vals("youtube")).run(),
@@ -612,10 +617,12 @@ async def source_items(source_id: int | None = None, limit: int = 100) -> list[d
 from .api2 import router as _router2  # noqa: E402
 from .api_news import router as _router_news  # noqa: E402
 from .api_engines import router as _router_engines  # noqa: E402
+from .api_x import router as _router_x  # noqa: E402
 
 app.include_router(_router2)
 app.include_router(_router_news)
 app.include_router(_router_engines)
+app.include_router(_router_x)
 
 
 # ---------------- live socket ----------------

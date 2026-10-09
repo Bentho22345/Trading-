@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Terminal } from '@/components/home/Terminal';
+import { TweetRadarHero } from '@/components/x';
 import { DEFAULT_FILTERS, SnipeCard, useSnipe } from '@/components/snipe';
 import { Icon } from '@/components/Icon';
 import { AnimatePresence, AreaSpark, Chips, motion } from '@/components/motion';
@@ -23,6 +24,7 @@ export default function Home() {
   });
   return (
     <div>
+      <TweetRadarHero />
       <Hero s={s} feed={feed} />
       <SnipeSpotlight />
       <EnginesStrip />

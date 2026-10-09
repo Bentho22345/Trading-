@@ -30,6 +30,7 @@ export type SnipeRow = {
   strategies?: string[]; links?: { twitter?: string; telegram?: string; website?: string }; description?: string | null; image?: string | null;
   alpha: { wallet: string; rank?: number | null; label?: string | null; ts: number; sol: number }[]; called?: boolean;
   intel?: Intel | null; ai?: AiRead | null; yt?: { videos: number; views: number; top?: string } | null;
+  x?: { handle: string; tier: string; score: number; rank: number; delay_s: number; url: string; text: string; narrative?: string | null } | null;
 };
 export type SnipeFilters = {
   minScore: number; tiers: string[]; hideBundled: boolean; alphaOnly: boolean; provenDev: boolean; maxAgeMin: number;
@@ -43,7 +44,7 @@ export const TIER_STYLE: Record<string, string> = {
   PASS: 'bg-white/5 text-white/45',
   TRAP: 'bg-down/15 text-down ring-1 ring-down/40',
 };
-export const DET_ICON: Record<string, string> = { alpha: 'trophy', velocity: 'rocket', organic: 'social', dev: 'wallet', meta: 'narrative', social: 'signal', onchain: 'link', buzz: 'flame' };
+export const DET_ICON: Record<string, string> = { alpha: 'trophy', velocity: 'rocket', organic: 'social', dev: 'wallet', meta: 'narrative', social: 'signal', onchain: 'link', buzz: 'flame', x: 'x' };
 export const APPETITES: { value: Appetite; label: string; sub: string }[] = [
   { value: 'safe', label: 'Safe', sub: 'Risk counts in full' },
   { value: 'balanced', label: 'Balanced', sub: 'Upside first, risk still bites' },
@@ -222,13 +223,18 @@ function MetricStrip({ m }: { m: Metrics }) {
 
 /** What the engines behind your keys found: on-chain insiders (Helius), YouTube buzz, Claude's read. */
 export function IntelStrip({ r, full = false }: { r: SnipeRow; full?: boolean }) {
-  const m = r.metrics, it = r.intel, ai = r.ai, yt = r.yt;
-  if (!it && !ai && !yt) return null;
+  const m = r.metrics, it = r.intel, ai = r.ai, yt = r.yt, xr = r.x;
+  if (!it && !ai && !yt && !xr) return null;
   const chip = (k: string, body: ReactNode, tone: 'up' | 'down' | 'warn' | 'accent' | 'mute', title: string) => (
     <span key={k} title={title} className={`flex items-center gap-1 rounded-md px-1.5 py-[1px] text-[10px] font-semibold ${
       { up: 'bg-up/10 text-up', down: 'bg-down/10 text-down', warn: 'bg-warn/10 text-warn', accent: 'bg-accent/15 text-accent', mute: 'bg-white/[0.05] text-white/60' }[tone]}`}>{body}</span>
   );
   const chips: ReactNode[] = [];
+  if (xr) chips.push(
+    <a key="x" href={xr.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title={`“${xr.text}”`}
+      className="flex items-center gap-1 rounded-md bg-flash/15 px-1.5 py-[1px] text-[10px] font-bold text-flash hover:bg-flash/25">
+      🐦 #{xr.rank} off @{xr.handle} · +{xr.delay_s < 60 ? `${xr.delay_s}s` : `${Math.round(xr.delay_s / 60)}m`}
+    </a>);
   if (it) {
     if (it.insiders) chips.push(chip('ins', <>🧬 {it.insiders} insiders · {(m?.insider_hold_pct ?? 0).toFixed(0)}%</>, (m?.insider_hold_pct ?? 0) >= 10 ? 'down' : 'warn',
       `On-chain: ${it.insiders} early buyers share a funding wallet${(it.clusters || []).some((c) => c.link !== 'shared funder') ? ' tied to the dev' : ''}; they hold ${(m?.insider_hold_pct ?? 0).toFixed(1)}% now`));
@@ -309,7 +315,7 @@ export const SnipeCard = memo(function SnipeCard({ r, now, dense = false, select
       </div>
       <div className="mt-2"><CurveBar r={r} /></div>
       {r.metrics && <div className="mt-2"><MetricStrip m={r.metrics} /></div>}
-      {(r.intel || r.ai || r.yt) && <div className="mt-1.5"><IntelStrip r={r} full={!dense} /></div>}
+      {(r.intel || r.ai || r.yt || r.x) && <div className="mt-1.5"><IntelStrip r={r} full={!dense} /></div>}
       {!dense && r.description && !r.ai?.take && <p className="mt-1.5 line-clamp-1 text-[11px] italic text-white/45" title={r.description}>“{r.description}”</p>}
       {(fired.length > 0 || (!!r.strategies?.length && !!names)) && (
         <div className="mt-2 flex flex-wrap gap-1">
