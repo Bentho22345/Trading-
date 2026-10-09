@@ -144,7 +144,7 @@ async def lifespan(app: FastAPI):
         if cid == "coingecko":
             S.tracker.market.set_coingecko_key(vals.get("api_key"))
         elif cid == "anthropic":
-            S.ai.set_key(vals.get("api_key"))
+            S.ai.set_key(vals.get("api_key"), vals.get("workspace_id"))
         elif cid == "helius":
             S.tracker.extra.set_helius(vals.get("api_key"))
     S.connectors.listeners.append(on_change)

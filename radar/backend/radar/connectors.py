@@ -67,7 +67,10 @@ def _need(r: httpx.Response, ok: str) -> str:
 
 
 async def t_anthropic(v: dict[str, str]) -> str:
-    r = await _get("https://api.anthropic.com/v1/models", headers={"x-api-key": v["api_key"], "anthropic-version": "2023-06-01"})
+    h = {"x-api-key": v["api_key"], "anthropic-version": "2023-06-01"}
+    if v.get("workspace_id"):   # org-level keys that aren't scoped to a workspace must name one on every request
+        h["anthropic-workspace-id"] = v["workspace_id"].strip()
+    r = await _get("https://api.anthropic.com/v1/models", headers=h)
     return _need(r, f"Key valid · {len(r.json().get('data', []))} models available")
 
 
@@ -195,8 +198,12 @@ CATALOG: list[Connector] = [
     # ---- need you ----
     Connector("anthropic", "Anthropic (Claude API)", "AI", "key", "Claude Haiku classifies posts into narratives; Sonnet writes signal reasons and the daily brief.",
               "Narrative extraction, signal write-ups, AI brief, Ask Radar", 3, "https://console.anthropic.com/settings/keys",
-              "Console → API Keys → Create key. Set a monthly spend limit in the console too.", "pay per use (cents/day at Haiku rates)",
-              [Field("api_key", "API key", env="ANTHROPIC_API_KEY", placeholder="sk-ant-...")], t_anthropic, "anthropic"),
+              "Console → pick a workspace → API Keys → Create key (a key made inside a workspace needs nothing else). "
+              "Got “not scoped to a workspace”? Paste the workspace ID (Console → Settings → Workspaces) below. Set a monthly spend limit too.",
+              "pay per use (cents/day at Haiku rates)",
+              [Field("api_key", "API key", env="ANTHROPIC_API_KEY", placeholder="sk-ant-..."),
+               Field("workspace_id", "Workspace ID (only for org-level keys)", secret=False, env="ANTHROPIC_WORKSPACE_ID",
+                     placeholder="wrkspc_...", optional=True)], t_anthropic, "anthropic"),
     Connector("x", "X (Twitter) API", "Social", "key", "VIP watchlist (Trump, Musk, CZ, KOLs, news outlets) + cashtag/keyword search. The #1 catalyst source.",
               "FLASH alerts, narrative detection", 3, "https://developer.x.com/en/portal/dashboard",
               "Developer portal → create a Project & App → Keys and tokens → Bearer Token. Buy pay-per-use credits; Radar shows $ spent today and enforces your daily cap.",

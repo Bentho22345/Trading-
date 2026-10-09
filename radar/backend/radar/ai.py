@@ -59,9 +59,11 @@ class AI:
         self.client: anthropic.AsyncAnthropic | None = None
         self.daily_budget = float(os.environ.get("AI_DAILY_BUDGET_USD", "3"))
 
-    def set_key(self, key: str | None) -> None:
+    def set_key(self, key: str | None, workspace_id: str | None = None) -> None:
         self.key = key or None
-        self.client = anthropic.AsyncAnthropic(api_key=key) if key else None
+        # an org-level key that isn't scoped to a workspace must send the workspace on every request
+        headers = {"anthropic-workspace-id": workspace_id.strip()} if workspace_id and workspace_id.strip() else None
+        self.client = anthropic.AsyncAnthropic(api_key=key, default_headers=headers) if key else None
 
     @property
     def enabled(self) -> bool:
