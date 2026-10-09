@@ -197,7 +197,7 @@ function Podium({ s }: { s: any }) {
   );
 }
 
-const SPOT_FILTERS = { ...DEFAULT_FILTERS, tiers: ['SNIPE', 'WATCH'] };
+const SPOT_FILTERS = { ...DEFAULT_FILTERS, appetite: 'balanced' as const };
 
 function SnipeSpotlight() {
   const { list, meta, now } = useSnipe(SPOT_FILTERS);

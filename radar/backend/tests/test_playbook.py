@@ -81,3 +81,9 @@ def test_consensus_is_weighted_median_with_support():
     top = next(x for x in out if x["metric"] == "top10_pct")
     assert top["support"] == 4 and top["value"] in (25, 30)
     assert not any(x["metric"] == "dev_sold" for x in out)       # only one of 5 sources: below the support bar
+
+
+def test_parser_reads_avoid_and_red_flag_phrasing():
+    a = {(r["metric"], r["op"]): r["value"] for r in heuristic_rules("Avoid tokens where bundled wallets control more than 10% of the supply.")}
+    b = {(r["metric"], r["op"]): r["value"] for r in heuristic_rules("Multiple sniper wallets holding over 20% combined is a red flag.")}
+    assert a[("bundle_hold_pct", "<=")] == 10 and b[("snipers_hold_pct", "<=")] == 20

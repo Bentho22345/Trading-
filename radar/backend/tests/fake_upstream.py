@@ -158,10 +158,12 @@ async def pump_ws(ws):
             return
         for i in range(30):
             await asyncio.sleep(0.9)
-            vsol += random.uniform(0.6, 1.6)
+            sol = round(random.uniform(0.3, 1.8), 3)
+            side = "buy" if i % 6 else "sell"
+            vsol += sol if side == "buy" else -sol      # the curve moves by exactly the SOL traded, like the real one
             who = WALLETS[0] if i == 3 else f"Fan{n}x{i}{'z' * 32}"[:40]
-            await ws.send(json.dumps({**fx.PUMP_TRADE, "mint": mint, "signature": f"r{n}{i}", "txType": "buy" if i % 6 else "sell",
-                                      "traderPublicKey": who, "solAmount": round(random.uniform(0.1, 1.8), 3),
+            await ws.send(json.dumps({**fx.PUMP_TRADE, "mint": mint, "signature": f"r{n}{i}", "txType": side,
+                                      "traderPublicKey": who, "solAmount": sol,
                                       "tokenAmount": random.uniform(1e6, 2e7), "vSolInBondingCurve": vsol, "marketCapSol": vsol * 0.97}))
 
     async def writer():

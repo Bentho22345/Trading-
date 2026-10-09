@@ -18,6 +18,7 @@ export const LINKS = [
   { href: '/narratives', label: 'Narratives', key: 'n', icon: 'narrative', primary: true },
   { href: '/signals', label: 'Signals', key: 's', icon: 'signal', primary: true },
   { href: '/proof', label: 'Proof', key: 'v', icon: 'check' },
+  { href: '/playbook', label: 'Playbook', key: 'y', icon: 'narrative' },
   { href: '/news', label: 'News', key: 'e', icon: 'news' },
   { href: '/social', label: 'Social', key: 'f', icon: 'social' },
   { href: '/scorecard', label: 'Scorecard', key: 'p', icon: 'score' },

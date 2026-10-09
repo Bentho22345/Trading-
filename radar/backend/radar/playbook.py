@@ -108,9 +108,23 @@ FLAGS: list[tuple[str, dict[str, Any]]] = [
 ]
 
 
+AVOID_RX = re.compile(r"(?:avoid|red flag|skip|stay away)[^.\n]{0,70}?(?:more than|over|above|>)\s*(\d+(?:\.\d+)?)\s*%")
+AVOID_METRIC = [("bundl", "bundle_hold_pct"), ("snip", "snipers_hold_pct"), ("top 10", "top10_pct"), ("top10", "top10_pct"), ("dev", "dev_hold_pct")]
+
+
 def heuristic_rules(text: str) -> list[dict[str, Any]]:
     low = (text or "").lower()
     out: dict[tuple[str, str], dict[str, Any]] = {}
+    # "avoid tokens where bundled wallets control more than 10%" / "snipers over 20% is a red flag" -> upper limits
+    for m in AVOID_RX.finditer(low):
+        span = m.group(0)
+        metric = next((mt for kw, mt in AVOID_METRIC if kw in span), None)
+        if metric:
+            out[(metric, "<=")] = {**R(metric, "<=", float(m.group(1))), "why": span.strip()}
+    for m in re.finditer(r"(\w[\w\s]{0,30}?)\s+(?:holding|hold|control|own)\w*\s+(?:more than|over|above)\s*(\d+(?:\.\d+)?)\s*%[^.\n]{0,30}?red flag", low):
+        metric = next((mt for kw, mt in AVOID_METRIC if kw in m.group(1)), None)
+        if metric:
+            out[(metric, "<=")] = {**R(metric, "<=", float(m.group(2))), "why": m.group(0).strip()}
     for rx, metric, op in PATTERNS:
         for m in re.finditer(rx, low):
             v = float(m.group(1))

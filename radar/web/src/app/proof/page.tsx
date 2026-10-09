@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Icon } from '@/components/Icon';
 import { Chips } from '@/components/motion';
-import { DET_ICON } from '@/components/snipe';
+import { DET_ICON, useStrategies } from '@/components/snipe';
 import { TokenIcon } from '@/components/ui';
 import { CountUp, Reveal, Ring } from '@/components/whoop';
 import { api } from '@/lib/api';
@@ -20,6 +20,7 @@ export default function ProofPage() {
   const now = useNow(5000);
   useEffect(() => { let on = true; const l = () => api(`/api/snipe/proof?hours=${w}`).then((r) => on && setD(r)).catch(() => {}); l(); const t = setInterval(l, 20000); return () => { on = false; clearInterval(t); }; }, [w]);
   const s = d?.stats;
+  const { list: strategies } = useStrategies();
   const lift = s?.call_graduation_pct != null && s?.base_graduation_pct ? s.call_graduation_pct / s.base_graduation_pct : null;
 
   return (
@@ -66,6 +67,31 @@ export default function ProofPage() {
           </div>
         </Reveal>
       )}
+
+      <Reveal className="mb-12">
+        <div className="eyebrow mb-4">Strategies · every first match graded (7 days)</div>
+        <div className="glass overflow-x-auto rounded-[28px]">
+          <table className="data-table w-full min-w-[820px] text-[13px]">
+            <thead className="text-left text-white/45 [&>tr>th]:px-4 [&>tr>th]:py-3">
+              <tr><th>Strategy</th><th className="text-right">Matches</th><th className="text-right">Peaked ≥ 2×</th><th className="text-right">≥ 5×</th>
+                <th className="text-right">Up 1h later</th><th className="text-right">Graduated</th><th className="text-right">Median peak</th></tr>
+            </thead>
+            <tbody className="num [&>tr>td]:px-4 [&>tr>td]:py-3">
+              {[...strategies].sort((a, b) => (b.stats.hit_2x_pct ?? -1) - (a.stats.hit_2x_pct ?? -1)).map((st) => (
+                <tr key={st.id} className="border-t border-white/[0.05]">
+                  <td className="font-sans"><b>{st.source === 'playbook' ? '✦ ' : st.source === 'custom' ? '★ ' : ''}{st.name}</b><div className="text-[11px] text-white/40">{st.source === 'preset' ? 'trader playbook' : st.source === 'playbook' ? 'crowd consensus' : 'yours'}</div></td>
+                  <td className="text-right">{st.stats.hits}</td>
+                  <td className={`text-right font-semibold ${(st.stats.hit_2x_pct ?? 0) >= 30 ? 'text-up' : ''}`}>{st.stats.hit_2x_pct != null ? `${st.stats.hit_2x_pct}%` : '—'}</td>
+                  <td className="text-right">{st.stats.hit_5x_pct != null ? `${st.stats.hit_5x_pct}%` : '—'}</td>
+                  <td className="text-right">{st.stats.up_1h_pct != null ? `${st.stats.up_1h_pct}%` : '—'}</td>
+                  <td className="text-right">{st.stats.graduated_pct != null ? `${st.stats.graduated_pct}%` : '—'}</td>
+                  <td className="text-right">{st.stats.median_peak_x ? `${st.stats.median_peak_x}×` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Reveal>
 
       <section className="glass overflow-hidden rounded-[28px]">
         <header className="flex items-center gap-3 border-b border-white/[0.06] px-6 py-4">

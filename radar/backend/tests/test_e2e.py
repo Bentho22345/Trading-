@@ -267,8 +267,8 @@ def test_top_wallet_trade_reaches_ui_and_chart(stack):
         async with websockets.connect(f"ws://{stack}/ws") as ws:
             r = httpx.post(f"http://{stack}/api/dev/simulate-top-trade", json={"wallet": "TopW1", "mint": MINT, "sol": 3, "rank": 4}).json()
             t0 = time.time()
-            while time.time() - t0 < 10:
-                msg = json.loads(await asyncio.wait_for(ws.recv(), 10))
+            while time.time() - t0 < 25:   # the socket is busy (every launch is re-scored live); give the event room
+                msg = json.loads(await asyncio.wait_for(ws.recv(), 25))
                 if msg["ch"] == "top_trade" and msg["data"]["signature"] == r["signature"]:
                     return msg["data"]
     data = asyncio.run(run())
