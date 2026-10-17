@@ -155,7 +155,7 @@ function buildVerdict(findings: Finding[], consistent: MetricDiff[]): { headline
     };
   }
   const top = findings[0];
-  const firstSentence = top.what.split(/(?<=\.)\s|—/)[0].replace(/\.$/, '');
+  const firstSentence = top.what.split(/(?<=\.)\s|—/)[0].trim().replace(/\.$/, '');
   const roots = findings.filter((f) => f.isRoot);
   const symptoms = findings.filter((f) => !f.isRoot);
   const parts: string[] = [];

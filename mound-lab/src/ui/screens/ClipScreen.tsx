@@ -236,7 +236,7 @@ function Breakdown({ clip }: { clip: RuntimeClip }) {
   return (
     <div className="stack">
       {a.warnings.map((w) => <div key={w} className="notice warn small">{w}</div>)}
-      <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 3fr) minmax(280px, 2fr)' }}>
+      <div className="grid clip-grid">
         <div>
           <Stage
             label={`Pitch video frame ${frame} with skeleton overlay`}

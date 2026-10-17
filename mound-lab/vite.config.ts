@@ -6,5 +6,5 @@ export default defineConfig({
   plugins: [react()],
   worker: { format: 'iife' },
   build: { target: 'es2022', chunkSizeWarningLimit: 1500 },
-  test: { environment: 'node', include: ['tests/unit/**/*.test.ts'] },
+  test: { environment: 'node', include: ['tests/unit/**/*.test.ts', 'tests/validation/**/*.test.ts'] },
 } as never);

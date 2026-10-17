@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore, type RuntimeClip } from '../../state/store';
 import { compareAnalyses, compareGroups, fmtDelta, pooledVariability, type Comparison, type Finding } from '../../core/compare';
 import { CAUSES, METRICS, METRIC_BY_KEY, PHASE_LABELS, type Phase } from '../../core/catalog';
@@ -6,15 +6,16 @@ import { makeSync, type SyncMode } from '../../core/sync';
 import { EVENT_CODES, EVENT_LABELS, JOINTS, resolvedEvents, type Analysis, type EventCode } from '../../core/types';
 import { SERIES_INFO } from '../../core/metrics';
 import { Stage } from '../components/Stage';
-import { Timeline, TransportBar, type TimelineEvent } from '../components/Timeline';
+import { EventButtons, Timeline, TransportBar, type TimelineEvent } from '../components/Timeline';
 import { usePlayback, useKeys } from '../components/playback';
 import { LineChart, AngleAngle } from '../components/Chart';
 import { ClipThumb, Disclaimer, fmtMetric, StatusPill, TierBadge, useCssColors, useUnits } from '../components/common';
 import { arrow, compose, drawSkeleton, fit, label, normalizeBtoA, pt, type Affine } from '../draw';
 import { DRILL_BY_ID } from '../../data/drills';
-import { AICoach } from '../components/AICoach';
 import { go } from '../router';
 import { exportComparisonCsv, recordComposite } from '../export';
+
+const AICoach = lazy(() => import('../components/AICoach').then((m) => ({ default: m.AICoach })));
 
 const PHASE_EVENT: Record<Phase, EventCode> = { windup: 'PKH', stride: 'FS', cocking: 'MER', release: 'BR', follow: 'MIR' };
 
@@ -249,8 +250,11 @@ function CompareView({ A, B, group }: { A: RuntimeClip; B: RuntimeClip; group: b
         </div>
         <div className="sticky-bottom">
           <Timeline duration={durA} pb={pb} events={eventsTimeline} />
-          <TransportBar pb={pb} fps={a.fps} eventTimes={Object.fromEntries(EVENT_CODES.map((k) => [k, evA[k] / a.fps]))} tour={tour} setTour={setTour}
-            extra={<button className="small" onClick={() => recordComposite(canvasRef.current, pb, durA)} title="Record the synced playback as a video file">Export video</button>} />
+          <TransportBar split pb={pb} fps={a.fps} eventTimes={Object.fromEntries(EVENT_CODES.map((k) => [k, evA[k] / a.fps]))} tour={tour} setTour={setTour} />
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          <EventButtons pb={pb} eventTimes={Object.fromEntries(EVENT_CODES.map((k) => [k, evA[k] / a.fps]))} />
+          <button className="small" onClick={() => recordComposite(canvasRef.current, pb, durA)} title="Record the synced playback as a video file">Export video</button>
         </div>
         <div className="table-scroll">
           <table className="metrics" style={{ marginTop: 8 }}>
@@ -268,7 +272,7 @@ function CompareView({ A, B, group }: { A: RuntimeClip; B: RuntimeClip; group: b
       <Report cmp={cmp} A={A} B={B} onShow={showMe} youth={youth} units={units} />
 
       <ChartsAB A={A} B={B} cursor={pb.t - evA.FS / a.fps} onSeek={(t) => { pb.pause(); pb.setT(t + evA.FS / a.fps); }} />
-      <AICoach A={A} B={B} cmp={cmp} />
+      <Suspense fallback={<div className="card muted small">Loading AI coach…</div>}><AICoach A={A} B={B} cmp={cmp} /></Suspense>
       <div className="row"><button onClick={() => go('/report')}>Open printable report (PDF)</button><button onClick={() => exportComparisonCsv(A, B, cmp)}>Export comparison CSV</button></div>
       <Disclaimer />
     </div>

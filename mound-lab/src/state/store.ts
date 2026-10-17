@@ -63,6 +63,7 @@ interface State {
 }
 
 const DEMO_ATHLETE = 'demo-athlete';
+let initPromise: Promise<void> | null = null;
 
 function demoClip(id: string, p: PitchParams, name: string, sessionId: string, daysAgo: number, tags: string[], starred = false): RuntimeClip {
   const s = generatePitch(p);
@@ -103,22 +104,31 @@ export const useStore = create<State>((set, get) => ({
   loaded: false,
 
   async init() {
-    if (get().loaded) return;
+    if (initPromise) return initPromise;
+    initPromise = (async () => {
     const demo = buildDemo();
     const clips: Record<string, RuntimeClip> = {};
     for (const c of demo) clips[c.id] = c;
     let recs: ClipRecord[] = [];
     try { recs = await db.clips.orderBy('createdAt').reverse().toArray(); } catch (e) { console.warn('IndexedDB unavailable', e); }
     for (const r of recs) clips[r.id] = { id: r.id, kind: 'video', record: r, status: 'new' };
-    set({ clips, order: [...recs.map((r) => r.id), ...demo.map((d) => d.id)], slotA: 'demo-good', slotB: 'demo-off', loaded: true });
+    // merge: clips imported while the library was loading must survive
+    set((s) => {
+      const merged = { ...clips, ...s.clips };
+      const order = [...new Set([...s.order, ...recs.map((r) => r.id), ...demo.map((d) => d.id)])];
+      return { clips: merged, order, slotA: s.slotA ?? 'demo-good', slotB: s.slotB ?? 'demo-off', loaded: true };
+    });
     try {
       if (!(await db.athletes.get(DEMO_ATHLETE))) await db.athletes.put({ id: DEMO_ATHLETE, name: 'Demo Pitcher (synthetic)', throws: 'R', heightCm: 185, birthYear: 2007, level: 'High school', createdAt: Date.now() });
     } catch { /* storage may be unavailable */ }
     // restore cached analyses in the background
     for (const r of recs) if (r.analyzedWith) void get().analyze(r.id).catch(() => undefined);
+    })();
+    return initPromise;
   },
 
   async importFiles(files, target) {
+    await get().init();
     const vids = files.filter((f) => VIDEO_RE.test(f.name) || f.type.startsWith('video/'));
     if (!vids.length) { get().toast('Those files are not videos. Drop MP4, MOV or WebM clips.', 'error'); return; }
     const ids: string[] = [];
