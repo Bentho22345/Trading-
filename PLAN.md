@@ -73,4 +73,4 @@ tests/e2e/       Playwright (drag-and-drop, frame stepping, event editing, demo 
 - Real-clip validation: none of the event or angle accuracy numbers have been measured on real pitchers yet (see VALIDATION.md). Thresholds are literature-based defaults until then.
 - A clip-quality score (blur, lighting, pitcher size, camera motion) as a single number.
 - Mirror, rotate and crop overrides in the clip header.
-- Bundle size: the main chunk is about 1 MB because of the Anthropic SDK. It should be lazy-loaded with the AI coach panel.
+- Bundle size: the main chunk is ~730 KB (React, Dexie, mp4box, the analysis core and the demo). The AI coach (Anthropic SDK) loads on demand.

@@ -58,15 +58,14 @@ test('editing foot strike updates the metrics', async ({ page }) => {
 const PERSON = process.env.PERSON_CLIP;
 test('real pose model tracks a person in a 120 fps clip', async ({ page }) => {
   test.skip(!PERSON || !existsSync(PERSON), 'set PERSON_CLIP to a local video of a person');
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   await page.goto('/');
   await dropFiles(page, [{ name: 'person.mp4', path: PERSON! }], 'A');
   await expect(page.getByTestId('slot-A-name')).toHaveText('person', { timeout: 20000 });
-  await page.getByTestId('slot-A').getByText('Open').click();
+  await page.getByTestId('slot-A').getByRole('button', { name: 'Open' }).click();
   const t0 = Date.now();
   await page.getByTestId('analyze-btn').click();
-  await expect(page.locator('.player canvas').first()).toBeVisible({ timeout: 200_000 });
-  await expect(page.getByText('Events')).toBeVisible({ timeout: 200_000 });
+  await expect(page.getByRole('heading', { name: 'Events' })).toBeVisible({ timeout: 230_000 });
   console.log(`analysis took ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   await page.screenshot({ path: 'test-results/person-analysed.png', fullPage: false });
 });

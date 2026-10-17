@@ -61,10 +61,25 @@ export function Timeline({ duration, pb, events, onSeek }: { duration: number; p
   );
 }
 
-export function TransportBar({ pb, fps, eventTimes, tour, setTour, extra }: {
-  pb: Playback; fps: number; eventTimes: Partial<Record<EventCode, number>>; tour?: boolean; setTour?: (v: boolean) => void; extra?: React.ReactNode;
-}) {
+export function EventButtons({ pb, eventTimes }: { pb: Playback; eventTimes: Partial<Record<EventCode, number>> }) {
   const jump = (k: EventCode) => { const t = eventTimes[k]; if (t !== undefined) { pb.pause(); pb.setT(t); } };
+  return (
+    <div className="event-buttons" role="group" aria-label="Jump to event">
+      {EVENT_CODES.map((k, i) => (
+        <button key={k} className="small" onClick={() => jump(k)} disabled={eventTimes[k] === undefined} title={`${EVENT_LABELS[k]} (${i + 1})`}>{k}</button>
+      ))}
+      <button className="small ghost" onClick={() => {
+        if (pb.loop) pb.setLoop(null);
+        else if (eventTimes.FS !== undefined && eventTimes.MIR !== undefined) pb.setLoop([Math.max(0, (eventTimes.PKH ?? eventTimes.FS) - 0.05), eventTimes.MIR + 0.05]);
+      }}>{pb.loop ? 'Loop off' : 'Loop leg lift → finish'}</button>
+    </div>
+  );
+}
+
+/** Play/step/speed controls. With `split`, the event buttons are rendered separately by the caller. */
+export function TransportBar({ pb, fps, eventTimes, tour, setTour, extra, split }: {
+  pb: Playback; fps: number; eventTimes: Partial<Record<EventCode, number>>; tour?: boolean; setTour?: (v: boolean) => void; extra?: React.ReactNode; split?: boolean;
+}) {
   return (
     <div className="stack" style={{ marginTop: 6 }}>
       <div className="controls">
@@ -75,18 +90,10 @@ export function TransportBar({ pb, fps, eventTimes, tour, setTour, extra }: {
           {SPEEDS.map((s) => <button key={s} aria-pressed={pb.speed === s} onClick={() => pb.setSpeed(s)}>{s}×</button>)}
         </div>
         <span className="mono small muted" aria-live="off">{(pb.t * 1000).toFixed(0)} ms · frame {Math.round(pb.t * fps)}</span>
-        {setTour && <label className="small row tight"><input type="checkbox" checked={!!tour} onChange={(e) => setTour(e.target.checked)} /> Pause at events</label>}
+        {setTour && <label className="small row tight hide-phone"><input type="checkbox" checked={!!tour} onChange={(e) => setTour(e.target.checked)} /> Pause at events</label>}
         {extra}
       </div>
-      <div className="event-buttons" role="group" aria-label="Jump to event">
-        {EVENT_CODES.map((k, i) => (
-          <button key={k} className="small" onClick={() => jump(k)} disabled={eventTimes[k] === undefined} title={`${EVENT_LABELS[k]} (${i + 1})`}>{k}</button>
-        ))}
-        <button className="small ghost" onClick={() => {
-          if (pb.loop) pb.setLoop(null);
-          else if (eventTimes.FS !== undefined && eventTimes.MIR !== undefined) pb.setLoop([Math.max(0, (eventTimes.PKH ?? eventTimes.FS) - 0.05), eventTimes.MIR + 0.05]);
-        }}>{pb.loop ? 'Loop off' : 'Loop leg lift → finish'}</button>
-      </div>
+      {!split && <EventButtons pb={pb} eventTimes={eventTimes} />}
     </div>
   );
 }

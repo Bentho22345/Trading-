@@ -11,7 +11,8 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "ci": "npm run typecheck && npm test && vite build && npm run e2e",
-    "postinstall": "node scripts/copy-wasm.mjs && node scripts/fetch-models.mjs"
+    "postinstall": "node scripts/copy-wasm.mjs && node scripts/fetch-models.mjs",
+    "validate": "vitest run --dir tests/validation --silent=false"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",

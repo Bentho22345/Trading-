@@ -237,7 +237,7 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: 0.85re
 
 /* metrics */
 table.metrics { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-table.metrics th { text-align: left; font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.78rem; color: var(--text-3); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); position: sticky; top: 56px; background: var(--surface); }
+table.metrics th { text-align: left; font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.78rem; color: var(--text-3); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
 table.metrics td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 table.metrics tr.na td { color: var(--text-3); }
 table.metrics td.v { font-family: var(--font-display); font-size: 1.05rem; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -304,3 +304,7 @@ details > summary { cursor: pointer; font-family: var(--font-display); text-tran
   .card { box-shadow: none; break-inside: avoid; }
   .page-break { break-before: page; }
 }
+
+@media (max-width: 700px) { .hide-phone { display: none !important; } .sticky-bottom .controls { gap: 4px; padding: 4px 0; } .sticky-bottom .timeline { height: 44px; } }
+.clip-grid { grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); }
+@media (max-width: 900px) { .clip-grid { grid-template-columns: minmax(0, 1fr); } }
