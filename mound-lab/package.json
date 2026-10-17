@@ -5,17 +5,22 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/copy-wasm.mjs && vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "e2e": "playwright test",
-    "ci": "npm run typecheck && npm test && vite build",
+    "ci": "npm run typecheck && npm test && vite build && npm run e2e",
     "postinstall": "node scripts/copy-wasm.mjs && node scripts/fetch-models.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@fontsource/barlow-condensed": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
     "@mediapipe/tasks-vision": "^1.1.1",
     "dexie": "^4.4.6",
+    "dexie-react-hooks": "^4.4.0",
     "mp4box": "^2.4.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -23,6 +28,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",

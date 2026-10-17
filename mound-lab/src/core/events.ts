@@ -105,6 +105,8 @@ export function detectEvents(b: Body, view: ViewClass): { events: Events; debug:
   let end = last;
   for (let i = mir + 1; i <= last; i++) if (hipSpeed[i] < 0.12) { end = i; break; }
 
+  if (rise < 0.04) warnings.push('No clear leg lift was found — this may not be a full pitching delivery, so the events (and every metric) may be wrong. Check the trim, or set the events by hand.');
+  if (wristSpeed[br] < 4) warnings.push('The throwing hand never moves fast — this may not be a throw, or it is a slow-motion clip played at real time (set "Clip speed").');
   if (br - fs < sec(0.05)) warnings.push('Foot strike and release are very close together — check the events.');
   if (fps < 60) warnings.push('Low frame rate: release and layback timing can be off by a frame or more (one frame ≈ ' + Math.round(1000 / fps) + ' ms).');
   return { events: { FM: fm, PKH: pkh, HS: hs, FS: fs, MER: mer, BR: br, MIR: mir, END: end }, debug: { leadAnkleSpeed, wristSpeed }, warnings };
