@@ -43,6 +43,7 @@ export interface FullAnalysis {
   analysis: Analysis;
   body: Body;
   cleaned: PoseTrack;
+  raw: PoseTrack;
 }
 
 export function analyzeTrack(raw: PoseTrack, opt: AnalyzeOptions = {}): FullAnalysis {
@@ -67,6 +68,7 @@ export function analyzeTrack(raw: PoseTrack, opt: AnalyzeOptions = {}): FullAnal
     analysis: { version: ANALYSIS_VERSION, view, viewAuto, fps: raw.fps, roles, scale, events, metrics, series, warnings },
     body,
     cleaned: track,
+    raw,
   };
 }
 
