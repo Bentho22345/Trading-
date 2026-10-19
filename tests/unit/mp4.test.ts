@@ -16,3 +16,12 @@ it('reads mp4 metadata and extracts every sample in range', async () => {
   expect(part.samples[0].key).toBe(true);
   expect(part.samples.at(-1)!.ts).toBeGreaterThanOrEqual(1.5e6 - 1e4);
 });
+
+it('variable frame rate: reports the real capture rate, not the average', async () => {
+  // 60 fps recording with every 5th frame dropped after the first second (average ≈ 51 fps)
+  const blob = new Blob([readFileSync('tests/fixtures/vfr60.mp4')]);
+  const { info } = await readMp4Info(blob);
+  expect(info.vfr).toBe(true);
+  expect(Math.round(info.fps)).toBe(60);
+  expect(info.nbSamples / info.durationS).toBeLessThan(56);
+});

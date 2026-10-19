@@ -85,6 +85,14 @@ interface State {
 const DEMO_ATHLETE = 'demo-athlete';
 let analysisChain: Promise<void> = Promise.resolve();
 
+/** Turn low-level decoder / model errors into something a coach can act on. */
+export function friendlyError(m: string): string {
+  if (/timestamp|CalculatorGraph|INVALID_ARGUMENT|graph|WaitUntilIdle|norm_rect/i.test(m)) return 'The pose model hit an internal error on this clip and could not recover. Reload the page and try again; if it keeps happening, trim the clip to just the pitch or export it as H.264 MP4 ("Most Compatible" on iPhone).';
+  if (/decode|codec|EncodingError|DataError|not supported/i.test(m)) return 'This browser could not decode the video. Export it as H.264 MP4 ("Most Compatible" on iPhone), or open the app in Safari or Chrome.';
+  if (/memory|allocation|out of/i.test(m)) return 'The device ran out of memory on this clip. Trim it to just the pitch (a few seconds) and try again.';
+  return m.length > 240 ? m.slice(0, 240) + '…' : m;
+}
+
 async function runAnalysis(id: string, opts?: { pick?: { x: number; y: number } }) {
   const get = useStore.getState, set = useStore.setState;
   const c = get().clips[id];
@@ -104,12 +112,21 @@ async function runAnalysis(id: string, opts?: { pick?: { x: number; y: number } 
     if (!cached || !frames || opts?.pick) {
       const file = c.file ?? (await db.videos.get(id))?.blob;
       if (!file) throw new Error('The video file for this clip is missing from storage. Re-import it.');
-      const { runPose } = await import('../pose/pipeline');
-      const r = await runPose(file, {
+      const { runPose, resetPoseWorker } = await import('../pose/pipeline');
+      const run = () => runPose(file, {
         startS: rec.trim.inS, endS: rec.trim.outS, fpsMedia: rec.meta.fpsMedia, slowmo: rec.slowmo, model, rotate: rec.rotate,
         signal: abort.signal, pick: opts?.pick, scan: opts?.pick ? undefined : scan, personId: rec.personId,
         onProgress: (p) => patch({ progress: p }),
       });
+      let r;
+      try { r = await run(); } catch (e) {
+        if ((e as DOMException).name === 'AbortError' || /No person could be found|missing from storage/.test((e as Error).message)) throw e;
+        // the pose model's internal state can get stuck (e.g. after a decoder fallback): restart it and retry once
+        console.warn('Pose run failed, retrying with a fresh model:', e);
+        resetPoseWorker();
+        patch({ progress: { done: 0, total: 0, etaS: null, stage: 'Restarting the pose model…' } });
+        r = await run();
+      }
       scan = r.scan;
       lostFrames = r.lostFrames;
       cached = { id: key, track: r.track, scan };
@@ -141,8 +158,9 @@ async function runAnalysis(id: string, opts?: { pick?: { x: number; y: number } 
     });
   } catch (e) {
     const cancelled = (e as DOMException).name === 'AbortError';
-    patch({ status: cancelled ? 'new' : 'error', error: cancelled ? undefined : (e as Error).message, progress: undefined, abort: undefined });
-    if (!cancelled) get().toast(`Analysis failed: ${(e as Error).message}`, 'error');
+    const msg = friendlyError((e as Error).message ?? String(e));
+    patch({ status: cancelled ? 'new' : 'error', error: cancelled ? undefined : msg, progress: undefined, abort: undefined });
+    if (!cancelled) get().toast(`Analysis failed: ${msg.split('. ')[0]}.`, 'error');
   }
 }
 let initPromise: Promise<void> | null = null;
