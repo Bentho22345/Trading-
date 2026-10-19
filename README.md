@@ -7,7 +7,6 @@ Pitching-mechanics analysis from phone video, running privately in your browser.
 ## Run it
 
 ```bash
-cd mound-lab
 npm install        # also downloads the pose models and copies the MediaPipe WASM into public/
 npm run dev        # http://localhost:5173
 npm run build && npx vite preview   # production build with the offline service worker
@@ -35,4 +34,4 @@ Playwright uses the Chromium at `/opt/pw-browsers/chromium`. Override it with `P
 
 ## Deploy on Render
 
-`mound-lab/render.yaml` is a separate Render Blueprint for this app (the repo-root `render.yaml` is for PULSE). In Render: **New → Blueprint**, pick this repository and branch, and set **Blueprint Path** to `mound-lab/render.yaml`. It builds a free static site. No environment secrets are needed: the optional AI coach uses a key each user enters in their own browser.
+This branch (`mound-lab`) is Mound Lab on its own, with its own `render.yaml` at the root, so its Blueprint never touches PULSE. In Render: **New → Blueprint**, choose this repository, pick the **`mound-lab`** branch and apply. It builds a free static site. No secrets are needed: the optional AI coach uses a key each user enters in their own browser.
