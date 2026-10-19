@@ -53,6 +53,11 @@ export function PeoplePanel({ clip }: { clip: RuntimeClip }) {
           </li>
         ))}
       </ul>
+      {clip.kind === 'video' && (
+        <p className="small" style={{ margin: '0 0 6px' }}>Wrong person, or the pitcher isn't listed? <button className="small" disabled={busy} data-testid="remark-btn"
+          onClick={() => useStore.setState((s) => ({ clips: { ...s.clips, [clip.id]: { ...s.clips[clip.id], status: 'new', full: undefined, analysis: undefined } } }))}>Mark the pitcher by hand…</button></p>
+      )}
+      {(scan.backView || scan.mediapipeWeak) && <p className="tiny faint" style={{ margin: '0 0 6px' }}>{scan.backView ? 'Filmed from behind: ' : ''}the pitcher is tracked with MoveNet, which finds a body from any side without needing to see a face.</p>}
       <p className="tiny faint" style={{ margin: 0 }}>The pitcher is the person with one leg lift from a still set, a burst toward the plate and the fastest arm. Runners (moving fast the whole time, alternating legs) are ignored even when they're bigger or more central.</p>
     </div>
   );

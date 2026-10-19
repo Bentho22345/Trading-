@@ -13,6 +13,7 @@ import { AboutScreen } from './screens/About';
 import { WorkloadScreen } from './screens/Workload';
 import { AthletesScreen } from './screens/Athletes';
 import { ReportScreen } from './screens/Report';
+import { UserMenu } from './components/UserMenu';
 
 const NAV: [string, string][] = [
   ['/', 'Home'],
@@ -143,6 +144,7 @@ export function App() {
         <nav className="nav" aria-label="Main">
           {NAV.map(([p, l]) => <a key={p} href={`#${p}`} aria-current={active === p ? 'page' : undefined}>{l}</a>)}
         </nav>
+        <UserMenu />
       </header>
       <main className="main" id="main">{screen}</main>
       <footer className="footer">

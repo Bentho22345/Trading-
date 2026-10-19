@@ -9,7 +9,9 @@ import type { VeloEstimate } from '../core/ballspeed';
 import { clipQuality, type Quality } from '../core/quality';
 import { probeVideo, type VideoMeta } from '../video/meta';
 import { JpegFrames, SyntheticFrames, type FrameSource } from '../ui/frameSource';
-import type { PoseModel, ScanResult } from '../pose/pipeline';
+import type { PickRegion, PoseEngine, PoseModel, ScanResult } from '../pose/pipeline';
+import { MANUAL_ID } from '../core/people';
+import { settingsKey } from '../auth/session';
 
 export type ClipStatus = 'new' | 'analyzing' | 'ready' | 'error';
 
@@ -53,9 +55,11 @@ export interface Settings {
   aiModel: string;
   handedness: 'R' | 'L';
   autoAnalyze: boolean;
+  /** Which pose model leads the tracking pass (auto = MediaPipe, MoveNet from behind and for missed frames). */
+  poseEngine: PoseEngine;
 }
 
-const DEFAULT_SETTINGS: Settings = { theme: 'system', units: 'imperial', youth: false, model: 'full', reducedMotion: false, aiModel: 'claude-opus-5-5', handedness: 'R', autoAnalyze: true };
+const DEFAULT_SETTINGS: Settings = { theme: 'system', units: 'imperial', youth: false, model: 'full', reducedMotion: false, aiModel: 'claude-opus-5-5', handedness: 'R', autoAnalyze: true, poseEngine: 'auto' };
 
 interface State {
   clips: Record<string, RuntimeClip>;
@@ -69,7 +73,7 @@ interface State {
   importFiles(files: File[], target?: 'A' | 'B'): Promise<void>;
   setSlot(slot: 'A' | 'B', id?: string): void;
   swapSlots(): void;
-  analyze(id: string, opts?: { pick?: { x: number; y: number } }): Promise<void>;
+  analyze(id: string, opts?: { pick?: PickRegion }): Promise<void>;
   /** Re-track a different person from the scan (e.g. the auto pick chose the wrong one). */
   switchPerson(id: string, personId: number): Promise<void>;
   measureVelo(id: string): Promise<void>;
@@ -93,17 +97,19 @@ export function friendlyError(m: string): string {
   return m.length > 240 ? m.slice(0, 240) + '…' : m;
 }
 
-async function runAnalysis(id: string, opts?: { pick?: { x: number; y: number } }) {
+async function runAnalysis(id: string, opts?: { pick?: PickRegion }) {
   const get = useStore.getState, set = useStore.setState;
   const c = get().clips[id];
   if (!c || c.kind === 'demo' || c.status === 'analyzing') return;
-  const rec = c.record;
-  const model = get().settings.model;
+  let rec = c.record;
+  const { model: poseModel, poseEngine } = get().settings;
+  // cache key of the model setup (engine only when it isn't the default)
+  const model = poseEngine === 'auto' ? poseModel : `${poseModel}-${poseEngine}`;
   const abort = new AbortController();
   const patch = (p: Partial<RuntimeClip>) => set((s) => ({ clips: { ...s.clips, [id]: { ...s.clips[id], ...p } } }));
   patch({ status: 'analyzing', error: undefined, abort, progress: { done: 0, total: 0, etaS: null, stage: 'Preparing…' } });
   try {
-    const key = trackKey(rec, model);
+    let key = trackKey(rec, model);
     const sKey = scanKey(rec, model);
     let cached = await db.tracks.get(key);
     let frames = (await db.frames.get(key))?.frames;
@@ -113,9 +119,11 @@ async function runAnalysis(id: string, opts?: { pick?: { x: number; y: number } 
       const file = c.file ?? (await db.videos.get(id))?.blob;
       if (!file) throw new Error('The video file for this clip is missing from storage. Re-import it.');
       const { runPose, resetPoseWorker } = await import('../pose/pipeline');
+      // a region the user marked earlier is followed again (e.g. after a trim change)
+      const pick = opts?.pick ?? (rec.personId === MANUAL_ID ? rec.pickBox : undefined);
       const run = () => runPose(file, {
-        startS: rec.trim.inS, endS: rec.trim.outS, fpsMedia: rec.meta.fpsMedia, slowmo: rec.slowmo, model, rotate: rec.rotate,
-        signal: abort.signal, pick: opts?.pick, scan: opts?.pick ? undefined : scan, personId: rec.personId,
+        startS: rec.trim.inS, endS: rec.trim.outS, fpsMedia: rec.meta.fpsMedia, slowmo: rec.slowmo, model: poseModel, engine: poseEngine, rotate: rec.rotate,
+        signal: abort.signal, pick, scan, personId: rec.personId,
         onProgress: (p) => patch({ progress: p }),
       });
       let r;
@@ -129,15 +137,23 @@ async function runAnalysis(id: string, opts?: { pick?: { x: number; y: number } 
       }
       scan = r.scan;
       lostFrames = r.lostFrames;
+      if (opts?.pick) {
+        // remember who the user picked: the same person comes back on reload and after re-runs
+        await get().updateRecord(id, { personId: scan.pitcherId ?? undefined, pickBox: scan.pitcherId === MANUAL_ID ? opts.pick : undefined });
+        rec = get().clips[id].record;
+        key = trackKey(rec, model);
+      }
       cached = { id: key, track: r.track, scan };
       frames = r.frames;
       await db.tracks.put(cached);
       await db.frames.put({ id: key, frames });
       await db.kv.put({ key: sKey, value: scan });
       const notes: string[] = [];
+      if (r.moveFrames > r.track.t.length * 0.5) notes.push(`${r.scan.backView ? 'Filmed from behind: ' : ''}the pitcher was tracked with MoveNet, which finds the body without needing to see a face (MediaPipe couldn't lock on — behind, far away or blurred). Left/right sides and the 3D estimate are less certain.`);
+      else if (r.moveFrames > r.track.t.length * 0.1) notes.push(`MoveNet filled in ${r.moveFrames} frames where the main pose model lost the pitcher.`);
       if (r.method === 'seek') notes.push('Frames were read by seeking (slower, approximate timing) because this browser could not decode the file directly.');
       if (r.lostFrames > r.track.t.length * 0.15) notes.push(`The pitcher was not found on ${r.lostFrames} of ${r.track.t.length} frames — check lighting and framing.`);
-      patch({ info: [...(c.info ?? []).filter((x) => !/not found on|by seeking/.test(x)), ...notes] });
+      patch({ info: [...(c.info ?? []).filter((x) => !/not found on|by seeking|MoveNet/.test(x)), ...notes] });
       await get().updateRecord(id, { analyzedWith: model });
     }
     const full = analyzeTrack(cached.track, { view: rec.view, heightM: rec.heightM, editedEvents: rec.edits });
@@ -191,7 +207,7 @@ function buildDemo(): RuntimeClip[] {
 }
 
 function loadSettings(): Settings {
-  try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('mound-settings') ?? '{}') }; } catch { return DEFAULT_SETTINGS; }
+  try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(settingsKey()) ?? '{}') }; } catch { return DEFAULT_SETTINGS; }
 }
 
 const VIDEO_RE = /\.(mp4|m4v|mov|webm|mkv|avi|3gp)$/i;
@@ -346,7 +362,7 @@ export const useStore = create<State>((set, get) => ({
 
   setSettings(p) {
     const settings = { ...get().settings, ...p };
-    try { localStorage.setItem('mound-settings', JSON.stringify(settings)); } catch { /* private mode */ }
+    try { localStorage.setItem(settingsKey(), JSON.stringify(settings)); } catch { /* private mode */ }
     set({ settings });
   },
 

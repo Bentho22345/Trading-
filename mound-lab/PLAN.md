@@ -63,7 +63,7 @@ tests/e2e/       Playwright (drag-and-drop, frame stepping, event editing, demo 
 | 12 | Workload & Pitch Smart, ACWR, Pulse CSV import, ball-data CSV import and velocity scatter | Done |
 | 13 | Bullpen auto-split, auto-trim, live recording with framing checks | Done. No standalone clip-quality score yet. |
 | 14 | Two-camera 3D mode | **Not started** |
-| 15 | Coach/team features, cloud sync | **Not started** |
+| 15 | Coach/team features, cloud sync | Partial: on-device accounts with per-person libraries (v3); no cloud sync |
 | 16 | Validation pass, a11y audit, performance tuning | Partial — see VALIDATION.md |
 
 ## Version 2 (pitcher identification, far cameras, velocity, better/worse)
@@ -77,10 +77,22 @@ tests/e2e/       Playwright (drag-and-drop, frame stepping, event editing, demo 
 | **Five new features** | 1) Clip quality score with advice; 2) drawing & measuring tools with calibration; 3) strobe (multi-exposure) image and A-vs-B key-frame sheet PNG; 4) session consistency report (repeatability per metric, release-point scatter, automatic best pitch); 5) rotate fix and mirror view | unit + e2e |
 | **Faster** | Analyses are queued one at a time and start automatically on drop (setting). The scan drops to half rate when only one person is in frame. The pose model sees a 448 px crop instead of the full frame. The AI coach code loads on demand. | — |
 
+## Version 3 (behind views, two pose models, mark-the-pitcher, accounts)
+
+| Upgrade | How it works | Tested by |
+|---|---|---|
+| **Finds pitchers filmed from behind (center-field cameras)** | MediaPipe's person detector keys on the face, so a pitcher with their back to the camera was often never found. The people scan now uses **MoveNet MultiPose** (TensorFlow.js), which finds every person in one pass from any side. It runs on the whole frame, the zoom tiles for small people, and a zoomed crop around each tracked person. MediaPipe still double-checks the first frames. | Real photos in VALIDATION.md: umpire from behind and a broadcast view (tiny pitcher on the mound). MediaPipe found 0 people in both; MoveNet found all of them. |
+| **Two models in the tracking pass** | MediaPipe stays the main tracker (33 points and a 3D estimate). Any frame it misses is filled by **MoveNet Thunder** on the same crop. The scan also checks whether MediaPipe can see each person: if it misses the pitcher on most probe frames (from behind, tiny, blurred), or loses them on more than half of the last 24 frames, MoveNet leads. The 3D estimate is kept only when MediaPipe covered ≥ 90% of frames. | `scan.test.ts` (keypoint mapping, confidence scale); real behind-view clip in VALIDATION.md |
+| **Mark the pitcher by hand** | "Mark the pitcher…" lets you drag a box around the pitcher (or tap them) on any frame. If the scan found someone there, that person is chosen without re-scanning. If not, the marked region is **followed**: each frame's pose moves the crop for the next. The choice is saved with the clip. | `scan.test.ts` (tap, box, follow); e2e |
+| **Smarter choice between pitch-like people** | Small tie-breakers for the biggest and most central person (the pitcher in broadcast and behind views), on top of the pitch-signature score. Auto-trim keeps ≥ 1 s before the motion and ≥ 3 s in total, and leaves clips alone when motion is everywhere. | `people.test.ts` |
+| **Faster** | The scan runs MoveNet once per frame instead of a MediaPipe landmark pass per person. In busy frames only the 4 most likely pitchers are zoomed every sample; the rest are zoomed every third sample. MoveNet runs on WebGL, or **WASM SIMD** when WebGL isn't available in a worker (measured 6.4 s → 0.2 s per frame vs plain JS here). | timings in VALIDATION.md |
+| **Sign-in and per-person memory** | A sign-in screen with accounts stored on this device. Each person gets their own library (clips, athletes, sessions, analyses) and settings, and "keep me signed in" remembers them for 30 days. The sign-in screen lists everyone who has signed in on the device. Passwords are kept only as salted PBKDF2-SHA-256 hashes (210k iterations), with back-off after repeated failures. There is guest mode, and an option to move guest clips into a new account. Account settings cover rename, password change, sign out and delete. **No server, so accounts don't sync between devices** (that would need a backend). | `auth.spec.ts` e2e (create, remembered reload, per-person settings, wrong password, switch person, guest) |
+
 ## Known gaps and next steps
 - Milestone 7 (annotation tools, calibration from known distances, perspective correction, voice-over).
 - Milestone 14 (two-camera triangulation; it unlocks true pelvis/trunk rotation, separation and the kinematic sequence).
-- An RTMPose/MoveNet alternative model with a benchmark on real labelled pitching clips.
+- A benchmark of MediaPipe vs MoveNet on real labelled pitching clips (both are now used; see Version 3).
+- Cross-device accounts (needs a backend; accounts are on-device today).
 - Real-clip validation: none of the event or angle accuracy numbers have been measured on real pitchers yet (see VALIDATION.md). Thresholds are literature-based defaults until then.
 - A clip-quality score (blur, lighting, pitcher size, camera motion) as a single number.
 - Mirror, rotate and crop overrides in the clip header.

@@ -60,8 +60,13 @@ export async function autoTrim(id: string): Promise<{ inS: number; outS: number 
   const bursts = findBursts(t, e, 1.5);
   if (!bursts.length) return null;
   const main = bursts.reduce((a, b) => (b.end - b.start > a.end - a.start ? b : a));
-  const trim = { inS: Math.max(0, main.start - 0.6), outS: Math.min(rec.meta.durationS, main.end + 0.6) };
-  if (trim.outS - trim.inS < 1) return null;
+  // generous margins: a trim that cuts off the set position or the release costs far more than a few extra frames
+  const dur = rec.meta.durationS;
+  let inS = Math.max(0, main.start - 1.0), outS = Math.min(dur, main.end + 0.8);
+  if (outS - inS < 3) { const mid = (inS + outS) / 2; inS = Math.max(0, mid - 1.5); outS = Math.min(dur, inS + 3); inS = Math.max(0, outS - 3); }
+  // motion everywhere (camera pans, several people moving) or barely shorter than the clip: keep the whole clip
+  if (outS - inS > dur * 0.8 || dur <= 4.5) return null;
+  const trim = { inS, outS };
   await useStore.getState().updateRecord(id, { trim });
   return trim;
 }
