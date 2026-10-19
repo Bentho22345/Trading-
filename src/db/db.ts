@@ -3,6 +3,7 @@
 import Dexie, { type Table } from 'dexie';
 import type { Events, PoseTrack, View } from '../core/types';
 import type { VideoMeta } from '../video/meta';
+import type { ScanResult } from '../pose/pipeline';
 
 export interface BallData {
   velo?: number; spin?: number; spinEff?: number; gyro?: number; ivb?: number; hb?: number;
@@ -31,6 +32,10 @@ export interface ClipRecord {
   ballData?: BallData;
   thumb?: Blob;
   mirror?: boolean;
+  rotate?: number; // extra clockwise rotation chosen by the user (0/90/180/270)
+  personId?: number; // person chosen as the pitcher (when the user switched)
+  veloManual?: { mph: number; low: number; high: number }; // from the user marking the ball
+  calibPxPerM?: number; // user calibration (track pixels per metre)
   analyzedWith?: string; // model id once a track exists
 }
 
@@ -54,7 +59,7 @@ export interface DrillAssignment { id: string; athleteId: string; drillId: strin
 class MoundDB extends Dexie {
   clips!: Table<ClipRecord, string>;
   videos!: Table<{ id: string; blob: Blob }, string>;
-  tracks!: Table<{ id: string; track: PoseTrack }, string>; // id = `${hash}:${model}:${trim}:${slowmo}`
+  tracks!: Table<{ id: string; track: PoseTrack; scan?: ScanResult }, string>; // id = trackKey(...)
   frames!: Table<{ id: string; frames: Blob[] }, string>;
   athletes!: Table<Athlete, string>;
   sessions!: Table<Session, string>;
@@ -97,5 +102,9 @@ export async function hashFile(f: Blob): Promise<string> {
   return Array.from(new Uint8Array(d).slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export const trackKey = (c: Pick<ClipRecord, 'hash' | 'trim' | 'slowmo'>, model: string) =>
-  `${c.hash}:${model}:${c.trim.inS.toFixed(3)}-${c.trim.outS.toFixed(3)}:${c.slowmo}`;
+export const trackKey = (c: Pick<ClipRecord, 'hash' | 'trim' | 'slowmo' | 'rotate' | 'personId'>, model: string) =>
+  `${c.hash}:${model}:${c.trim.inS.toFixed(3)}-${c.trim.outS.toFixed(3)}:${c.slowmo}:r${c.rotate ?? 0}:p${c.personId ?? 'auto'}:v2`;
+
+/** Key of the person scan (independent of which person is chosen). */
+export const scanKey = (c: Pick<ClipRecord, 'hash' | 'trim' | 'slowmo' | 'rotate'>, model: string) =>
+  `scan:${c.hash}:${model}:${c.trim.inS.toFixed(3)}-${c.trim.outS.toFixed(3)}:r${c.rotate ?? 0}:v2`;

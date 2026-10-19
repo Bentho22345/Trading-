@@ -38,6 +38,12 @@ export interface MetricDef {
   drillsUp?: string[];
   drillsDown?: string[];
   canConvertToFeet?: boolean;
+  /**
+   * Which way is better, for the "what's better / worse" verdict:
+   *  'up' / 'down' = more / less is linked to velocity or lower arm stress in research,
+   *  'target' = closer to the reference range is better, 'none' = style (neither better nor worse).
+   */
+  better: 'up' | 'down' | 'target' | 'none';
   /** Absolute flag: a value in this direction beyond the limit is worth attention on its own. */
   flag?: { above?: number; below?: number; text: string; stress?: boolean };
 }
@@ -49,7 +55,7 @@ const SLOT = 'Arm-slot kinematics, high school vs pro (PMC10601404)';
 export const METRICS: MetricDef[] = [
   // ---------- Wind-up / leg lift
   {
-    key: 'legLift', label: 'Leg lift height', short: 'Leg lift', phase: 'windup', unit: '% ht', digits: 1,
+    key: 'legLift', better: 'none', label: 'Leg lift height', short: 'Leg lift', phase: 'windup', unit: '% ht', digits: 1,
     views: { S: 'high', F: 'medium', B: 'medium' },
     definition: 'Lead knee height above the hip centre at peak leg lift, as % of body height.',
     meaning: 'How high the front knee comes up. A personal style choice — consistency matters more than height.',
@@ -60,7 +66,7 @@ export const METRICS: MetricDef[] = [
     drillsDown: ['balance-hold', 'walking-windup'], drillsUp: ['balance-hold'],
   },
   {
-    key: 'balancePKH', label: 'Head over rubber at leg lift', short: 'Head vs back foot @PKH', phase: 'windup', unit: '% ht', digits: 1,
+    key: 'balancePKH', better: 'none', label: 'Head over rubber at leg lift', short: 'Head vs back foot @PKH', phase: 'windup', unit: '% ht', digits: 1,
     views: { S: 'high' },
     definition: 'Horizontal distance from the back ankle to the head at peak leg lift (+ = toward the plate).',
     meaning: 'Whether the body is drifting toward the plate early (+) or hanging back (−) at the top.',
@@ -71,7 +77,7 @@ export const METRICS: MetricDef[] = [
     drillsUp: ['balance-hold', 'hip-lead'], drillsDown: ['walking-windup', 'hip-lead'],
   },
   {
-    key: 'tFmPkh', label: 'Time: first move → leg lift', short: 'FM→PKH', phase: 'windup', unit: 'ms', digits: 0,
+    key: 'tFmPkh', better: 'none', label: 'Time: first move → leg lift', short: 'FM→PKH', phase: 'windup', unit: 'ms', digits: 0,
     views: { S: 'high', F: 'high', B: 'high', O: 'medium' },
     definition: 'Time from first movement to peak leg lift.',
     meaning: 'The tempo of the first part of the delivery.',
@@ -79,7 +85,7 @@ export const METRICS: MetricDef[] = [
     up: 'Slower start to the delivery.', down: 'Quicker start to the delivery.',
   },
   {
-    key: 'tPkhFs', label: 'Time: leg lift → foot strike', short: 'PKH→FS', phase: 'stride', unit: 'ms', digits: 0,
+    key: 'tPkhFs', better: 'none', label: 'Time: leg lift → foot strike', short: 'PKH→FS', phase: 'stride', unit: 'ms', digits: 0,
     views: { S: 'high', F: 'high', B: 'high', O: 'medium' },
     definition: 'Time from peak leg lift to lead-foot strike.',
     meaning: 'How fast you move down the mound. Faster usually means more momentum toward the plate.',
@@ -89,7 +95,7 @@ export const METRICS: MetricDef[] = [
     drillsUp: ['walking-windup', 'hip-lead', 'step-behind'], drillsDown: ['connection-ball', 'roll-in'],
   },
   {
-    key: 'handBreakTiming', label: 'Hand break timing', short: 'HS vs PKH', phase: 'windup', unit: 'ms', digits: 0,
+    key: 'handBreakTiming', better: 'none', label: 'Hand break timing', short: 'HS vs PKH', phase: 'windup', unit: 'ms', digits: 0,
     views: { S: 'medium', F: 'medium', B: 'medium' },
     definition: 'Time of hand separation relative to peak leg lift (+ = after the top).',
     meaning: 'When the hands break. Breaking later can leave the arm late at foot strike.',
@@ -100,7 +106,7 @@ export const METRICS: MetricDef[] = [
     drillsUp: ['connection-ball', 'pivot-pickoff'],
   },
   {
-    key: 'handBreakHeight', label: 'Hand break height', short: 'Hands @HS', phase: 'windup', unit: '% ht', digits: 1,
+    key: 'handBreakHeight', better: 'none', label: 'Hand break height', short: 'Hands @HS', phase: 'windup', unit: '% ht', digits: 1,
     views: { S: 'medium', F: 'medium', B: 'medium' },
     definition: 'Height of the throwing hand above the ground at hand separation, % of body height.',
     meaning: 'Where the hands start the arm action.',
@@ -109,7 +115,7 @@ export const METRICS: MetricDef[] = [
   },
   // ---------- Stride / foot strike
   {
-    key: 'stride', label: 'Stride length', short: 'Stride', phase: 'stride', unit: '% ht', digits: 1, canConvertToFeet: true,
+    key: 'stride', better: 'target', label: 'Stride length', short: 'Stride', phase: 'stride', unit: '% ht', digits: 1, canConvertToFeet: true,
     views: { S: 'high' },
     definition: 'Distance from the back ankle at the set to the lead ankle at foot strike, % of body height.',
     meaning: 'How far down the mound you land. Longer strides (≈85–90% of height) are linked to more velocity when the front leg can still block.',
@@ -122,7 +128,7 @@ export const METRICS: MetricDef[] = [
     flag: { below: 72, text: 'Stride is short for your height (under ~72%).' },
   },
   {
-    key: 'comSpeed', label: 'Peak hip speed toward plate', short: 'Hip speed', phase: 'stride', unit: 'ht/s', digits: 2,
+    key: 'comSpeed', better: 'up', label: 'Peak hip speed toward plate', short: 'Hip speed', phase: 'stride', unit: 'ht/s', digits: 2,
     views: { S: 'medium' },
     definition: 'Peak forward speed of the hip centre (centre-of-mass proxy) between leg lift and foot strike, body heights per second.',
     meaning: 'How much momentum you carry toward the plate. Faster is linked to more velocity in research.',
@@ -131,7 +137,7 @@ export const METRICS: MetricDef[] = [
     cueDown: 'Lead with the hip and attack the plate.', drillsDown: ['hip-lead', 'walking-windup', 'step-behind'],
   },
   {
-    key: 'hipSink', label: 'Hip drop into foot strike', short: 'Hip sink', phase: 'stride', unit: '% ht', digits: 1,
+    key: 'hipSink', better: 'none', label: 'Hip drop into foot strike', short: 'Hip sink', phase: 'stride', unit: '% ht', digits: 1,
     views: { S: 'high', F: 'medium', B: 'medium' },
     definition: 'Drop of the hip centre from peak leg lift to foot strike, % of body height.',
     meaning: 'How much you sink as you stride. Some drop is needed for a long stride.',
@@ -139,7 +145,7 @@ export const METRICS: MetricDef[] = [
     up: 'Sinking more into the stride.', down: 'Staying taller into foot strike — often goes with a shorter stride.',
   },
   {
-    key: 'leadKneeFS', label: 'Front knee bend at foot strike', short: 'Front knee @FS', phase: 'stride', unit: '°', digits: 0,
+    key: 'leadKneeFS', better: 'target', label: 'Front knee bend at foot strike', short: 'Front knee @FS', phase: 'stride', unit: '°', digits: 0,
     views: { S: 'high', O: 'low' },
     definition: 'Lead-knee flexion at foot strike (180° − hip–knee–ankle angle; 0° = straight).',
     meaning: 'How bent the front knee is when the foot lands.',
@@ -148,7 +154,7 @@ export const METRICS: MetricDef[] = [
     up: 'Landing with a more bent front knee.', down: 'Landing with a straighter front knee.',
   },
   {
-    key: 'backKneeFS', label: 'Back knee bend at foot strike', short: 'Back knee @FS', phase: 'stride', unit: '°', digits: 0,
+    key: 'backKneeFS', better: 'none', label: 'Back knee bend at foot strike', short: 'Back knee @FS', phase: 'stride', unit: '°', digits: 0,
     views: { S: 'medium' },
     definition: 'Drive-leg knee flexion at foot strike.',
     meaning: 'How much the back leg is still bent as the front foot lands.',
@@ -156,7 +162,7 @@ export const METRICS: MetricDef[] = [
     up: 'More back-knee bend at landing.', down: 'Straighter back leg at landing.',
   },
   {
-    key: 'trunkTiltFS', label: 'Trunk tilt at foot strike', short: 'Trunk @FS', phase: 'stride', unit: '°', digits: 0,
+    key: 'trunkTiltFS', better: 'target', label: 'Trunk tilt at foot strike', short: 'Trunk @FS', phase: 'stride', unit: '°', digits: 0,
     views: { S: 'high' },
     definition: 'Hip-centre → shoulder-centre line vs vertical at foot strike (+ = leaning toward the plate).',
     meaning: 'Staying "stacked" at foot strike (near upright) keeps the trunk ready to rotate and bend forward.',
@@ -167,7 +173,7 @@ export const METRICS: MetricDef[] = [
     cueUp: 'Stay tall and stacked until the foot lands.', drillsUp: ['hip-lead', 'balance-hold'],
   },
   {
-    key: 'elbowFlexFS', label: 'Elbow bend at foot strike', short: 'Elbow @FS', phase: 'stride', unit: '°', digits: 0,
+    key: 'elbowFlexFS', better: 'target', label: 'Elbow bend at foot strike', short: 'Elbow @FS', phase: 'stride', unit: '°', digits: 0,
     views: { S: 'medium', F: 'low' }, fpsSensitive: true,
     definition: 'Throwing-elbow flexion at foot strike (180° − shoulder–elbow–wrist angle).',
     meaning: 'How bent the throwing elbow is when the foot lands.',
@@ -176,7 +182,7 @@ export const METRICS: MetricDef[] = [
     up: 'More bent elbow at foot strike.', down: 'Straighter arm at foot strike — often a long or late arm swing.',
   },
   {
-    key: 'forearmFS', label: 'Arm timing at foot strike (forearm angle)', short: 'Forearm @FS', phase: 'stride', unit: '°', digits: 0,
+    key: 'forearmFS', better: 'target', label: 'Arm timing at foot strike (forearm angle)', short: 'Forearm @FS', phase: 'stride', unit: '°', digits: 0,
     views: { S: 'medium' }, fpsSensitive: true,
     definition: 'Throwing forearm vs horizontal at foot strike (+ = hand above the elbow, "arm up"; − = hand below, "arm late").',
     meaning: 'Whether the arm is up and ready when the front foot lands. A late arm has to rush to catch up.',
@@ -189,7 +195,7 @@ export const METRICS: MetricDef[] = [
     flag: { below: 0, text: 'Late arm: the hand is below the elbow at foot strike.', stress: true },
   },
   {
-    key: 'elbowHeightFS', label: 'Elbow height vs shoulders at foot strike', short: 'Elbow ht @FS', phase: 'stride', unit: '% ht', digits: 1,
+    key: 'elbowHeightFS', better: 'target', label: 'Elbow height vs shoulders at foot strike', short: 'Elbow ht @FS', phase: 'stride', unit: '% ht', digits: 1,
     views: { S: 'medium', F: 'medium' },
     definition: 'Throwing elbow height minus throwing shoulder height at foot strike (% ht). 0 ≈ elbow level with the shoulder (≈90° abduction).',
     meaning: 'Elbow too low (arm drag) or too high (elbow climb) at foot strike is linked with more arm stress.',
@@ -201,7 +207,7 @@ export const METRICS: MetricDef[] = [
     flag: { below: -7, text: 'Elbow well below shoulder height at foot strike (low elbow).', stress: true },
   },
   {
-    key: 'sepFS', label: 'Hip-shoulder separation at foot strike (2D estimate)', short: 'Separation @FS', phase: 'stride', unit: '°', digits: 0,
+    key: 'sepFS', better: 'up', label: 'Hip-shoulder separation at foot strike (2D estimate)', short: 'Separation @FS', phase: 'stride', unit: '°', digits: 0,
     views: { S: 'low', '3D': 'medium' },
     definition: 'Pelvis rotation minus trunk rotation at foot strike. From one side camera this is inferred from how wide the hips and shoulders look, so treat it as a rough estimate.',
     meaning: 'Hips opening while the shoulders stay closed stores energy. More separation is linked to trunk speed.',
@@ -213,7 +219,7 @@ export const METRICS: MetricDef[] = [
   },
   // ---------- Arm cocking → release
   {
-    key: 'tFsMer', label: 'Time: foot strike → layback', short: 'FS→MER', phase: 'cocking', unit: 'ms', digits: 0,
+    key: 'tFsMer', better: 'none', label: 'Time: foot strike → layback', short: 'FS→MER', phase: 'cocking', unit: 'ms', digits: 0,
     views: { S: 'medium', F: 'low' }, fpsSensitive: true,
     definition: 'Time from foot strike to max layback (2D proxy).',
     meaning: 'How quickly the arm lays back after landing.',
@@ -221,7 +227,7 @@ export const METRICS: MetricDef[] = [
     up: 'Longer from landing to layback.', down: 'Shorter from landing to layback.',
   },
   {
-    key: 'tFsBr', label: 'Time: foot strike → release', short: 'FS→BR', phase: 'cocking', unit: 'ms', digits: 0,
+    key: 'tFsBr', better: 'down', label: 'Time: foot strike → release', short: 'FS→BR', phase: 'cocking', unit: 'ms', digits: 0,
     views: { S: 'high', F: 'high', B: 'high', O: 'medium' }, fpsSensitive: true,
     definition: 'Time from foot strike to ball release.',
     meaning: 'The final, fastest part of the delivery. If it gets longer, the arm is often late or the front side is soft.',
@@ -231,7 +237,7 @@ export const METRICS: MetricDef[] = [
     cueUp: 'Be ready to throw when you land.', drillsUp: ['connection-ball', 'rocker', 'front-leg-block'],
   },
   {
-    key: 'layback', label: 'Layback (2D proxy)', short: 'Layback', phase: 'cocking', unit: '% ht', digits: 1,
+    key: 'layback', better: 'up', label: 'Layback (2D proxy)', short: 'Layback', phase: 'cocking', unit: '% ht', digits: 1,
     views: { S: 'medium', '3D': 'low' }, fpsSensitive: true,
     definition: 'How far the throwing hand trails behind the throwing shoulder at max layback, % of body height. A 2D stand-in for shoulder external rotation, which a single camera cannot measure.',
     meaning: 'More layback gives the arm a longer path to accelerate the ball.',
@@ -240,7 +246,7 @@ export const METRICS: MetricDef[] = [
     drillsDown: ['reverse-throw', 'plyo-pivot', 'pivot-pickoff'],
   },
   {
-    key: 'leadKneeBR', label: 'Front knee bend at release', short: 'Front knee @BR', phase: 'release', unit: '°', digits: 0,
+    key: 'leadKneeBR', better: 'down', label: 'Front knee bend at release', short: 'Front knee @BR', phase: 'release', unit: '°', digits: 0,
     views: { S: 'high' },
     definition: 'Lead-knee flexion at ball release.',
     meaning: 'A firm (straightening) front leg at release turns forward momentum into rotation.',
@@ -252,7 +258,7 @@ export const METRICS: MetricDef[] = [
     flag: { above: 50, text: 'Front knee is very bent at release (the leg is collapsing).' },
   },
   {
-    key: 'kneeBlock', label: 'Front-leg block', short: 'Knee block', phase: 'release', unit: '°', digits: 0,
+    key: 'kneeBlock', better: 'up', label: 'Front-leg block', short: 'Knee block', phase: 'release', unit: '°', digits: 0,
     views: { S: 'high' },
     definition: 'Lead-knee flexion at foot strike minus at release. + = the knee straightened (firm block); − = it bent more (collapse).',
     meaning: 'A firm front leg is one of the strongest links to velocity. Collapsing leaks energy and makes the arm work harder.',
@@ -263,7 +269,7 @@ export const METRICS: MetricDef[] = [
     flag: { below: 0, text: 'Front knee bends more after landing (collapse).' },
   },
   {
-    key: 'kneeExtVel', label: 'Peak front-knee extension speed', short: 'Knee ext. speed', phase: 'release', unit: '°/s', digits: 0,
+    key: 'kneeExtVel', better: 'up', label: 'Peak front-knee extension speed', short: 'Knee ext. speed', phase: 'release', unit: '°/s', digits: 0,
     views: { S: 'medium' }, fpsSensitive: true,
     definition: 'Peak speed of front-knee straightening between foot strike and just after release.',
     meaning: 'How hard the front leg snaps straight. Driveline cites ≈350°/s as a target.',
@@ -273,7 +279,7 @@ export const METRICS: MetricDef[] = [
     drillsDown: ['front-leg-block', 'rocker'],
   },
   {
-    key: 'trunkTiltBR', label: 'Forward trunk tilt at release', short: 'Trunk @BR', phase: 'release', unit: '°', digits: 0,
+    key: 'trunkTiltBR', better: 'target', label: 'Forward trunk tilt at release', short: 'Trunk @BR', phase: 'release', unit: '°', digits: 0,
     views: { S: 'high' },
     definition: 'Hip-centre → shoulder-centre line vs vertical at release (+ = bent toward the plate).',
     meaning: 'Getting the chest out over the front leg adds extension and velocity.',
@@ -284,7 +290,7 @@ export const METRICS: MetricDef[] = [
     flag: { below: 20, text: 'Very upright trunk at release.' },
   },
   {
-    key: 'elbowFlexBR', label: 'Elbow bend at release', short: 'Elbow @BR', phase: 'release', unit: '°', digits: 0,
+    key: 'elbowFlexBR', better: 'none', label: 'Elbow bend at release', short: 'Elbow @BR', phase: 'release', unit: '°', digits: 0,
     views: { S: 'medium' }, fpsSensitive: true,
     definition: 'Throwing-elbow flexion at release.',
     meaning: 'Usually ≈30–35° at release.',
@@ -293,7 +299,7 @@ export const METRICS: MetricDef[] = [
     up: 'More bent elbow at release.', down: 'Straighter elbow at release.',
   },
   {
-    key: 'releaseHeight', label: 'Release height', short: 'Release ht', phase: 'release', unit: '% ht', digits: 1, canConvertToFeet: true,
+    key: 'releaseHeight', better: 'none', label: 'Release height', short: 'Release ht', phase: 'release', unit: '% ht', digits: 1, canConvertToFeet: true,
     views: { S: 'high', F: 'high', B: 'medium' }, fpsSensitive: true,
     definition: 'Throwing-hand height above the ground at release, % of body height.',
     meaning: 'Where the ball comes out vertically. Changes often come from trunk tilt or arm slot.',
@@ -301,7 +307,7 @@ export const METRICS: MetricDef[] = [
     up: 'Higher release point.', down: 'Lower release point.',
   },
   {
-    key: 'extension', label: 'Release extension', short: 'Extension', phase: 'release', unit: '% ht', digits: 1, canConvertToFeet: true,
+    key: 'extension', better: 'up', label: 'Release extension', short: 'Extension', phase: 'release', unit: '% ht', digits: 1, canConvertToFeet: true,
     views: { S: 'medium' }, fpsSensitive: true,
     definition: 'How far in front of the rubber (back ankle at the set) the hand is at release, % of body height.',
     meaning: 'More extension = the ball is released closer to the hitter, which raises perceived velocity.',
@@ -310,7 +316,7 @@ export const METRICS: MetricDef[] = [
     cueDown: 'Reach out toward the catcher — "throw through the target".', drillsDown: ['rocker', 'walking-windup', 'long-toss'],
   },
   {
-    key: 'headAtBR', label: 'Head position at release', short: 'Head @BR', phase: 'release', unit: '% ht', digits: 1,
+    key: 'headAtBR', better: 'up', label: 'Head position at release', short: 'Head @BR', phase: 'release', unit: '% ht', digits: 1,
     views: { S: 'high' },
     definition: 'Head ahead of (+) or behind (−) the lead ankle at release, % of body height.',
     meaning: 'Getting the head out over the front foot goes with good extension.',
@@ -319,7 +325,7 @@ export const METRICS: MetricDef[] = [
     cueDown: 'Chase the catcher with your chest.', drillsDown: ['rocker', 'front-leg-block'],
   },
   {
-    key: 'handSpeed', label: 'Peak hand speed (in-plane)', short: 'Hand speed', phase: 'release', unit: 'ht/s', digits: 1,
+    key: 'handSpeed', better: 'up', label: 'Peak hand speed (in-plane)', short: 'Hand speed', phase: 'release', unit: 'ht/s', digits: 1,
     views: { S: 'medium', F: 'low' }, fpsSensitive: true,
     definition: 'Peak throwing-wrist speed near release, body heights per second, measured in the camera plane. Only comparable between clips with the same camera setup.',
     meaning: 'An arm-speed proxy. Big drops can mean fatigue or less energy from the lower half.',
@@ -327,7 +333,7 @@ export const METRICS: MetricDef[] = [
     up: 'Faster hand through release.', down: 'Slower hand through release.',
   },
   {
-    key: 'gloveDistBR', label: 'Glove distance from chest at release', short: 'Glove @BR', phase: 'release', unit: '% ht', digits: 1,
+    key: 'gloveDistBR', better: 'down', label: 'Glove distance from chest at release', short: 'Glove @BR', phase: 'release', unit: '% ht', digits: 1,
     views: { S: 'medium', F: 'medium' },
     definition: 'Distance from the glove wrist to the shoulder centre at release, % of body height.',
     meaning: 'A glove kept close to the chest helps the trunk rotate; a glove flying out can pull the body open.',
@@ -338,7 +344,7 @@ export const METRICS: MetricDef[] = [
   },
   // ---------- Front-view metrics
   {
-    key: 'armSlot', label: 'Arm slot', short: 'Arm slot', phase: 'release', unit: '°', digits: 0,
+    key: 'armSlot', better: 'none', label: 'Arm slot', short: 'Arm slot', phase: 'release', unit: '°', digits: 0,
     views: { F: 'high', B: 'medium' }, fpsSensitive: true,
     definition: 'Angle between vertical and the shoulder→hand line at release, seen from home plate (0° = straight over the top, 90° = sidearm).',
     meaning: 'Where the arm comes through. Pros: overhand ≈44°, three-quarter ≈58°, sidearm ≈75°.',
@@ -347,7 +353,7 @@ export const METRICS: MetricDef[] = [
     up: 'Lower (more sidearm) arm slot.', down: 'Higher (more over the top) arm slot.',
   },
   {
-    key: 'latTiltFS', label: 'Side bend at foot strike', short: 'Side bend @FS', phase: 'stride', unit: '°', digits: 0,
+    key: 'latTiltFS', better: 'none', label: 'Side bend at foot strike', short: 'Side bend @FS', phase: 'stride', unit: '°', digits: 0,
     views: { F: 'high', B: 'medium' },
     definition: 'Trunk side bend vs vertical at foot strike, seen from home plate (+ = toward the glove side).',
     meaning: 'How much the trunk is already tilting sideways at landing.',
@@ -355,7 +361,7 @@ export const METRICS: MetricDef[] = [
     up: 'More glove-side tilt at landing.', down: 'Less glove-side tilt at landing.',
   },
   {
-    key: 'latTiltBR', label: 'Side bend at release', short: 'Side bend @BR', phase: 'release', unit: '°', digits: 0,
+    key: 'latTiltBR', better: 'target', label: 'Side bend at release', short: 'Side bend @BR', phase: 'release', unit: '°', digits: 0,
     views: { F: 'high', B: 'medium' },
     definition: 'Trunk side bend vs vertical at release, seen from home plate (+ = toward the glove side).',
     meaning: 'Some side bend matches a high arm slot (≈34° overhand, ≈25° sidearm). A lot more has been linked to higher arm torque.',
@@ -365,7 +371,7 @@ export const METRICS: MetricDef[] = [
     flag: { above: 45, text: 'Large trunk side bend at release (linked to higher arm torques in research).', stress: true },
   },
   {
-    key: 'strideDir', label: 'Stride direction (foot line)', short: 'Foot line', phase: 'stride', unit: '% ht', digits: 1,
+    key: 'strideDir', better: 'target', label: 'Stride direction (foot line)', short: 'Foot line', phase: 'stride', unit: '% ht', digits: 1,
     views: { F: 'medium', B: 'medium' },
     definition: 'Lead-ankle sideways offset at foot strike from the line through the back foot toward the plate (+ = toward the arm side / "closed").',
     meaning: 'Landing far off the line (open or closed) changes how the hips can rotate.',
@@ -376,7 +382,7 @@ export const METRICS: MetricDef[] = [
     flag: { below: -8, text: 'Landing well open of the line to the plate (linked to more shoulder force).', stress: true },
   },
   {
-    key: 'releaseSide', label: 'Release side', short: 'Release side', phase: 'release', unit: '% ht', digits: 1,
+    key: 'releaseSide', better: 'none', label: 'Release side', short: 'Release side', phase: 'release', unit: '% ht', digits: 1,
     views: { F: 'medium', B: 'low' },
     definition: 'Sideways hand position at release relative to the rubber (+ = toward the arm side).',
     meaning: 'Where the ball comes out sideways.',
@@ -384,7 +390,7 @@ export const METRICS: MetricDef[] = [
     up: 'Release farther to the arm side.', down: 'Release more over the top / toward the middle.',
   },
   {
-    key: 'headLatBR', label: 'Head sideways at release', short: 'Head side @BR', phase: 'release', unit: '% ht', digits: 1,
+    key: 'headLatBR', better: 'down', label: 'Head sideways at release', short: 'Head side @BR', phase: 'release', unit: '% ht', digits: 1,
     views: { F: 'high', B: 'medium' },
     definition: 'Head sideways offset from the lead ankle at release (+ = toward the glove side).',
     meaning: 'A head that falls far to the glove side often comes with a lot of side bend.',
@@ -394,7 +400,7 @@ export const METRICS: MetricDef[] = [
   },
   // ---------- 3D estimate metrics (monocular world landmarks)
   {
-    key: 'sep3dMax', label: 'Max hip-shoulder separation (3D estimate)', short: 'Max separation 3D', phase: 'stride', unit: '°', digits: 0,
+    key: 'sep3dMax', better: 'up', label: 'Max hip-shoulder separation (3D estimate)', short: 'Max separation 3D', phase: 'stride', unit: '°', digits: 0,
     views: { '3D': 'low' },
     definition: 'Largest pelvis-minus-trunk rotation between leg lift and release, from the pose model\'s single-camera 3D estimate.',
     meaning: 'A rough read of how much the hips lead the shoulders. Single-camera 3D is an estimate, not a measurement.',
@@ -403,7 +409,7 @@ export const METRICS: MetricDef[] = [
   },
   // ---------- Follow-through
   {
-    key: 'decelDist', label: 'Arm deceleration path', short: 'Decel path', phase: 'follow', unit: '% ht', digits: 0,
+    key: 'decelDist', better: 'up', label: 'Arm deceleration path', short: 'Decel path', phase: 'follow', unit: '% ht', digits: 0,
     views: { S: 'low' },
     definition: 'Length of the hand path from release to end of deceleration, % of body height.',
     meaning: 'A longer, smoother path spreads out the braking forces on the arm.',

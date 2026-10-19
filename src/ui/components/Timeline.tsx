@@ -22,7 +22,10 @@ export function Timeline({ duration, pb, events, onSeek }: { duration: number; p
     if (pb.loop) { ctx.fillStyle = col.accent + '33'; ctx.fillRect(X(pb.loop[0]), 4, X(pb.loop[1]) - X(pb.loop[0]), h - 8); }
     ctx.font = '600 11px "Barlow Condensed", sans-serif';
     ctx.textAlign = 'center';
-    for (const e of events) {
+    // labels that would overlap are staggered (layback, release and end of decel are only ~40 ms apart)
+    const lastX: Record<number, number> = { 0: -1e9, 1: -1e9 };
+    const lane: Record<number, number> = { 0: 0, 1: 0 };
+    for (const e of [...events].sort((p, q) => p.t - q.t)) {
       const x = X(e.t);
       const y0 = e.row === 0 ? 4 : h / 2 + 2, y1 = e.row === 0 ? h / 2 - 2 : h - 14;
       ctx.strokeStyle = e.color; ctx.lineWidth = 2;
@@ -30,7 +33,12 @@ export function Timeline({ duration, pb, events, onSeek }: { duration: number; p
       ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = e.color;
-      ctx.fillText(e.code, x, e.row === 0 ? h / 2 + 12 : h - 2);
+      lane[e.row] = x - lastX[e.row] < 26 ? (lane[e.row] + 1) % 3 : 0;
+      lastX[e.row] = x;
+      const ty = (e.row === 0 ? h / 2 + 12 : h - 2) - lane[e.row] * (e.row === 0 ? -0 : 0);
+      ctx.textAlign = lane[e.row] === 1 ? 'left' : lane[e.row] === 2 ? 'right' : 'center';
+      ctx.fillText(e.code, x + (lane[e.row] === 1 ? 3 : lane[e.row] === 2 ? -3 : 0), ty);
+      ctx.textAlign = 'center';
     }
     const x = X(pb.t);
     ctx.fillStyle = col.text; ctx.fillRect(x - 1.5, 0, 3, h);

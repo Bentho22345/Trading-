@@ -96,3 +96,28 @@ describe('sync', () => {
     expect(Math.abs(f(ta.events.FS / 240) - tb.events.FS / 240)).toBeLessThan(0.06);
   });
 });
+
+describe('better / worse scorecard', () => {
+  it('good day vs off day: A (good day) is the better delivery', () => {
+    expect(c.scorecard.winner).toBe('A');
+    const worse = c.scorecard.worse.map((f) => f.key);
+    for (const k of ['stride', 'forearmFS', 'kneeBlock', 'trunkTiltBR', 'gloveDistBR']) expect(worse).toContain(k);
+    expect(c.scorecard.better.map((f) => f.key)).not.toContain('kneeBlock');
+  });
+  it('reversed: B (good day) is the better delivery', () => {
+    const r = compareAnalyses(off.analysis, good.analysis);
+    expect(r.scorecard.winner).toBe('B');
+    expect(r.scorecard.better.map((f) => f.key)).toContain('kneeBlock');
+  });
+  it('style metrics are never called better or worse', () => {
+    for (const f of [...c.scorecard.better, ...c.scorecard.worse]) expect(f.def.better).not.toBe('none');
+  });
+  it('velocity is part of the verdict', () => {
+    const r = compareAnalyses(good.analysis, off.analysis, { velo: { a: 85, b: 81, source: 'ball tracking' } });
+    expect(r.scorecard.velo!.delta).toBeCloseTo(-4);
+    expect(r.scorecard.detail).toMatch(/85 → 81 mph/);
+  });
+  it('identical clips: no winner', () => {
+    expect(compareAnalyses(good.analysis, good.analysis).scorecard.winner).toBe('none');
+  });
+});

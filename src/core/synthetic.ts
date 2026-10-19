@@ -25,6 +25,7 @@ export interface PitchParams {
   swaps: number; // number of frames with left/right arm labels swapped
   seed: number;
   heightPx: number;
+  veloMph: number; // ball speed drawn in the demo video (measured back by the velocity tool)
 }
 
 export const GOOD_DAY: PitchParams = {
@@ -48,6 +49,7 @@ export const GOOD_DAY: PitchParams = {
   swaps: 3,
   seed: 7,
   heightPx: 420,
+  veloMph: 85,
 };
 
 /** "Off day": shorter stride, late arm at foot strike, front knee collapsing, upright trunk, glove flying open. */
@@ -64,6 +66,7 @@ export const OFF_DAY: PitchParams = {
   gloveUpperBR: -10,
   gloveForearmBR: -30,
   seed: 11,
+  veloMph: 81,
 };
 
 const T = 0.245, S = 0.246; // thigh, shank
@@ -343,3 +346,42 @@ export function generatePitch(p: PitchParams): SyntheticPitch {
 
 /** Resample a synthetic pitch's parameters to a different frame rate. */
 export const atFps = (p: PitchParams, fps: number): PitchParams => ({ ...p, fps });
+
+/**
+ * A running person (e.g. a base runner) for testing person selection: constant speed across the frame,
+ * alternating knee drive and arm swing. Body units like the pitcher (u forward, v up, fraction of height).
+ */
+export function generateRunner(fps: number, duration: number, speed = 3.5, startU = -1, cadenceHz = 2.6, still = false): Record<JointName, [number, number]>[] {
+  const n = Math.round(duration * fps);
+  const out: Record<JointName, [number, number]>[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / fps;
+    const ph = 2 * Math.PI * cadenceHz * t;
+    const amp = still ? 0 : 1;
+    const hip: P2 = [startU + (still ? 0 : speed * t), 0.5 + (still ? 0 : 0.015 * Math.cos(2 * ph))];
+    const leg = (s: 1 | -1): [P2, P2] => {
+      const th = (amp * 50 * Math.sin(ph + (s === 1 ? 0 : Math.PI)) * Math.PI) / 180; // thigh angle from vertical (forward +)
+      const knee: P2 = [hip[0] + T * Math.sin(th), hip[1] - T * Math.cos(th)];
+      const sh = th - (amp * (40 + 40 * Math.max(0, Math.sin(ph + (s === 1 ? 0 : Math.PI) - 1))) * Math.PI) / 180;
+      return [knee, [knee[0] + S * Math.sin(sh), knee[1] - S * Math.cos(sh)]];
+    };
+    const [lk, la] = leg(1), [rk, ra] = leg(-1);
+    const shC: P2 = [hip[0] + 0.03 * amp, hip[1] + TRUNK];
+    const arm = (s: 1 | -1): [P2, P2] => {
+      const a = -Math.PI / 2 + (amp * 45 * Math.sin(ph + (s === 1 ? Math.PI : 0)) * Math.PI) / 180;
+      const el: P2 = [shC[0] + UA * Math.cos(a), shC[1] + UA * Math.sin(a)];
+      return [el, [el[0] + FA * Math.cos(a + 1.4 * amp), el[1] + FA * Math.sin(a + 1.4 * amp)]];
+    };
+    const [le, lw] = arm(1), [re, rw] = arm(-1);
+    const f = {} as Record<JointName, [number, number]>;
+    f.nose = [shC[0] + 0.03, shC[1] + 0.115];
+    f.lShoulder = [shC[0] + 0.02, shC[1]]; f.rShoulder = [shC[0] - 0.02, shC[1]];
+    f.lElbow = le; f.lWrist = lw; f.rElbow = re; f.rWrist = rw;
+    f.lHip = [hip[0] + 0.02, hip[1]]; f.rHip = [hip[0] - 0.02, hip[1]];
+    f.lKnee = lk; f.rKnee = rk; f.lAnkle = la; f.rAnkle = ra;
+    f.lHeel = [la[0] - 0.035, la[1] - 0.035]; f.rHeel = [ra[0] - 0.035, ra[1] - 0.035];
+    f.lToe = [la[0] + 0.1, la[1] - 0.035]; f.rToe = [ra[0] + 0.1, ra[1] - 0.035];
+    out.push(f);
+  }
+  return out;
+}

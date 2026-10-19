@@ -16,6 +16,10 @@ export interface ExtractOptions {
   signal?: AbortSignal;
   onFrame: (f: FrameOut) => Promise<void>;
   onTotal?: (n: number) => void;
+  /** Only frames for which this returns true become bitmaps (the rest are decoded and dropped). */
+  keep?: (index: number) => boolean;
+  /** Extra clockwise rotation chosen by the user (on top of the file's own rotation). */
+  rotate?: number;
 }
 
 const isMp4Like = (f: Blob & { name?: string }) => /\.(mp4|m4v|mov)$/i.test(f.name ?? '') || /mp4|quicktime/.test(f.type);
@@ -42,6 +46,7 @@ function drawUpright(frame: VideoFrame, rotation: number, maxSide: number): Prom
 /** Decode frames with WebCodecs. Throws if the codec is unsupported so the caller can fall back. */
 export async function extractWithWebCodecs(file: Blob, opt: ExtractOptions): Promise<number> {
   const { info, samples } = await extractSamples(file, opt.startS, opt.endS);
+  const rotation = (((info.rotation + (opt.rotate ?? 0)) % 360) + 360) % 360;
   const config: VideoDecoderConfig = { codec: info.codec, codedWidth: info.width, codedHeight: info.height, description: info.description };
   const sup = await VideoDecoder.isConfigSupported(config);
   if (!sup.supported) throw new Error(`This browser can't decode ${info.codec} with WebCodecs.`);
@@ -61,8 +66,10 @@ export async function extractWithWebCodecs(file: Blob, opt: ExtractOptions): Pro
     while (queue.length > (all ? 0 : 2)) {
       const f = queue.shift()!;
       try {
-        const bitmap = await drawUpright(f, info.rotation, opt.maxSide);
-        await opt.onFrame({ bitmap, tMedia: f.timestamp / 1e6, index: index++ });
+        const i = index++;
+        if (opt.keep && !opt.keep(i)) continue;
+        const bitmap = await drawUpright(f, rotation, opt.maxSide);
+        await opt.onFrame({ bitmap, tMedia: f.timestamp / 1e6, index: i });
       } finally { f.close(); }
     }
   };
@@ -92,18 +99,24 @@ export async function extractWithSeeking(file: Blob, opt: ExtractOptions): Promi
   v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
   try {
     await new Promise<void>((res, rej) => { v.onloadeddata = () => res(); v.onerror = () => rej(new Error('This browser cannot decode this video file. Export it as H.264 MP4 ("Most Compatible" on iPhone) or VP9 WebM, or try Chrome/Edge/Safari.')); });
+    const rot = (((opt.rotate ?? 0) % 360) + 360) % 360;
     const w = v.videoWidth, h = v.videoHeight;
     const s = Math.min(1, opt.maxSide / Math.max(w, h));
-    const c = new OffscreenCanvas(Math.round(w * s), Math.round(h * s));
+    const sw = Math.round(w * s), sh = Math.round(h * s);
+    const c = rot % 180 ? new OffscreenCanvas(sh, sw) : new OffscreenCanvas(sw, sh);
     const ctx = c.getContext('2d')!;
     const end = Math.min(opt.endS, v.duration);
     const n = Math.max(1, Math.floor((end - opt.startS) * opt.fps));
     opt.onTotal?.(n);
     for (let i = 0; i < n; i++) {
       if (opt.signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+      if (opt.keep && !opt.keep(i)) continue;
       const t = opt.startS + (i + 0.5) / opt.fps; // aim at the middle of the frame interval
       await new Promise<void>((res) => { v.onseeked = () => res(); v.currentTime = t; });
-      ctx.drawImage(v, 0, 0, c.width, c.height);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+      ctx.drawImage(v, -sw / 2, -sh / 2, sw, sh);
       await opt.onFrame({ bitmap: await createImageBitmap(c), tMedia: opt.startS + i / opt.fps, index: i });
     }
     return n;
