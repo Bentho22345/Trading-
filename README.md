@@ -7,18 +7,20 @@ Pitching-mechanics analysis from phone video, running privately in your browser.
 ## Run it
 
 ```bash
-npm install        # also downloads the pose models and copies the MediaPipe WASM into public/
+npm install        # also downloads the pose models (MediaPipe + MoveNet) and copies the WASM runtimes into public/
 npm run dev        # http://localhost:5173
 npm run build && npx vite preview   # production build with the offline service worker
 ```
 
-The first screen loads a synthetic demo pitcher ("good day" vs "off day") so the comparison works before you film anything.
+The app opens on a sign-in screen. Create an account (stored on this device only), pick a person who has signed in before, or continue as a guest. Each account has its own library and settings, and "keep me signed in" remembers you for 30 days.
+
+The first screen after sign-in loads a synthetic demo pitcher ("good day" vs "off day") so the comparison works before you film anything.
 
 ## Test it
 
 ```bash
 npm test            # Vitest: synthetic-pitcher regression suite (events, metrics, comparison, sync, filters)
-npm run e2e         # Playwright: drag-and-drop, frame stepping, event editing, demo compare (desktop + 390 px phone)
+npm run e2e         # Playwright: sign-in/accounts, drag-and-drop, frame stepping, event editing, demo compare (desktop + 390 px phone)
 PERSON_CLIP=/path/to/video-of-a-person.mp4 npx playwright test -g "real pose model"   # optional real pose run
 npm run ci          # typecheck + unit + build + e2e
 ```

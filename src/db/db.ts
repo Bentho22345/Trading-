@@ -1,9 +1,11 @@
 // Local-first storage (IndexedDB via Dexie). Nothing here ever leaves the device.
 
 import Dexie, { type Table } from 'dexie';
+import { SCHEMA_V1 } from './schema';
+import { dbName } from '../auth/session';
 import type { Events, PoseTrack, View } from '../core/types';
 import type { VideoMeta } from '../video/meta';
-import type { ScanResult } from '../pose/pipeline';
+import type { PickRegion, ScanResult } from '../pose/pipeline';
 
 export interface BallData {
   velo?: number; spin?: number; spinEff?: number; gyro?: number; ivb?: number; hb?: number;
@@ -33,7 +35,8 @@ export interface ClipRecord {
   thumb?: Blob;
   mirror?: boolean;
   rotate?: number; // extra clockwise rotation chosen by the user (0/90/180/270)
-  personId?: number; // person chosen as the pitcher (when the user switched)
+  personId?: number; // person chosen as the pitcher (when the user switched); -1 = region marked by hand
+  pickBox?: PickRegion; // the region the user marked around the pitcher (followed when personId is -1)
   veloManual?: { mph: number; low: number; high: number }; // from the user marking the ball
   calibPxPerM?: number; // user calibration (track pixels per metre)
   analyzedWith?: string; // model id once a track exists
@@ -68,25 +71,14 @@ class MoundDB extends Dexie {
   markers!: Table<Marker, string>;
   assignments!: Table<DrillAssignment, string>;
   kv!: Table<{ key: string; value: unknown }, string>;
-  constructor() {
-    super('mound-lab');
-    this.version(1).stores({
-      clips: 'id, createdAt, athleteId, sessionId, pitchType, hash, *tags',
-      videos: 'id',
-      tracks: 'id',
-      frames: 'id',
-      athletes: 'id, name',
-      sessions: 'id, athleteId, date',
-      workload: 'id, athleteId, date',
-      annotations: 'id, clipId',
-      markers: 'id, athleteId, date',
-      assignments: 'id, athleteId',
-      kv: 'key',
-    });
+  constructor(name: string) {
+    super(name);
+    this.version(1).stores(SCHEMA_V1);
   }
 }
 
-export const db = new MoundDB();
+/** The signed-in person's library (guest mode keeps the original 'mound-lab' database). */
+export const db = new MoundDB(dbName());
 
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 
@@ -102,9 +94,9 @@ export async function hashFile(f: Blob): Promise<string> {
   return Array.from(new Uint8Array(d).slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export const trackKey = (c: Pick<ClipRecord, 'hash' | 'trim' | 'slowmo' | 'rotate' | 'personId'>, model: string) =>
-  `${c.hash}:${model}:${c.trim.inS.toFixed(3)}-${c.trim.outS.toFixed(3)}:${c.slowmo}:r${c.rotate ?? 0}:p${c.personId ?? 'auto'}:v2`;
+export const trackKey = (c: Pick<ClipRecord, 'hash' | 'trim' | 'slowmo' | 'rotate' | 'personId' | 'pickBox'>, model: string) =>
+  `${c.hash}:${model}:${c.trim.inS.toFixed(3)}-${c.trim.outS.toFixed(3)}:${c.slowmo}:r${c.rotate ?? 0}:p${c.personId ?? 'auto'}${c.pickBox ? `@${[c.pickBox.x0, c.pickBox.y0, c.pickBox.x1, c.pickBox.y1, c.pickBox.t].map((v) => v.toFixed(3)).join(',')}` : ''}:v3`;
 
 /** Key of the person scan (independent of which person is chosen). */
 export const scanKey = (c: Pick<ClipRecord, 'hash' | 'trim' | 'slowmo' | 'rotate'>, model: string) =>
-  `scan:${c.hash}:${model}:${c.trim.inS.toFixed(3)}-${c.trim.outS.toFixed(3)}:r${c.rotate ?? 0}:v2`;
+  `scan:${c.hash}:${model}:${c.trim.inS.toFixed(3)}-${c.trim.outS.toFixed(3)}:r${c.rotate ?? 0}:v3`;

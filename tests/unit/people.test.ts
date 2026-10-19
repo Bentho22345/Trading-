@@ -62,6 +62,19 @@ describe('pitcher identification', () => {
     expect(choice.people.find((p) => p.id === choice.pitcherId)!.heightFrac).toBeLessThan(0.1);
   });
 
+  it('between two people who both move like a pitch, prefers the bigger, more central one (behind view)', () => {
+    const fps = 30;
+    const p = generatePitch({ ...GOOD_DAY, fps, noise: 0, dropouts: 0, swaps: 0 });
+    const tracker = new PeopleTracker();
+    for (let i = 0; i < p.body.length; i++) {
+      // pitcher near the middle and closer to the camera; batter-like copy smaller and off to the side
+      tracker.update(i, i / fps, [toDet(p.body[i], 860, 900, 260), toDet(p.body[i], 1500, 500, 170)]);
+    }
+    const choice = choosePitcher(tracker.tracks, p.body.length, 1080, undefined, 1920);
+    const tr = tracker.tracks.find((t) => t.id === choice.pitcherId)!;
+    expect(tr.boxes[0][3] - tr.boxes[0][1]).toBeGreaterThan(200);
+  });
+
   it('honours a manual pick', () => {
     const { choice } = runScene({ pitcherPx: 300, runnerPx: 520, runnerX: 500, frameW: 1280, frameH: 720 });
     const other = choice.people.find((p) => p.role !== 'pitcher')!;

@@ -121,18 +121,11 @@ function PreAnalysis({ clip }: { clip: RuntimeClip }) {
       <div className="card">
         {url ? (
           <div style={{ position: 'relative' }}>
-            <video ref={video} src={url} controls playsInline muted style={{ width: '100%', borderRadius: 8, background: '#000', maxHeight: '60vh' }}
-              onClick={(e) => {
-                if (!pickMode) return;
-                e.preventDefault();
-                const rc = e.currentTarget.getBoundingClientRect();
-                const v = e.currentTarget;
-                const f = fit(v.videoWidth, v.videoHeight, rc.width, rc.height);
-                const x = (e.clientX - rc.left - f.tx) / f.w, y = (e.clientY - rc.top - f.ty) / f.h;
-                setPickMode(false);
-                void analyze(clip.id, { pick: { x, y } });
-              }} />
-            {pickMode && <div className="notice info small" style={{ position: 'absolute', top: 8, left: 8, right: 8 }}>Tap the pitcher in the video</div>}
+            <video ref={video} src={url} controls={!pickMode} playsInline muted style={{ width: '100%', borderRadius: 8, background: '#000', maxHeight: '60vh', display: 'block' }} />
+            {pickMode && video.current && (
+              <MarkPitcher video={video.current} onCancel={() => setPickMode(false)}
+                onDone={(b) => { setPickMode(false); void analyze(clip.id, { pick: { ...b, t: Math.max(0, (video.current?.currentTime ?? r.trim.inS) - r.trim.inS) } }); }} />
+            )}
           </div>
         ) : <div className="notice warn">Video preview unavailable in this browser. {r.meta.notes.join(' ')}</div>}
         <div className="controls">
@@ -166,11 +159,43 @@ function PreAnalysis({ clip }: { clip: RuntimeClip }) {
         ) : clip.progress ? <Progress value={0} label={clip.progress.stage} /> : (
           <div className="row">
             <button className="accent" onClick={() => analyze(clip.id)} data-testid="analyze-btn" disabled={r.trim.outS - r.trim.inS < 0.5}>Analyse</button>
-            <button onClick={() => setPickMode(true)} title="Use when more than one person is in the frame">Pick the pitcher…</button>
+            <button onClick={() => { video.current?.pause(); setPickMode(true); }} title="Use when the wrong person is tracked or nobody is found (e.g. far or behind views)" data-testid="mark-btn">Mark the pitcher…</button>
           </div>
         )}
         {clip.status === 'error' && <div className="notice bad">{clip.error} <br /><span className="small">Tips: make sure the whole body is visible, the clip is well lit, and the file plays in this browser. You can also try the other pose model.</span></div>}
       </div>
+    </div>
+  );
+}
+
+/** Overlay on the paused video: drag a box around the pitcher (or tap them). Coordinates are normalised 0–1. */
+function MarkPitcher({ video, onDone, onCancel }: { video: HTMLVideoElement; onDone: (b: { x0: number; y0: number; x1: number; y1: number }) => void; onCancel: () => void }) {
+  const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const norm = (e: React.PointerEvent) => {
+    const rc = e.currentTarget.getBoundingClientRect();
+    const f = fit(video.videoWidth, video.videoHeight, rc.width, rc.height);
+    return { x: Math.max(0, Math.min(1, (e.clientX - rc.left - f.tx) / f.w)), y: Math.max(0, Math.min(1, (e.clientY - rc.top - f.ty) / f.h)), f };
+  };
+  const rect = (() => {
+    if (!drag) return null;
+    const rc = video.getBoundingClientRect();
+    const f = fit(video.videoWidth, video.videoHeight, rc.width, rc.height);
+    return { left: f.tx + Math.min(drag.x0, drag.x1) * f.w, top: f.ty + Math.min(drag.y0, drag.y1) * f.h, width: Math.abs(drag.x1 - drag.x0) * f.w, height: Math.abs(drag.y1 - drag.y0) * f.h };
+  })();
+  return (
+    <div data-testid="mark-overlay" style={{ position: 'absolute', inset: 0, cursor: 'crosshair', touchAction: 'none' }}
+      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); const p = norm(e); setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y }); }}
+      onPointerMove={(e) => { if (!drag) return; const p = norm(e); setDrag({ ...drag, x1: p.x, y1: p.y }); }}
+      onPointerUp={() => {
+        if (!drag) return;
+        onDone({ x0: Math.min(drag.x0, drag.x1), y0: Math.min(drag.y0, drag.y1), x1: Math.max(drag.x0, drag.x1), y1: Math.max(drag.y0, drag.y1) });
+        setDrag(null);
+      }}>
+      <div className="notice info small" style={{ position: 'absolute', top: 8, left: 8, right: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <span style={{ flex: 1 }}>Pause on a frame where the pitcher is visible, then drag a box around them (or tap them).</span>
+        <button className="small" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onCancel(); }}>Cancel</button>
+      </div>
+      {rect && <div style={{ position: 'absolute', ...rect, border: '2px solid var(--a)', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 // Mound Lab service worker: offline app shell + cached pose model and WASM runtime.
-const VERSION = 'mound-lab-v1';
+const VERSION = 'mound-lab-v2';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png'];
-const BIG = ['./models/pose_landmarker_full.task', './models/pose_landmarker_lite.task'];
+const BIG = ['./models/pose_landmarker_full.task', './models/pose_landmarker_lite.task', './models/movenet-multipose.json', './models/movenet-multipose.bin', './models/movenet-thunder.json', './models/movenet-thunder.bin'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));
@@ -28,7 +28,7 @@ self.addEventListener('fetch', (e) => {
   // cache first for hashed assets, models and wasm
   e.respondWith(
     caches.match(req).then((hit) => hit || fetch(req).then((r) => {
-      if (r.ok && (/\/assets\/|\/models\/|\/mediapipe\/|\/icons\//.test(req.url))) { const copy = r.clone(); caches.open(VERSION).then((c) => c.put(req, copy)); }
+      if (r.ok && (/\/assets\/|\/models\/|\/mediapipe\/|\/tfjs\/|\/icons\//.test(req.url))) { const copy = r.clone(); caches.open(VERSION).then((c) => c.put(req, copy)); }
       return r;
     })),
   );
