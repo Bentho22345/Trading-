@@ -7,13 +7,24 @@ import '@fontsource/ibm-plex-sans/400.css';
 import '@fontsource/ibm-plex-sans/600.css';
 import '@fontsource/ibm-plex-mono/400.css';
 import './styles.css';
-import { App } from './ui/App';
+import { currentSession, touchSession } from './auth/session';
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const root = createRoot(document.getElementById('root')!);
+
+// The library (IndexedDB) and settings belong to whoever is signed in, so the app itself only loads after
+// sign-in. Signing in, switching person or signing out reloads the page to open the right library.
+async function boot() {
+  if (!currentSession()) {
+    document.documentElement.dataset.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    const { AuthScreen } = await import('./ui/screens/Auth');
+    root.render(<StrictMode><AuthScreen onDone={() => location.reload()} /></StrictMode>);
+    return;
+  }
+  touchSession();
+  const { App } = await import('./ui/App');
+  root.render(<StrictMode><App /></StrictMode>);
+}
+void boot();
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {

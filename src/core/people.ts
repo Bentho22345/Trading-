@@ -13,6 +13,9 @@
 /** MediaPipe 33-landmark indices used here. */
 export const MP = { nose: 0, lSh: 11, rSh: 12, lWr: 15, rWr: 16, lHip: 23, rHip: 24, lKnee: 25, rKnee: 26, lAnk: 27, rAnk: 28 } as const;
 
+/** Person id of a region the user marked by hand (followed frame to frame instead of found by the scan). */
+export const MANUAL_ID = -1;
+
 export type Box = [number, number, number, number]; // x0, y0, x1, y1 in frame pixels
 
 export interface Detection {
@@ -181,6 +184,15 @@ export function scorePerson(trIn: Tracklet, totalSamples: number, frameH: number
   // knee height above hip, in body heights (y grows downward)
   const liftL = tr.kps.map((k, i) => (vis(k, MP.lKnee) > 0.2 ? (hipY[i] - g(k, MP.lKnee, 1)) / H : NaN));
   const liftR = tr.kps.map((k, i) => (vis(k, MP.rKnee) > 0.2 ? (hipY[i] - g(k, MP.rKnee, 1)) / H : NaN));
+  // keypoint jitter on a tiny person can look like a lift: median-filter each knee over 3 samples (a real lift
+  // lasts ~0.3 s, ~9 samples, and survives)
+  const smooth = (v: number[]) => v.map((x, i) => {
+    if (!Number.isFinite(x)) return x;
+    const w = [v[i - 1], x, v[i + 1]].filter((y) => y !== undefined && Number.isFinite(y)) as number[];
+    return w.length === 3 ? median(w) : x;
+  });
+  liftL.splice(0, n, ...smooth(liftL));
+  liftR.splice(0, n, ...smooth(liftR));
   // a real leg lift lasts ~0.3 s: require the knee to stay up for two samples in a row
   const sustained = (v: number[]) => { let m = -Infinity; for (let i = 1; i < v.length; i++) if (Number.isFinite(v[i]) && Number.isFinite(v[i - 1])) m = Math.max(m, Math.min(v[i], v[i - 1])); return m; };
   const rise = (v: number[]) => { const base = median(v.slice(0, Math.max(3, Math.round(n * 0.2)))); const mx = sustained(v); return { base, rise: Number.isFinite(mx) ? mx - base : 0 }; };
@@ -207,8 +219,11 @@ export function scorePerson(trIn: Tracklet, totalSamples: number, frameH: number
   if (gaitPenalty >= 1) reasons.push('alternating leg lifts (running/walking gait)');
 
   // 3. starts still: hip speed during the first quarter of the person's presence
+  // (hips median-filtered over 3 samples: keypoint jitter on a tiny far-away person must not look like running)
+  const med3 = (v: number[]) => v.map((x, i) => (i === 0 || i === v.length - 1 ? x : median([v[i - 1], x, v[i + 1]])));
+  const hx = med3(hipX), hy = med3(hipY);
   const speed: number[] = [];
-  for (let i = 1; i < n; i++) speed.push(Math.hypot(hipX[i] - hipX[i - 1], hipY[i] - hipY[i - 1]) / H / Math.max(1e-3, tr.t[i] - tr.t[i - 1]));
+  for (let i = 1; i < n; i++) speed.push(Math.hypot(hx[i] - hx[i - 1], hy[i] - hy[i - 1]) / H / Math.max(1e-3, tr.t[i] - tr.t[i - 1]));
   const q = Math.max(2, Math.round(speed.length * 0.25));
   const startSpeed = median(speed.slice(0, q));
   const stillScore = startSpeed < 0.35 ? 1 : startSpeed < 1 ? 0.5 : 0;
@@ -274,14 +289,19 @@ export function stitchTracks(tracks: Tracklet[], maxGapS = 1.2): Tracklet[] {
 
 export interface PitcherChoice { pitcherId: number | null; people: PersonSummary[] }
 
-export function choosePitcher(tracksIn: Tracklet[], totalSamples: number, frameH: number, pickedId?: number): PitcherChoice {
-  const tracks = stitchTracks(tracksIn);
+export function choosePitcher(tracksIn: Tracklet[], totalSamples: number, frameH: number, pickedId?: number, frameW?: number): PitcherChoice {
+  const tracks = stitchTracks(tracksIn).filter((t) => t.boxes.length >= 2);
+  const sizes = tracks.map((t) => median(t.boxes.map(bh)));
+  const maxSize = Math.max(1, ...sizes);
   const people: PersonSummary[] = tracks
-    .filter((t) => t.boxes.length >= 2)
-    .map((t) => {
+    .map((t, k) => {
       const s = scorePerson(t, totalSamples, frameH);
       const mid = t.boxes[Math.floor(t.boxes.length / 2)];
-      return { id: t.id, role: s.role, score: s.score, reasons: s.reasons, box: mid, heightFrac: bh(mid) / frameH, presence: t.boxes.length / Math.max(1, totalSamples) };
+      // tie-breakers between people who both move like a pitch (e.g. batter vs pitcher from center field):
+      // the pitcher is usually the biggest person in a broadcast/behind view and near the middle of the frame
+      let score = s.score + 0.8 * (sizes[k] / maxSize);
+      if (frameW) score += 0.5 * Math.max(0, 1 - Math.abs(median(t.boxes.map(cx)) / frameW - 0.5) * 2);
+      return { id: t.id, role: s.role, score, reasons: s.reasons, box: mid, heightFrac: bh(mid) / frameH, presence: t.boxes.length / Math.max(1, totalSamples) };
     })
     .sort((a, b) => b.score - a.score);
   let pitcherId: number | null = null;
@@ -289,6 +309,22 @@ export function choosePitcher(tracksIn: Tracklet[], totalSamples: number, frameH
   else if (people.length && people[0].score > -5) pitcherId = people[0].id;
   for (const p of people) if (p.id === pitcherId) p.role = 'pitcher';
   return { pitcherId, people };
+}
+
+/**
+ * Pitcher filmed from behind (center-field camera): shoulders clearly visible but no face on most samples.
+ * MediaPipe's detector needs a face, so the tracking pass lets MoveNet lead for these clips.
+ */
+export function isBackView(tr: Pick<Tracklet, 'kps'>): boolean {
+  let seen = 0, back = 0;
+  for (const k of tr.kps) {
+    const sh = Math.min(k[MP.lSh * 3 + 2], k[MP.rSh * 3 + 2]);
+    if (sh < 0.35) continue;
+    seen++;
+    const face = Math.max(k[MP.nose * 3 + 2], k[2 * 3 + 2], k[5 * 3 + 2]);
+    if (face < 0.3) back++;
+  }
+  return seen >= 4 && back / seen > 0.5;
 }
 
 /** Box of a track at any time, linearly interpolated between scan samples (held at the ends). */

@@ -74,6 +74,37 @@ What this shows:
 - Frames are resized through a canvas because Safari ignores `createImageBitmap` resize options, which would otherwise feed 2868-px frames to the model.
 - Still not verified on a real iPhone (no device here). HEVC decoding depends on the browser: Safari and recent Chrome on Apple/Windows hardware decode it; elsewhere the app asks for an H.264 export.
 
+## 5. Version 3: pitchers filmed from behind, two pose models
+
+### Which model finds people (real photos, `COCO val2014` samples from the OpenPose repo)
+Run in this sandbox's headless Chromium (no GPU): MediaPipe on its GPU path via SwiftShader, MoveNet on TF.js WASM SIMD (TF.js refuses software WebGL).
+
+| Photo | MediaPipe people found | MoveNet MultiPose (+ zoom tiles) found |
+|---|---|---|
+| Plate area, umpire **with his back to the camera**, catcher, batter, on-deck hitter (640×480, behind netting) | **0** | **4** (all, including the umpire from behind) |
+| Broadcast view from behind first base, pitcher on the mound ~45 px tall (640×218) | **0** | **8** (pitcher, batter, catcher, umpire, fielders) |
+| Batter / catcher / umpire, TV view from behind the plate | 1 | 2 |
+| Child fielding from behind / side | 1 | 1 |
+| Person from behind, small in frame | 1 | 1 |
+| Amateur game, batter + catcher + umpire + fielders | 1 | 7 (3 are faint, low-score fielders) |
+
+- MoveNet speed: one whole-frame pass was **0.17–0.26 s** on WASM here (6.4 s on TF.js's plain-JS CPU backend, which is why WASM was added). On a phone or laptop GPU (WebGL) it is typically tens of milliseconds.
+- **Face scores can't detect a behind view with MoveNet**: it guesses face points even from behind (umpire's face score 0.49 vs 0.66–0.95 for people facing the camera). So the app checks what matters directly. During the scan, MediaPipe is run on a crop around each person every few samples. If it misses the pitcher on most of them, MoveNet leads the tracking pass. The tracking pass also switches over if MediaPipe loses the pitcher on more than half of the last 24 frames.
+
+### End-to-end, real model, behind view
+- Clip: the plate-area photo above, panned and shaken into a 2.5 s, 60 fps, 1280×720 VP9 video. It is not a pitch (nobody moves), so it checks finding and tracking, not mechanics.
+- Before (v2, MediaPipe finder): "No person could be found".
+- Now: **all 4 people are found and tracked**. The skeleton sits on the chosen person and is drawn from MoveNet. Total time 137 s in this sandbox (scan + 150 tracked frames, software GL); the app's own warnings correctly said there is no leg lift and no fast arm.
+
+### Mark the pitcher by hand (real model)
+- Behind-view clip: a box dragged around the **umpire (back to the camera)** selected him without any other input, and MoveNet tracked him.
+- Broadcast clip (the photo above, 1920×1080, 60 fps): a box around the **pitcher on the mound (~12% of frame height)** selected him out of 13 people found.
+
+### Regression on the version 2 clips (real model, new pipeline)
+- Runner composite: the runner is still labelled "Runner (ignored)" and the static person is analysed.
+- Far camera (person 13% of a 1920×1080 frame): found through the zoom tiles and tracked.
+- Broadcast still scene: the first version of the v3 scan called 2 tiny, motionless fielders "runners" because of keypoint jitter. Hip speed and knee lift are now median-filtered over 3 samples, and the false labels are gone. In a scene where nobody pitches, the automatic pick is arbitrary, which is what "Mark the pitcher" is for.
+
 ## Not yet validated (needed before trusting the tiers)
 1. **Event timing on real pitches.** This needs 20+ real clips per view at 120–240 fps, with FS/MER/BR labelled frame by frame by two raters. Report the mean/max error in frames and ms per event and per view.
 2. **Angle accuracy on real pitches.** Compare against manual goniometer measurements on key frames by two raters (knee, trunk, elbow, forearm, arm slot, side bend).
@@ -81,5 +112,6 @@ What this shows:
 4. **3D/marker comparison.** OpenBiomechanics (CC BY-NC-SA, non-commercial dev use only) could be rendered to 2D views to test the side/front pipelines against marker truth.
 5. **Performance** on a mid-range laptop (WebGPU/WebGL), a recent iPhone and an Android phone, against the 20 s / 45 s targets.
 6. **View classification** on real side-open, side-closed, front and back clips.
+7. **MoveNet vs MediaPipe joint accuracy** on real pitches (MoveNet has no heels/toes or 3D; its left/right can flip from behind). The app tells the user when MoveNet tracked the pitcher.
 
 Until (1)–(3) are done, the High/Medium/Low tiers follow the published single-camera validation (PITCHAI: pelvis/trunk ≈6°, knee ≈9°, throwing arm ≈12°, glove arm ≈14° RMSE) and the camera-plane validity rules, not Mound Lab's own measurements.

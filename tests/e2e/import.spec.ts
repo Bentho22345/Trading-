@@ -3,6 +3,8 @@ import { readFileSync, existsSync } from 'node:fs';
 
 async function dropFiles(page: Page, files: { name: string; path: string }[], target?: string) {
   const payload = files.map((f) => ({ name: f.name, b64: readFileSync(f.path).toString('base64') }));
+  // the app loads after the sign-in check: wait until it's listening for drops
+  await expect(page.getByTestId('slot-A-name')).toBeVisible({ timeout: 20000 });
   await page.evaluate(async ({ payload, target }) => {
     const dt = new DataTransfer();
     for (const f of payload) {
