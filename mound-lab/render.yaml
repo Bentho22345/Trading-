@@ -1,0 +1,31 @@
+# Render Blueprint for Mound Lab (a static site: everything runs in the browser).
+# Render Dashboard → New → Blueprint → pick this repo and branch → set "Blueprint Path" to mound-lab/render.yaml.
+# The build downloads the MediaPipe pose models (postinstall) so the site serves them itself.
+services:
+  - type: web
+    name: mound-lab
+    runtime: static
+    rootDir: mound-lab
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+    headers:
+      # always fetch a fresh service worker and app shell so updates roll out
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache
+      # hashed bundles, models and the WASM runtime never change under the same name
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /models/*
+        name: Cache-Control
+        value: public, max-age=604800
+      - path: /mediapipe/*
+        name: Cache-Control
+        value: public, max-age=604800
