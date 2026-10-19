@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, uid, type Athlete, type BallData } from '../../db/db';
-import { useStore, type RuntimeClip } from '../../state/store';
+import { clipVelo, useStore, type RuntimeClip } from '../../state/store';
+import { sessionReport } from '../../core/consistency';
 import { METRICS, METRIC_BY_KEY } from '../../core/catalog';
 import { mean, sd } from '../../core/signal';
 import { DRILL_BY_ID } from '../../data/drills';
@@ -158,11 +159,52 @@ function SessionRow({ sid, date, clips }: { sid: string; date: string; clips: Ru
           <select value={k} onChange={(e) => setK(e.target.value)}>{METRICS.filter((m) => TREND_KEYS.includes(m.key)).map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</select>
           drifts from pitch 1 to pitch {clips.length}
         </div>
+        <SessionConsistency clips={clips} />
         {clips.length >= 2 ? <LineChart title={METRIC_BY_KEY[k].label} unit={METRIC_BY_KEY[k].unit} xLabel="pitch number" series={[{ t: v.map((p) => p.i), y: v.map((p) => p.y), color: col.b, label: 'pitch' }]} height={150} /> : <p className="small muted">Needs 2+ analysed pitches.</p>}
         <div className="row tight">{clips.map((c) => <button key={c.id} className="small" onClick={() => { setSlot('B', c.id); go(`/clip/${c.id}`); }}>{c.record.name}</button>)}</div>
         <span hidden>{sid}</span>
       </div>
     </details>
+  );
+}
+
+function SessionConsistency({ clips }: { clips: RuntimeClip[] }) {
+  const setSlot = useStore((s) => s.setSlot);
+  const rep = useMemo(() => sessionReport(clips.map((c) => c.analysis!), clips.map((c) => clipVelo(c)?.mph)), [clips]);
+  if (clips.length < 3) return <p className="small muted">Analyse 3+ pitches from this session for a consistency report.</p>;
+  const pts = rep.release;
+  const xs = pts.map((p) => p.ext), ys = pts.map((p) => p.height);
+  const [x0, x1, y0, y1] = [Math.min(...xs) - 2, Math.max(...xs) + 2, Math.min(...ys) - 2, Math.max(...ys) + 2];
+  const X = (v: number) => 30 + ((v - x0) / (x1 - x0 || 1)) * 250, Y = (v: number) => 150 - ((v - y0) / (y1 - y0 || 1)) * 130;
+  const best = rep.best ? clips[rep.best.index] : null;
+  return (
+    <div className="card flat stack">
+      <div className="row spread">
+        <h4 style={{ margin: 0 }}>Consistency {rep.score !== null && <span className="num" style={{ fontSize: '1.4rem', marginLeft: 6 }}>{rep.score}/100</span>}</h4>
+        {best && <span className="small">Best pitch: <a href={`#/clip/${best.id}`}>{best.record.name}</a> — {rep.best!.why} <button className="small" onClick={() => setSlot('A', best.id)}>Use as A</button></span>}
+      </div>
+      <div className="grid cols-2">
+        <table className="metrics">
+          <thead><tr><th>Metric</th><th>Average</th><th>Spread (SD)</th><th /></tr></thead>
+          <tbody>{rep.rows.map((r) => (
+            <tr key={r.key}><td>{r.label}</td><td className="v">{r.mean.toFixed(1)}{r.unit === '°' ? '°' : ` ${r.unit}`}</td><td className="v">±{r.sd.toFixed(1)}</td>
+              <td><span className={`pill ${r.rating === 'inconsistent' ? 'big' : r.rating === 'repeatable' ? 'changed' : 'steady'}`}>{r.rating}</span></td></tr>
+          ))}</tbody>
+        </table>
+        {pts.length >= 2 && (
+          <figure style={{ margin: 0 }}>
+            <figcaption className="small" style={{ fontWeight: 600 }}>Release points <span className="faint">(extension vs height, % ht)</span></figcaption>
+            <svg viewBox="0 0 290 170" style={{ width: '100%', maxWidth: 420 }} role="img" aria-label="Release point scatter">
+              <rect x="30" y="20" width="250" height="130" fill="none" stroke="var(--line)" />
+              {pts.map((p) => <circle key={p.i} cx={X(p.ext)} cy={Y(p.height)} r={rep.best?.index === p.i ? 6 : 4} fill={rep.best?.index === p.i ? 'var(--accent)' : 'var(--a)'} opacity="0.85"><title>{clips[p.i].record.name}</title></circle>)}
+              <text x="155" y="166" fontSize="9" textAnchor="middle" fill="var(--text-3)">extension →</text>
+              <text x="4" y="14" fontSize="9" fill="var(--text-3)">height ↑</text>
+            </svg>
+          </figure>
+        )}
+      </div>
+      <p className="tiny faint" style={{ margin: 0 }}>"Very repeatable" = pitch-to-pitch spread under half of what counts as a real change; "inconsistent" = spread bigger than a real change. A tight release-point cluster usually means better command.</p>
+    </div>
   );
 }
 

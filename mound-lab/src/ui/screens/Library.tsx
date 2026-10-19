@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useStore } from '../../state/store';
+import { clipVelo, useStore } from '../../state/store';
 import { db, uid } from '../../db/db';
 import { ClipThumb } from '../components/common';
 import { go } from '../router';
 import { PITCH_TYPES } from './ClipScreen';
-import { autoSplit } from '../bullpen';
 
 export function Library() {
   const { clips, order, setSlot, analyze, updateRecord } = useStore();
@@ -51,7 +50,7 @@ export function Library() {
             </div>
             <div>
               <a href={`#/clip/${c.id}`} style={{ fontWeight: 600 }}>{c.record.starred ? '★ ' : ''}{c.record.name}</a>
-              <div className="tiny muted">{new Date(c.record.createdAt).toLocaleDateString()} · {c.record.pitchType ?? 'type?'} · {athletes.find((a) => a.id === c.record.athleteId)?.name ?? 'no athlete'} · {c.status === 'ready' ? 'analysed' : c.status}</div>
+              <div className="tiny muted">{new Date(c.record.createdAt).toLocaleDateString()} · {c.record.pitchType ?? 'type?'} · {athletes.find((a) => a.id === c.record.athleteId)?.name ?? 'no athlete'} · {c.status === 'ready' ? 'analysed' : c.status}{clipVelo(c) ? ` · ${clipVelo(c)!.mph.toFixed(0)} mph` : ''}</div>
               {c.record.tags.length > 0 && <div className="row tight" style={{ marginTop: 4 }}>{c.record.tags.map((t) => <span key={t} className="pill na">{t}</span>)}</div>}
             </div>
             <div className="row tight">
@@ -78,7 +77,7 @@ function BullpenSplit({ id }: { id: string }) {
   useEffect(() => { if (msg) { const t = setTimeout(() => setMsg(null), 6000); return () => clearTimeout(t); } }, [msg]);
   return (
     <>
-      <button className="small" disabled={busy} onClick={async () => { setBusy(true); try { const n = await autoSplit(id, (p) => setMsg(p)); setMsg(`Split into ${n} pitch${n === 1 ? '' : 'es'}`); } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); } }} title="Find each pitch in a long bullpen video and make a clip for each">
+      <button className="small" disabled={busy} onClick={async () => { setBusy(true); try { const { autoSplit } = await import('../bullpen'); const n = await autoSplit(id, (p) => setMsg(p)); setMsg(`Split into ${n} pitch${n === 1 ? '' : 'es'}`); } catch (e) { setMsg((e as Error).message); } finally { setBusy(false); } }} title="Find each pitch in a long bullpen video and make a clip for each">
         {busy ? 'Splitting…' : 'Split bullpen'}
       </button>
       {msg && <span className="tiny muted">{msg}</span>}

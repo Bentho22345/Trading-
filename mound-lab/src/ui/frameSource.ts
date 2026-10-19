@@ -9,6 +9,8 @@ export interface FrameSource {
   /** Draws frame i into the rect. Returns false if the exact frame wasn't ready (a nearby one was drawn). */
   draw(ctx: CanvasRenderingContext2D, i: number, dx: number, dy: number, dw: number, dh: number): boolean;
   prefetch(i: number): void;
+  /** Full-resolution bitmap of frame i (for pixel analysis such as ball tracking). Caller closes it. */
+  bitmapAt(i: number): Promise<ImageBitmap>;
   /** Subscribe to "a frame finished decoding"; returns an unsubscribe function. */
   subscribe(cb: () => void): () => void;
 }
@@ -20,6 +22,7 @@ export class JpegFrames implements FrameSource {
   private order: number[] = [];
   private listeners = new Set<() => void>();
   subscribe(cb: () => void) { this.listeners.add(cb); return () => { this.listeners.delete(cb); }; }
+  bitmapAt(i: number) { return createImageBitmap(this.blobs[Math.max(0, Math.min(this.n - 1, Math.round(i)))]); }
   constructor(private blobs: Blob[], public width: number, public height: number, private max = 90) {
     this.n = blobs.length;
   }
@@ -61,15 +64,22 @@ const LIMBS: [JointName, JointName, number][] = [
 ];
 
 /** Renders a simple athletic figure on a field background from a clean synthetic track. */
+export interface BallFlight { brFrame: number; mph: number; fps: number; heightM: number; dir: 1 | -1 }
+
 export class SyntheticFrames implements FrameSource {
   n: number;
   width: number;
   height: number;
-  constructor(private tr: PoseTrack, private heightPx: number, private groundY: number, private throwSide: 'l' | 'r') {
+  constructor(private tr: PoseTrack, private heightPx: number, private groundY: number, private throwSide: 'l' | 'r', private ball?: BallFlight) {
     this.n = tr.t.length; this.width = tr.width; this.height = tr.height;
   }
   prefetch() {}
   subscribe() { return () => undefined; }
+  async bitmapAt(i: number) {
+    const c = new OffscreenCanvas(this.width, this.height);
+    this.draw(c.getContext('2d') as unknown as CanvasRenderingContext2D, i, 0, 0, this.width, this.height);
+    return createImageBitmap(c);
+  }
   draw(ctx: CanvasRenderingContext2D, i: number, dx: number, dy: number, dw: number, dh: number) {
     i = Math.max(0, Math.min(this.n - 1, Math.round(i)));
     const sx = dw / this.width, sy = dh / this.height;
@@ -109,8 +119,18 @@ export class SyntheticFrames implements FrameSource {
     // glove + ball
     const gl = P(`${far}Wrist` as JointName);
     ctx.fillStyle = '#7a4a22'; ctx.beginPath(); ctx.arc(gl[0], gl[1], 0.035 * H, 0, Math.PI * 2); ctx.fill();
-    const bw = P(`${this.throwSide}Wrist` as JointName);
-    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(bw[0], bw[1], 0.016 * H, 0, Math.PI * 2); ctx.fill();
+    // ball: in the hand until release, then flying toward the plate at the pitch's speed
+    const wj = J[`${this.throwSide}Wrist` as JointName];
+    let bx: number, by: number;
+    if (!this.ball || i <= this.ball.brFrame) { [bx, by] = P(`${this.throwSide}Wrist` as JointName); }
+    else {
+      const b = this.ball;
+      const pxPerS = (b.mph / 2.23694) * (this.heightPx / b.heightM);
+      const dt = (i - b.brFrame) / b.fps;
+      bx = dx + (this.tr.x[wj][b.brFrame] + b.dir * pxPerS * dt) * sx;
+      by = dy + (this.tr.y[wj][b.brFrame] + 0.06 * pxPerS * dt) * sy;
+    }
+    if (bx >= dx && bx <= dx + dw) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(bx, by, 0.02 * H, 0, Math.PI * 2); ctx.fill(); }
     return true;
   }
 }

@@ -101,6 +101,8 @@ export function AICoach({ A, B, cmp }: { A: RuntimeClip; B: RuntimeClip; cmp: Co
 Setup warnings: ${cmp.setup.warnings.join(' ') || 'none'}
 Flags on B: ${cmp.flags.filter((f) => f.clip === 'B').map((f) => f.text).join(' ') || 'none'}
 Pitch types: A ${A.record.pitchType ?? 'unknown'}, B ${B.record.pitchType ?? 'unknown'}. Ball data: A ${JSON.stringify(A.record.ballData ?? {})}, B ${JSON.stringify(B.record.ballData ?? {})}.
+Velocity: A ${cmp.scorecard.velo ? cmp.scorecard.velo.a.toFixed(1) : 'unknown'} mph, B ${cmp.scorecard.velo ? cmp.scorecard.velo.b.toFixed(1) : 'unknown'} mph (${cmp.scorecard.velo?.source ?? 'n/a'}; video estimates are ±5–8%).
+Rule-engine scorecard: ${cmp.scorecard.headline} ${cmp.scorecard.detail}
 Athlete notes: ${notes || '(none)'}
 
 Metrics:
