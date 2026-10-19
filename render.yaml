@@ -6,7 +6,7 @@ services:
     name: mound-lab
     runtime: static
     rootDir: mound-lab
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build   # dev deps (vite, typescript) are build tools; include them even if NODE_ENV=production
     staticPublishPath: dist
     envVars:
       - key: NODE_VERSION
