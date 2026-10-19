@@ -35,4 +35,4 @@ Playwright uses the Chromium at `/opt/pw-browsers/chromium`. Override it with `P
 
 ## Deploy on Render
 
-`mound-lab/render.yaml` is a separate Render Blueprint for this app (the repo-root `render.yaml` is for PULSE). In Render: **New → Blueprint**, pick this repository and branch, and set **Blueprint Path** to `mound-lab/render.yaml`. It builds a free static site. No environment secrets are needed: the optional AI coach uses a key each user enters in their own browser.
+Use the standalone **`mound-lab`** branch: it has this app at the repository root with its own `render.yaml`, so its Blueprint never includes PULSE. In Render: **New → Blueprint**, choose this repository and the `mound-lab` branch. It builds a free static site. No environment secrets are needed: the optional AI coach uses a key each user enters in their own browser.

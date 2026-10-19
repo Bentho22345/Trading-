@@ -1,12 +1,13 @@
 # Render Blueprint for Mound Lab (a static site: everything runs in the browser).
-# Render Dashboard → New → Blueprint → pick this repo and branch → set "Blueprint Path" to mound-lab/render.yaml.
+# Prefer the standalone "mound-lab" branch (app at the repo root, its own Blueprint, no PULSE).
+# Otherwise: New → Blueprint → set "Blueprint Path" to mound-lab/render.yaml.
 # The build downloads the MediaPipe pose models (postinstall) so the site serves them itself.
 services:
   - type: web
     name: mound-lab
     runtime: static
     rootDir: mound-lab
-    buildCommand: npm ci --include=dev && npm run build   # dev deps (vite, typescript) are build tools; include them even if NODE_ENV=production
+    buildCommand: npm ci --include=dev && npx vite build   # dev deps are the build tools; type-checking runs in CI
     staticPublishPath: dist
     envVars:
       - key: NODE_VERSION
