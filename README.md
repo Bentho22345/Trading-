@@ -32,3 +32,7 @@ Playwright uses the Chromium at `/opt/pw-browsers/chromium`. Override it with `P
 - `VALIDATION.md` — what has been measured, how, and what hasn't
 - `src/core/` — the analysis engine (pure TypeScript, unit-tested)
 - `src/core/catalog.ts` — every metric's definition, camera-view validity, reference range with source, change threshold and coaching text
+
+## Deploy on Render
+
+`mound-lab/render.yaml` is a separate Render Blueprint for this app (the repo-root `render.yaml` is for PULSE). In Render: **New → Blueprint**, pick this repository and branch, and set **Blueprint Path** to `mound-lab/render.yaml`. It builds a free static site. No environment secrets are needed: the optional AI coach uses a key each user enters in their own browser.
