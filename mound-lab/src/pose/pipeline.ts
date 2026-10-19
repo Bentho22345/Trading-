@@ -89,13 +89,29 @@ function call(w: Worker, kind: 'detect' | 'track', bitmap: ImageBitmap, tMs = 0)
   });
 }
 
-/** Crop a square/rect region of a frame (may extend past the edges) and resize it for the model. */
+/** Crop a region of a frame (may extend past the edges — that part stays empty) and resize it for the model. */
 function crop(src: ImageBitmap, b: Box, size: number): Promise<ImageBitmap> {
   const sw = b[2] - b[0], sh = b[3] - b[1];
   const s = size / Math.max(sw, sh);
-  return createImageBitmap(src, Math.round(b[0]), Math.round(b[1]), Math.max(1, Math.round(sw)), Math.max(1, Math.round(sh)), {
-    resizeWidth: Math.max(1, Math.round(sw * s)), resizeHeight: Math.max(1, Math.round(sh * s)), resizeQuality: 'medium',
-  });
+  const c = new OffscreenCanvas(Math.max(1, Math.round(sw * s)), Math.max(1, Math.round(sh * s)));
+  // canvas drawing (not createImageBitmap resize options, which Safari ignores)
+  c.getContext('2d')!.drawImage(src, b[0], b[1], sw, sh, 0, 0, c.width, c.height);
+  return Promise.resolve(c.transferToImageBitmap());
+}
+
+/** Copy a bitmap (the worker takes ownership of what it is sent). */
+function copy(src: ImageBitmap): ImageBitmap {
+  const c = new OffscreenCanvas(src.width, src.height);
+  c.getContext('2d')!.drawImage(src, 0, 0);
+  return c.transferToImageBitmap();
+}
+
+/** Throw away the worker after a model error so the next run starts from a clean graph. */
+export function resetPoseWorker() {
+  worker?.terminate();
+  worker = null; workerModel = null;
+  for (const p of pending.values()) p.rej(new Error('Pose worker restarted'));
+  pending.clear();
 }
 
 /** Convert a worker result (normalised to the crop) into frame-pixel detections. */
@@ -125,23 +141,27 @@ const squareAround = (b: Box, scale: number, min: number): Box => {
 async function scanPeople(w: Worker, file: Blob, opt: PoseRunOptions, report: (done: number, total: number) => void): Promise<ScanResult> {
   const step = Math.max(1, Math.round(opt.fpsMedia / 30));
   const tracker = new PeopleTracker(10);
-  let frameW = 0, frameH = 0, sample = 0, total = 0, smallPeople = false;
+  const T = () => tracker2;
+  let tracker2 = tracker;
+  let frameW = 0, frameH = 0, sample = 0, total = 0, smallPeople = false, lastIndex = -1;
   await extractFrames(file, {
     startS: opt.startS, endS: opt.endS, fps: opt.fpsMedia, maxSide: 1920, rotate: opt.rotate, signal: opt.signal,
     keep: (i) => i % step === 0,
     onTotal: (n) => { total = Math.ceil(n / step); },
-    onFrame: async ({ bitmap, tMedia }) => {
+    onFrame: async ({ bitmap, tMedia, index }) => {
       try {
+        if (index <= lastIndex) { tracker2 = new PeopleTracker(10); sample = 0; } // decoder fell back and restarted
+        lastIndex = index;
         frameW = bitmap.width; frameH = bitmap.height;
         const t = tMedia - opt.startS;
         // one big, clearly visible person and nobody else so far: half the scan rate is plenty
-        if (sample > 6 && sample % 2 === 1 && sample % 8 !== 0 && !smallPeople && tracker.tracks.length === 1) { sample++; report(sample, total); return; }
+        if (sample > 6 && sample % 2 === 1 && sample % 8 !== 0 && !smallPeople && T().tracks.length === 1) { sample++; report(sample, total); return; }
         const full: Box = [0, 0, frameW, frameH];
         let dets: Detection[] = [];
-        const active = tracker.active();
+        const active = T().active();
         // whole-frame search: at the start, regularly, and whenever nobody is being tracked
         if (sample === 0 || sample % 8 === 0 || !active.length) {
-          const r = await call(w, 'detect', await createImageBitmap(bitmap));
+          const r = await call(w, 'detect', copy(bitmap));
           dets.push(...toDetections(r, full));
           // small people (far camera, e.g. center field): search a pyramid of zoomed tiles
           const biggest = Math.max(0, ...dets.map((d) => (d.box[3] - d.box[1]) / frameH));
@@ -161,7 +181,7 @@ async function scanPeople(w: Worker, file: Blob, opt: PoseRunOptions, report: (d
           dets.push(...toDetections(r, region));
         }
         dets = nms(dets.filter((d) => d.box[3] - d.box[1] > 8));
-        tracker.update(sample, t, dets, Math.max(10, frameH * 0.03));
+        T().update(sample, t, dets, Math.max(10, frameH * 0.03));
         sample++;
         report(sample, total);
       } finally {
@@ -169,7 +189,7 @@ async function scanPeople(w: Worker, file: Blob, opt: PoseRunOptions, report: (d
       }
     },
   });
-  const stitched = stitchTracks(tracker.tracks);
+  const stitched = stitchTracks(T().tracks);
   const choice = choosePitcher(stitched, sample, frameH, opt.personId);
   let pitcherId = choice.pitcherId;
   if (opt.pick && opt.personId === undefined) {
@@ -250,8 +270,40 @@ export async function runPose(file: Blob, opt: PoseRunOptions): Promise<PoseRunR
   await Promise.all(inflight);
   void t0;
 
+  if (times.length < 5) throw new Error('No frames could be read from this clip.');
+  // Variable frame rate (phones drop frames): put everything on an even timeline at the typical frame
+  // interval, interpolating joints between the real frames, so every speed and timing is right.
+  const intervals = times.slice(1).map((t, i) => t - times[i]).filter((d) => d > 0).sort((a, b) => a - b);
+  const dtMed = intervals[Math.floor(intervals.length / 2)] || 1 / opt.fpsMedia;
+  const uneven = intervals.length > 4 && (intervals[Math.floor(intervals.length * 0.9)] > dtMed * 1.4 || Math.abs(1 / dtMed - opt.fpsMedia) / opt.fpsMedia > 0.08);
+  let fpsMedia = opt.fpsMedia;
+  if (uneven) {
+    fpsMedia = 1 / dtMed;
+    const t0g = times[0], t1g = times[times.length - 1];
+    const m = Math.floor((t1g - t0g) / dtMed) + 1;
+    const gTimes: number[] = [], gFrames: Blob[] = [], gRes: typeof results = [];
+    let j = 0;
+    for (let k = 0; k < m; k++) {
+      const tg = t0g + k * dtMed;
+      while (j < times.length - 2 && times[j + 1] <= tg) j++;
+      const a = j, b = Math.min(times.length - 1, j + 1);
+      const u = times[b] > times[a] ? Math.max(0, Math.min(1, (tg - times[a]) / (times[b] - times[a]))) : 0;
+      gTimes.push(tg);
+      gFrames.push(frames[u < 0.5 ? a : b]);
+      const ra = results[a], rb = results[b];
+      if (ra && rb) {
+        const kp = new Float32Array(99);
+        for (let q = 0; q < 99; q++) kp[q] = q % 3 === 2 ? Math.min(ra.kp[q], rb.kp[q]) : ra.kp[q] + (rb.kp[q] - ra.kp[q]) * u;
+        let world: Float32Array | undefined;
+        if (ra.world && rb.world) { world = new Float32Array(99); for (let q = 0; q < 99; q++) world[q] = ra.world[q] + (rb.world[q] - ra.world[q]) * u; }
+        gRes.push({ box: ra.box, kp, world });
+      } else gRes.push(u < 0.5 ? ra : rb);
+    }
+    times.length = 0; times.push(...gTimes);
+    frames.length = 0; frames.push(...gFrames);
+    results.length = 0; results.push(...gRes);
+  }
   const n = times.length;
-  if (n < 5) throw new Error('No frames could be read from this clip.');
   const x = Array.from({ length: NJ }, () => new Float32Array(n));
   const y = Array.from({ length: NJ }, () => new Float32Array(n));
   const c = Array.from({ length: NJ }, () => new Float32Array(n));
@@ -270,7 +322,7 @@ export async function runPose(file: Blob, opt: PoseRunOptions): Promise<PoseRunR
   }
   const t = times.map((tm) => (tm - times[0]) / opt.slowmo);
   const track: PoseTrack = {
-    fps: opt.fpsMedia * opt.slowmo, width: dims.w, height: dims.h, t, x, y, c, model: `mediapipe-pose-${opt.model}`,
+    fps: fpsMedia * opt.slowmo, width: dims.w, height: dims.h, t, x, y, c, model: `mediapipe-pose-${opt.model}`,
     world: hasWorld ? { x: wx, y: wy, z: wz } : undefined,
   };
   return { track, frames, method, delegate: workerDelegate, lostFrames: lost, scan };

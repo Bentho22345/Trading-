@@ -65,6 +65,15 @@ What this shows:
 ### Better / worse verdict
 - Unit tests: good day vs off day → "A is the better delivery", with all five injected faults listed as "B is worse". Reversed → "B is better". Identical clips → no winner. Style metrics are never called better or worse. Velocity enters the verdict.
 
+### iPhone-style files (HEVC, variable frame rate, very large frames)
+- A field report from an iPhone (2868×1320 HEVC, shown as "49 fps, variable frame rate", in Safari) crashed the first version with a MediaPipe "packet timestamp mismatch". Cause: when the hardware decoder failed part-way and the app fell back to seeking, it reset the model's clock, so time went backwards. Fixed by:
+  - a clock that only moves forward;
+  - a fresh model plus one automatic retry after any model error;
+  - plain-English error messages.
+- Variable frame rate: the real capture rate is now the median frame interval (a 60 fps recording with dropped frames averages ~49 fps). Tested in `mp4.test.ts` (60 fps file with every 5th frame dropped → reports 60, flags VFR). End to end in the browser, a 48-fps-average file of a real person was analysed at 60 fps on an even timeline, with joints interpolated across dropped frames.
+- Frames are resized through a canvas because Safari ignores `createImageBitmap` resize options, which would otherwise feed 2868-px frames to the model.
+- Still not verified on a real iPhone (no device here). HEVC decoding depends on the browser: Safari and recent Chrome on Apple/Windows hardware decode it; elsewhere the app asks for an H.264 export.
+
 ## Not yet validated (needed before trusting the tiers)
 1. **Event timing on real pitches.** This needs 20+ real clips per view at 120–240 fps, with FS/MER/BR labelled frame by frame by two raters. Report the mean/max error in frames and ms per event and per view.
 2. **Angle accuracy on real pitches.** Compare against manual goniometer measurements on key frames by two raters (knee, trunk, elbow, forearm, arm slot, side bend).

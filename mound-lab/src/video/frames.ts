@@ -28,19 +28,20 @@ export function canUseWebCodecs() {
   return typeof VideoDecoder !== 'undefined' && typeof EncodedVideoChunk !== 'undefined';
 }
 
-function drawUpright(frame: VideoFrame, rotation: number, maxSide: number): Promise<ImageBitmap> {
+function drawUpright(frame: VideoFrame, rotation: number, maxSide: number): ImageBitmap {
+  // Always draw through a canvas: Safari ignores createImageBitmap's resize options and some browsers can't
+  // make a bitmap straight from a VideoFrame, which used to give full-size (huge) or failed frames.
   const w = frame.displayWidth, h = frame.displayHeight;
   const rot = rotation % 180 !== 0;
   const ow = rot ? h : w, oh = rot ? w : h;
   const s = Math.min(1, maxSide / Math.max(ow, oh));
   const cw = Math.round(ow * s), ch = Math.round(oh * s);
-  if (!rotation) return createImageBitmap(frame, { resizeWidth: cw, resizeHeight: ch, resizeQuality: 'medium' });
   const c = new OffscreenCanvas(cw, ch);
   const ctx = c.getContext('2d')!;
   ctx.translate(cw / 2, ch / 2);
-  ctx.rotate((rotation * Math.PI) / 180);
+  if (rotation) ctx.rotate((rotation * Math.PI) / 180);
   ctx.drawImage(frame, (-w * s) / 2, (-h * s) / 2, w * s, h * s);
-  return createImageBitmap(c);
+  return c.transferToImageBitmap();
 }
 
 /** Decode frames with WebCodecs. Throws if the codec is unsupported so the caller can fall back. */
@@ -68,7 +69,7 @@ export async function extractWithWebCodecs(file: Blob, opt: ExtractOptions): Pro
       try {
         const i = index++;
         if (opt.keep && !opt.keep(i)) continue;
-        const bitmap = await drawUpright(f, rotation, opt.maxSide);
+        const bitmap = drawUpright(f, rotation, opt.maxSide);
         await opt.onFrame({ bitmap, tMedia: f.timestamp / 1e6, index: i });
       } finally { f.close(); }
     }
@@ -117,7 +118,7 @@ export async function extractWithSeeking(file: Blob, opt: ExtractOptions): Promi
       ctx.translate(c.width / 2, c.height / 2);
       ctx.rotate((rot * Math.PI) / 180);
       ctx.drawImage(v, -sw / 2, -sh / 2, sw, sh);
-      await opt.onFrame({ bitmap: await createImageBitmap(c), tMedia: opt.startS + i / opt.fps, index: i });
+      await opt.onFrame({ bitmap: await createImageBitmap(c), tMedia: Math.max(opt.startS, v.currentTime - 0.5 / opt.fps), index: i });
     }
     return n;
   } finally {
