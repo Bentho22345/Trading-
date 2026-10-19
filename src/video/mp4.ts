@@ -73,6 +73,15 @@ export async function readMp4Info(blob: Blob): Promise<{ info: Mp4Info; file: IS
   const durationS = vt.duration / vt.timescale || movie.duration / movie.timescale;
   const { counts, deltas } = sttsDeltas(file, vt.id);
   let vfr = false;
+  // the capture rate is the typical frame interval (count-weighted median), not the average: phones drop
+  // frames in low light, which makes the average look like e.g. "49 fps" for a 60 fps recording
+  let medianDelta = 0;
+  if (deltas.length) {
+    const pairs = deltas.map((d, i) => [d, counts[i]] as const).sort((a, b) => a[0] - b[0]);
+    const half = pairs.reduce((sum, p) => sum + p[1], 0) / 2;
+    let acc = 0;
+    for (const [d, c] of pairs) { acc += c; if (acc >= half) { medianDelta = d; break; } }
+  }
   if (deltas.length > 1) {
     const total = counts.reduce((s, c) => s + c, 0);
     const mean = counts.reduce((s, c, i) => s + c * deltas[i], 0) / total;
@@ -86,7 +95,7 @@ export async function readMp4Info(blob: Blob): Promise<{ info: Mp4Info; file: IS
     rotation: rotationFromMatrix(vt.matrix as unknown as ArrayLike<number>),
     durationS,
     nbSamples: vt.nb_samples,
-    fps: vt.nb_samples / durationS,
+    fps: medianDelta > 0 ? vt.timescale / medianDelta : vt.nb_samples / durationS,
     vfr,
     trackId: vt.id,
     timescale: vt.timescale,
