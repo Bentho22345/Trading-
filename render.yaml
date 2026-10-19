@@ -1,10 +1,10 @@
 # Render Blueprint for Mound Lab — its own Blueprint, separate from PULSE.
-# Render Dashboard → New → Blueprint → repo bentho22345/trading- → branch "mound-lab".
+# Render Blueprint "moundlab2": repo Bentho22345/Trading-, branch "mound-lab", Blueprint path render.yaml.
 # Static site: everything runs in the browser. The install step downloads the MediaPipe pose
 # models (postinstall) so the site serves them itself.
 services:
   - type: web
-    name: mound-lab
+    name: moundlab2
     runtime: static
     # dev dependencies (vite, typescript) are the build tools, so always install them;
     # type-checking runs in CI, the deploy only bundles
