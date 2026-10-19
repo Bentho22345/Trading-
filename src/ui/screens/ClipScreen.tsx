@@ -12,9 +12,14 @@ import { usePlayback, useKeys } from '../components/playback';
 import { MetricPanel } from '../components/MetricPanel';
 import { AngleAngle, LineChart } from '../components/Chart';
 import { Disclaimer, Progress, useCssColors } from '../components/common';
-import { drawAngleLabels, drawSkeleton, drawTrail, fit, label, pt } from '../draw';
+import { drawAngleLabels, drawSkeleton, drawTrail, fit, isSmallPitcher, label, pitcherView, pt } from '../draw';
 import { go } from '../router';
 import { exportClipCsv, exportClipJson } from '../export';
+import { AnnotationBar, CALIB_PRESETS, PeoplePanel, QualityCard, TOOL_POINTS, VeloCard, drawAnnotations, pxPerMetre, useAnnotations, type Tool } from '../components/ClipTools';
+import { manualBallSpeed } from '../../core/ballspeed';
+import { exportStrobe } from '../images';
+import { uid } from '../../db/db';
+import { DEFAULT_HEIGHT_M } from '../velocity';
 
 const VIEWS: View[] = ['side-open', 'side-closed', 'front', 'back', 'oblique'];
 export const PITCH_TYPES = ['FB', 'SI', 'CT', 'SL', 'SW', 'CB', 'CH', 'SPL', 'KN', 'Other'];
@@ -31,8 +36,14 @@ export function ClipScreen({ id }: { id: string }) {
 }
 
 function ClipHeader({ clip }: { clip: RuntimeClip }) {
-  const { updateRecord, removeClip, setSlot } = useStore();
+  const { updateRecord, removeClip, setSlot, analyze } = useStore();
   const r = clip.record;
+  // settings that change the numbers: save, then re-run (a cached track makes height changes instant)
+  const rerun = async (p: Partial<RuntimeClip['record']>) => {
+    await updateRecord(clip.id, p);
+    if (clip.kind === 'video' && (clip.status === 'ready' || clip.status === 'error')) await analyze(clip.id);
+    else if (clip.kind === 'demo' && p.heightM !== undefined) useStore.getState().measureVelo(clip.id);
+  };
   const [name, setName] = useState(r.name);
   useEffect(() => setName(r.name), [r.name]);
   return (
@@ -52,12 +63,17 @@ function ClipHeader({ clip }: { clip: RuntimeClip }) {
           </select>
         </label>
         <label className="field">Clip speed
-          <select value={r.slowmo} disabled={clip.kind === 'demo'} onChange={(e) => updateRecord(clip.id, { slowmo: Number(e.target.value) })} title="For slow-motion exports: how many times slower than real time the file plays">
+          <select value={r.slowmo} disabled={clip.kind === 'demo'} onChange={(e) => rerun({ slowmo: Number(e.target.value) })} title="For slow-motion exports: how many times slower than real time the file plays">
             {CLIP_SPEEDS.map((s) => <option key={s} value={s}>{s === 1 ? 'Real time' : `${s}× slow-mo`}</option>)}
           </select>
         </label>
+        <label className="field">Rotate
+          <select value={r.rotate ?? 0} disabled={clip.kind === 'demo'} onChange={(e) => rerun({ rotate: Number(e.target.value) })} title="Fix sideways phone video">
+            {[0, 90, 180, 270].map((d) => <option key={d} value={d}>{d === 0 ? 'None' : `${d}° clockwise`}</option>)}
+          </select>
+        </label>
         <label className="field">Athlete height
-          <HeightInput value={r.heightM} onChange={(heightM) => updateRecord(clip.id, { heightM })} />
+          <HeightInput value={r.heightM} onChange={(heightM) => rerun({ heightM })} />
         </label>
         <label className="field">Effort %
           <input type="number" min={0} max={100} value={r.effortPct ?? ''} onChange={(e) => updateRecord(clip.id, { effortPct: e.target.value ? Number(e.target.value) : undefined })} style={{ width: 80 }} />
@@ -176,6 +192,18 @@ function Breakdown({ clip }: { clip: RuntimeClip }) {
   const col = useCssColors();
   const drag = useRef<{ j: number; ox: number; oy: number } | null>(null);
   const [rawEdit, setRawEdit] = useState(0);
+  const units = useStore((s) => s.settings.units);
+  const [tool, setTool] = useState<Tool>('none');
+  const [persistent, setPersistent] = useState(false);
+  const [draft, setDraft] = useState<[number, number][]>([]);
+  const [marking, setMarking] = useState(false);
+  const [ballMarks, setBallMarks] = useState<{ k: number; x: number; y: number }[]>([]);
+  const ann = useAnnotations(clip);
+  const mirror = !!clip.record.mirror;
+  const [zoom, setZoom] = useState(() => isSmallPitcher(a.scale.heightPx, tr.height));
+  const view = (w: number, h: number) => pitcherView(tr, Math.max(0, ev.FM - Math.round(fps * 0.2)), Math.min(tr.t.length - 1, ev.END), w, h, zoom);
+  useEffect(() => { setDraft([]); }, [tool]);
+  useEffect(() => { if (!marking) setBallMarks([]); }, [marking]);
 
   useEffect(() => { pb.setT(ev.FS / fps); /* start at foot strike */ }, [clip.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -196,7 +224,8 @@ function Breakdown({ clip }: { clip: RuntimeClip }) {
   };
 
   const draw = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
-    const f = fit(tr.width, tr.height, w, h);
+    const f = view(w, h);
+    if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
     if (show.video) clip.source?.draw(ctx, frame, f.tx, f.ty, f.w, f.h);
     if (show.trails) {
       drawTrail(ctx, tr, J[jn(a.roles.throw, 'Wrist')], frame - Math.round(fps * 0.25), frame, f, col.b);
@@ -207,13 +236,67 @@ function Breakdown({ clip }: { clip: RuntimeClip }) {
     // ground line + rubber marker
     ctx.strokeStyle = 'rgba(255,200,80,0.6)'; ctx.setLineDash([6, 6]);
     ctx.beginPath(); ctx.moveTo(f.tx, a.scale.groundY * f.sy + f.ty); ctx.lineTo(f.tx + f.w, a.scale.groundY * f.sy + f.ty); ctx.stroke(); ctx.setLineDash([]);
+    // tracked / marked ball positions
+    const balls = [...(clip.velo?.points ?? []), ...ballMarks];
+    for (const b of balls) {
+      if (Math.abs(b.k - frame) > 0) continue;
+      ctx.strokeStyle = '#ff4d5e'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(b.x * f.sx + f.tx, b.y * f.sy + f.ty, 9, 0, Math.PI * 2); ctx.stroke();
+    }
+    drawAnnotations(ctx, ann.list, frame, f, clip, units, tool !== 'none' ? { tool, points: draft } : undefined);
+    if (mirror) ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
     const atEvent = EVENT_CODES.find((k) => ev[k] === frame);
     if (atEvent) label(ctx, f.tx + 8, f.ty + f.h - 12, `${atEvent} · ${EVENT_LABELS[atEvent]}`, '#ffd166');
   };
 
-  const onPointer = (kind: 'down' | 'move' | 'up', x: number, y: number, w: number, h: number) => {
+  const finishShape = async (pts: [number, number][], kind: Tool) => {
+    if (kind === 'calib') {
+      const px = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]);
+      const choice = prompt(`Real length of the line you drew?\nType a number in metres, or pick: ${CALIB_PRESETS.map(([n], i) => `${i + 1}) ${n}`).join('  ')}`, '1');
+      if (!choice) return;
+      const idx = Number(choice) >= 1 && Number.isInteger(Number(choice)) && Number(choice) <= CALIB_PRESETS.length && !choice.includes('.') ? Number(choice) - 1 : -1;
+      const metres = idx >= 0 ? CALIB_PRESETS[idx][1] : Number(choice);
+      if (metres > 0) await updateRecord(clip.id, { calibPxPerM: px / metres });
+      return;
+    }
+    let text: string | undefined;
+    if (kind === 'text') { text = prompt('Label text') ?? undefined; if (!text) return; }
+    await ann.add({ id: uid(), clipId: clip.id, frame: persistent ? undefined : frame, kind, points: pts, text, color: '#ffd166' });
+  };
+
+  const onPointer = (kind: 'down' | 'move' | 'up', xIn: number, y: number, w: number, h: number) => {
+    const x = mirror ? w - xIn : xIn;
+    const f = view(w, h);
+    const p: [number, number] = [(x - f.tx) / f.sx, (y - f.ty) / f.sy];
+    if (marking) {
+      if (kind !== 'down') return;
+      const marks = [...ballMarks.filter((m) => m.k !== frame), { k: frame, x: p[0], y: p[1] }];
+      setBallMarks(marks);
+      if (marks.length >= 2) {
+        const [m1, m2] = marks.slice(-2);
+        const heightM = clip.record.heightM ?? DEFAULT_HEIGHT_M;
+        const v = manualBallSpeed(m1, m2, fps, a.scale.heightPx / heightM, !!clip.record.heightM);
+        if (v.mph) {
+          useStore.setState((st) => ({ clips: { ...st.clips, [clip.id]: { ...st.clips[clip.id], velo: v } } }));
+          void updateRecord(clip.id, { veloManual: { mph: v.mph, low: v.low!, high: v.high! } });
+          setMarking(false);
+        }
+      }
+      return;
+    }
+    if (tool !== 'none') {
+      if (tool === 'free') {
+        if (kind === 'down') setDraft([p]);
+        else if (kind === 'move' && draft.length) setDraft((d) => [...d, p]);
+        else if (kind === 'up' && draft.length > 1) { void finishShape(draft, 'free'); setDraft([]); }
+        return;
+      }
+      if (kind !== 'down') return;
+      const pts = [...draft, p];
+      if (pts.length >= TOOL_POINTS[tool]) { void finishShape(pts, tool); setDraft([]); } else setDraft(pts);
+      return;
+    }
     if (!editJoints) return;
-    const f = fit(tr.width, tr.height, w, h);
     if (kind === 'down') {
       let best = 18, bj = -1;
       for (let j = 0; j < JOINTS.length; j++) { const [px, py] = pt(tr, j, frame, f); const d = Math.hypot(px - x, py - y); if (d < best) { best = d; bj = j; } }
@@ -241,11 +324,11 @@ function Breakdown({ clip }: { clip: RuntimeClip }) {
           <Stage
             label={`Pitch video frame ${frame} with skeleton overlay`}
             draw={draw}
-            deps={[frame, show, clip.source, a, col, rawEdit]}
+            deps={[frame, show, clip.source, a, col, rawEdit, ann.list, draft, tool, mirror, zoom, clip.velo, ballMarks, units, clip.record.calibPxPerM]}
             aspect={tr.width / tr.height}
             sources={[clip.source]}
             onPointer={onPointer}
-            hud={<><span>{(pb.t * 1000).toFixed(0)} ms</span><span>{a.view}</span><span>{Math.round(fps)} fps</span>{editJoints && <span>drag a joint to fix it</span>}</>}
+            hud={<><span>{(pb.t * 1000).toFixed(0)} ms</span><span>{a.view}</span><span>{Math.round(fps)} fps</span>{editJoints && <span>drag a joint to fix it</span>}{marking && <span>click the ball</span>}{mirror && <span>mirrored</span>}</>}
           />
           <Timeline duration={duration} pb={pb} events={EVENT_CODES.map((k) => ({ code: k, t: ev[k] / fps, color: col.a, row: 0, edited: clip.record.edits[k] !== undefined }))} />
           <TransportBar pb={pb} fps={fps} eventTimes={Object.fromEntries(EVENT_CODES.map((k) => [k, ev[k] / fps]))} tour={tour} setTour={setTour} />
@@ -253,10 +336,17 @@ function Breakdown({ clip }: { clip: RuntimeClip }) {
             {(['skeleton', 'labels', 'trails', 'video'] as const).map((k) => (
               <label key={k} className="row tight"><input type="checkbox" checked={show[k]} onChange={(e) => setShow({ ...show, [k]: e.target.checked })} /> {k}</label>
             ))}
-            <label className="row tight"><input type="checkbox" checked={editJoints} onChange={(e) => setEditJoints(e.target.checked)} disabled={clip.kind === 'demo'} /> fix joints</label>
+            <label className="row tight"><input type="checkbox" checked={editJoints} onChange={(e) => { setEditJoints(e.target.checked); if (e.target.checked) setTool('none'); }} disabled={clip.kind === 'demo'} /> fix joints</label>
+            <label className="row tight"><input type="checkbox" checked={mirror} onChange={(e) => updateRecord(clip.id, { mirror: e.target.checked })} /> mirror</label>
+            <label className="row tight" title="Frame the pitcher instead of the whole picture (automatic for far cameras)"><input type="checkbox" checked={zoom} onChange={(e) => setZoom(e.target.checked)} /> zoom to pitcher</label>
+          </div>
+          <div style={{ marginTop: 6 }}>
+            <AnnotationBar tool={tool} setTool={(t) => { setTool(t); if (t !== 'none') setEditJoints(false); }} persistent={persistent} setPersistent={setPersistent} onClear={ann.clear} count={ann.list.length} calibrated={pxPerMetre(clip)?.source ?? null} />
           </div>
         </div>
         <div className="stack">
+          <VeloCard clip={clip} marking={marking} setMarking={(v) => { setMarking(v); if (v) { setTool('none'); setEditJoints(false); pb.pause(); pb.setT(Math.min(tr.t.length - 1, ev.BR + 2) / fps); } }} />
+          <QualityCard clip={clip} />
           <EventEditor clip={clip} frame={frame} fps={fps} onSet={setEvent} onJump={(f) => { pb.pause(); pb.setT(f / fps); }} />
           <div className="card">
             <div className="row spread">
@@ -273,12 +363,14 @@ function Breakdown({ clip }: { clip: RuntimeClip }) {
               <button className="small" onClick={() => exportClipCsv(clip)}>Export CSV</button>
               <button className="small" onClick={() => exportClipJson(clip)}>Export JSON</button>
               <button className="small" onClick={() => { useStore.getState().setSlot('A', clip.id); go('/report'); }}>Report / PDF</button>
+              <button className="small" onClick={() => exportStrobe(clip)} title="One image with the pitcher at leg lift, foot strike, layback, release and finish">Strobe image</button>
             </div>
           </div>
         </div>
       </div>
 
       <KeyFrames clip={clip} onPick={(f) => { pb.pause(); pb.setT(f / fps); }} />
+      <PeoplePanel clip={clip} />
 
       <div className="card">
         <div className="tabs" role="tablist">
@@ -316,7 +408,7 @@ async function applyJointEdit(clip: RuntimeClip, j: number, frame: number, dx: n
   }
   const next = analyzeTrack(raw, { view: clip.record.view, heightM: clip.record.heightM, editedEvents: clip.record.edits });
   useStore.setState((s) => ({ clips: { ...s.clips, [clip.id]: { ...s.clips[clip.id], full: next, analysis: next.analysis } } }));
-  if (clip.kind === 'video' && clip.record.analyzedWith) await db.tracks.put({ id: trackKey(clip.record, clip.record.analyzedWith), track: raw });
+  if (clip.kind === 'video' && clip.record.analyzedWith) await db.tracks.put({ id: trackKey(clip.record, clip.record.analyzedWith), track: raw, scan: clip.scan });
 }
 
 function EventEditor({ clip, frame, fps, onSet, onJump }: { clip: RuntimeClip; frame: number; fps: number; onSet: (k: EventCode, f?: number) => void; onJump: (f: number) => void }) {
@@ -358,7 +450,7 @@ function KeyFrames({ clip, onPick }: { clip: RuntimeClip; onPick: (f: number) =>
       {(['PKH', 'HS', 'FS', 'MER', 'BR', 'MIR'] as EventCode[]).map((k) => (
         <button key={k} className="keyframe" onClick={() => onPick(ev[k])}>
           <Stage label={`${EVENT_LABELS[k]} key frame`} aspect={16 / 10} deps={[ev[k], clip.source, col]} sources={[clip.source]}
-            draw={(ctx, w, h) => { const f = fit(clip.full!.cleaned.width, clip.full!.cleaned.height, w, h); clip.source?.draw(ctx, ev[k], f.tx, f.ty, f.w, f.h); drawSkeleton(ctx, clip.full!.cleaned, ev[k], f, { color: col.a, width: 2, jointRadius: 2 }); }} />
+            draw={(ctx, w, h) => { const tr = clip.full!.cleaned; const f = pitcherView(tr, ev.FM, ev.END, w, h, isSmallPitcher(a.scale.heightPx, tr.height)); clip.source?.draw(ctx, ev[k], f.tx, f.ty, f.w, f.h); drawSkeleton(ctx, tr, ev[k], f, { color: col.a, width: 2, jointRadius: 2 }); }} />
           <span className="cap"><b>{k}</b><span>{EVENT_LABELS[k]}</span></span>
         </button>
       ))}

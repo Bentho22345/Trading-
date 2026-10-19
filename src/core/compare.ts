@@ -37,6 +37,21 @@ export interface Finding {
   cue?: string;
   drills: string[];
   stress: boolean;
+  /** Is B's value better, worse, or just different (style) compared with A? */
+  judgment: 'better' | 'worse' | 'neutral';
+  judgmentWhy: string;
+}
+
+export interface VeloPair { a?: number | null; b?: number | null; source?: string }
+
+export interface Scorecard {
+  better: Finding[];
+  worse: Finding[];
+  neutral: Finding[];
+  winner: 'A' | 'B' | 'tie' | 'none';
+  headline: string;
+  detail: string;
+  velo?: { a: number; b: number; delta: number; source: string };
 }
 
 export interface SetupCheck {
@@ -52,6 +67,7 @@ export interface Comparison {
   setup: SetupCheck;
   flags: { clip: 'A' | 'B'; key: string; text: string; stress: boolean }[];
   thresholdSource: 'default' | 'athlete';
+  scorecard: Scorecard;
 }
 
 const TIER_W: Record<Tier, number> = { high: 1, medium: 0.8, low: 0.5, na: 0 };
@@ -87,6 +103,7 @@ export interface CompareOptions {
   variability?: Record<string, number>;
   differentAthlete?: boolean;
   pitchTypes?: [string | undefined, string | undefined];
+  velo?: VeloPair;
 }
 
 function diffFor(def: MetricDef, a: Analysis, b: Analysis, setup: SetupCheck, variability?: Record<string, number>): MetricDiff {
@@ -133,7 +150,9 @@ function buildFindings(diffs: MetricDiff[]): Finding[] {
         ? `Likely a root cause: ${CAUSES[d.key].why}. It probably explains the change in ${effects.map(LABEL).join(', ')}.`
         : 'No upstream change explains this, so treat it as its own issue.'
       : `Probably a knock-on effect of the change in ${causedBy.map(LABEL).join(' and ')} — fix that first and re-check this.`;
+    const j = judge(def, d);
     return {
+      judgment: j.judgment, judgmentWhy: j.why,
       key: d.key, def, diff: d, direction, isRoot, causedBy, effects, score,
       what: direction === 'up' ? def.up : def.down,
       why: def.meaning,
@@ -145,6 +164,55 @@ function buildFindings(diffs: MetricDiff[]): Finding[] {
   });
   findings.sort((x, y) => Number(y.isRoot) - Number(x.isRoot) || y.score - x.score);
   return findings;
+}
+
+function distToRange(v: number, lo: number, hi: number) { return v < lo ? lo - v : v > hi ? v - hi : 0; }
+
+/** Better / worse / style for one changed metric (B relative to A). */
+export function judge(def: MetricDef, d: MetricDiff): { judgment: 'better' | 'worse' | 'neutral'; why: string } {
+  if (d.a === null || d.b === null || d.delta === null) return { judgment: 'neutral', why: '' };
+  if (def.better === 'none') return { judgment: 'neutral', why: 'A style difference — neither better nor worse on its own.' };
+  if (def.better === 'up' || def.better === 'down') {
+    const good = def.better === 'up' ? d.delta > 0 : d.delta < 0;
+    return { judgment: good ? 'better' : 'worse', why: def.better === 'up' ? (good ? 'More is linked to velocity or efficiency in research.' : 'Less of this is linked to lower velocity or efficiency.') : (good ? 'Less of this is better (linked to efficiency or lower arm stress).' : 'More of this is linked to energy leaks or higher arm stress.') };
+  }
+  const ref = def.ref;
+  if (!ref) return { judgment: 'neutral', why: '' };
+  const da = distToRange(d.a, ref.lo, ref.hi), db = distToRange(d.b, ref.lo, ref.hi);
+  if (da === 0 && db === 0) return { judgment: 'neutral', why: `Both are inside the typical range (${ref.text}).` };
+  const margin = 0.25 * def.threshold;
+  if (db < da - margin) return { judgment: 'better', why: `Closer to the typical range (${ref.text}).` };
+  if (db > da + margin) return { judgment: 'worse', why: `Further from the typical range (${ref.text}).` };
+  return { judgment: 'neutral', why: `About as far from the typical range (${ref.text}) as before.` };
+}
+
+function buildScorecard(findings: Finding[], velo?: VeloPair): Scorecard {
+  const better = findings.filter((f) => f.judgment === 'better');
+  const worse = findings.filter((f) => f.judgment === 'worse');
+  const neutral = findings.filter((f) => f.judgment === 'neutral');
+  const w = (fs: Finding[]) => fs.reduce((s, f) => s + f.diff.ratio * TIER_W[f.diff.tier] * (f.isRoot ? 1 : 0.5), 0);
+  let sb = w(better), sw = w(worse);
+  let v: Scorecard['velo'];
+  if (velo && Number.isFinite(velo.a) && Number.isFinite(velo.b) && velo.a && velo.b) {
+    const delta = velo.b - velo.a;
+    v = { a: velo.a, b: velo.b, delta, source: velo.source ?? 'estimate' };
+    // ~2 mph is a meaningful change; velocity counts like a big root-cause change
+    if (Math.abs(delta) >= 1.5) { if (delta > 0) sb += Math.abs(delta) / 1.5; else sw += Math.abs(delta) / 1.5; }
+  }
+  const names = (fs: Finding[]) => fs.slice(0, 3).map((f) => f.def.label.toLowerCase());
+  const list = (a: string[]) => (a.length <= 1 ? a.join('') : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`);
+  if (!findings.length && !v) return { better, worse, neutral, winner: 'none', headline: 'No meaningful difference between A and B.', detail: 'Every measurable metric is within normal pitch-to-pitch variation.', velo: v };
+  let winner: Scorecard['winner'] = 'tie';
+  if (sb > 1.25 * sw && sb > 0.8) winner = 'B';
+  else if (sw > 1.25 * sb && sw > 0.8) winner = 'A';
+  const veloTxt = v ? ` Velocity: ${v.a.toFixed(0)} → ${v.b.toFixed(0)} mph (${v.delta >= 0 ? '+' : ''}${v.delta.toFixed(1)}, ${v.source}).` : '';
+  const headline = winner === 'A' ? 'Overall, A is the better delivery.' : winner === 'B' ? 'Overall, B is the better delivery.' : 'Mixed: B is better in some ways and worse in others.';
+  const parts: string[] = [];
+  if (worse.length) parts.push(`B is worse in ${worse.length} area${worse.length > 1 ? 's' : ''} (${list(names(worse))})`);
+  if (better.length) parts.push(`better in ${better.length} (${list(names(better))})`);
+  if (neutral.length) parts.push(`${neutral.length} change${neutral.length > 1 ? 's are' : ' is'} just style`);
+  const detail = (parts.length ? parts.join(', ').replace(/^./, (c) => c.toUpperCase()) + '.' : '') + veloTxt;
+  return { better, worse, neutral, winner, headline, detail, velo: v };
 }
 
 function buildVerdict(findings: Finding[], consistent: MetricDiff[]): { headline: string; summary: string } {
@@ -194,6 +262,7 @@ export function compareAnalyses(a: Analysis, b: Analysis, opt: CompareOptions = 
     setup,
     flags: [...flagsFor(a, 'A'), ...flagsFor(b, 'B')],
     thresholdSource: opt.variability ? 'athlete' : 'default',
+    scorecard: buildScorecard(findings, opt.velo),
   };
 }
 

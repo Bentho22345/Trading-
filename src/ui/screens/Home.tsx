@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { useStore, type RuntimeClip } from '../../state/store';
+import { clipVelo, useStore, type RuntimeClip } from '../../state/store';
 import { ClipThumb, Disclaimer } from '../components/common';
 import { go } from '../router';
 import { RecordButton } from '../components/Recorder';
@@ -19,7 +19,8 @@ function SlotCard({ slot, clip }: { slot: 'A' | 'B'; clip?: RuntimeClip }) {
             <div className="small muted" data-testid={`slot-${slot}-fps`}>
               {clip.record.meta.fpsMedia ? `${Math.round(clip.record.meta.fpsMedia * clip.record.slowmo)} fps` : ''}
               {clip.record.meta.durationS ? ` · ${clip.record.meta.durationS.toFixed(1)} s` : ''}
-              {clip.status === 'ready' ? ' · analysed' : clip.status === 'analyzing' ? ' · analysing…' : clip.status === 'error' ? ' · error' : ''}
+              {clip.status === 'ready' ? ' · analysed' : clip.status === 'analyzing' ? ` · ${clip.progress?.stage ?? 'analysing…'} ${clip.progress?.total ? Math.round((clip.progress.done / clip.progress.total) * 100) + '%' : ''}` : clip.status === 'error' ? ' · error' : ''}
+              {clipVelo(clip) && <> · <b>{clipVelo(clip)!.mph.toFixed(0)} mph</b></>}
             </div>
             <div className="row tight" style={{ marginTop: 6 }}>
               <button className="small" onClick={() => go(`/clip/${clip.id}`)}>Open</button>

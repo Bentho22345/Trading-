@@ -112,3 +112,28 @@ export function arrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2:
 export function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 }
+
+/**
+ * View transform for the players. With `zoom`, frames the pitcher (all joints between `from` and `to`,
+ * padded) instead of the whole picture — essential for far cameras where the pitcher is a few % of the frame.
+ */
+export function pitcherView(tr: PoseTrack, from: number, to: number, w: number, h: number, zoom: boolean): Affine & { w: number; h: number } {
+  if (!zoom) return fit(tr.width, tr.height, w, h);
+  const xs: number[] = [], ys: number[] = [];
+  const step = Math.max(1, Math.floor((to - from) / 60));
+  for (let i = Math.max(0, from); i <= Math.min(tr.t.length - 1, to); i += step) for (let j = 0; j < tr.x.length; j++) { xs.push(tr.x[j][i]); ys.push(tr.y[j][i]); }
+  if (!xs.length) return fit(tr.width, tr.height, w, h);
+  xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+  const q = (a: number[], p: number) => a[Math.min(a.length - 1, Math.max(0, Math.round(p * (a.length - 1))))];
+  let x0 = q(xs, 0.01), x1 = q(xs, 0.99), y0 = q(ys, 0.01), y1 = q(ys, 0.99);
+  const pad = 0.18 * Math.max(x1 - x0, y1 - y0);
+  x0 -= pad; x1 += pad; y0 -= pad * 1.4; y1 += pad * 0.6;
+  // match the canvas aspect so nothing is stretched
+  const bw = x1 - x0, bh = y1 - y0, ar = w / h;
+  if (bw / bh < ar) { const nw = bh * ar; x0 -= (nw - bw) / 2; x1 = x0 + nw; } else { const nh = bw / ar; y0 -= (nh - bh) / 2; y1 = y0 + nh; }
+  const s = Math.min(w / (x1 - x0), h / (y1 - y0));
+  if (s * tr.width <= w * 1.05) return fit(tr.width, tr.height, w, h); // zooming wouldn't help
+  return { sx: s, sy: s, tx: -x0 * s, ty: -y0 * s, w: tr.width * s, h: tr.height * s };
+}
+
+export const isSmallPitcher = (heightPx: number, frameH: number) => heightPx < 0.42 * frameH;

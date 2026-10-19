@@ -30,6 +30,7 @@ export function SettingsScreen() {
         <label className="field">Pose model
           <select value={settings.model} onChange={(e) => setSettings({ model: e.target.value as 'full' | 'lite' })}><option value="full">MediaPipe Pose full (accurate)</option><option value="lite">MediaPipe Pose lite (fast preview)</option></select>
         </label>
+        <label className="row tight"><input type="checkbox" checked={settings.autoAnalyze} onChange={(e) => setSettings({ autoAnalyze: e.target.checked })} /> Analyse new clips automatically as soon as they're dropped in</label>
         <p className="small muted">Models run on this device (WebGPU/WebGL when available, otherwise CPU) and are cached for offline use.</p>
       </div>
       <div className="card stack">

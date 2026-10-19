@@ -4,10 +4,12 @@ import { create } from 'zustand';
 import { analyzeTrack, recompute, type FullAnalysis } from '../core/analyze';
 import { GOOD_DAY, OFF_DAY, generatePitch, type PitchParams } from '../core/synthetic';
 import type { Analysis, Events, View } from '../core/types';
-import { db, hashFile, trackKey, uid, type ClipRecord } from '../db/db';
+import { db, hashFile, scanKey, trackKey, uid, type ClipRecord } from '../db/db';
+import type { VeloEstimate } from '../core/ballspeed';
+import { clipQuality, type Quality } from '../core/quality';
 import { probeVideo, type VideoMeta } from '../video/meta';
 import { JpegFrames, SyntheticFrames, type FrameSource } from '../ui/frameSource';
-import type { PoseModel } from '../pose/pipeline';
+import type { PoseModel, ScanResult } from '../pose/pipeline';
 
 export type ClipStatus = 'new' | 'analyzing' | 'ready' | 'error';
 
@@ -25,6 +27,20 @@ export interface RuntimeClip {
   url?: string; // object URL for preview playback
   abort?: AbortController;
   info?: string[];
+  scan?: ScanResult; // everyone found in the clip and who was chosen as the pitcher
+  velo?: VeloEstimate;
+  veloBusy?: boolean;
+  quality?: Quality;
+  lostFrames?: number;
+}
+
+/** Best available velocity for a clip: radar entry > ball tracking > the user's marked ball. */
+export function clipVelo(c?: RuntimeClip): { mph: number; low?: number; high?: number; source: string } | null {
+  if (!c) return null;
+  if (c.record.ballData?.velo) return { mph: c.record.ballData.velo, source: 'radar' };
+  if (c.velo?.mph) return { mph: c.velo.mph, low: c.velo.low ?? undefined, high: c.velo.high ?? undefined, source: c.velo.method === 'manual' ? 'marked ball' : 'ball tracking' };
+  if (c.record.veloManual) return { ...c.record.veloManual, source: 'marked ball' };
+  return null;
 }
 
 export interface Settings {
@@ -36,9 +52,10 @@ export interface Settings {
   apiKey?: string;
   aiModel: string;
   handedness: 'R' | 'L';
+  autoAnalyze: boolean;
 }
 
-const DEFAULT_SETTINGS: Settings = { theme: 'system', units: 'imperial', youth: false, model: 'full', reducedMotion: false, aiModel: 'claude-opus-5-5', handedness: 'R' };
+const DEFAULT_SETTINGS: Settings = { theme: 'system', units: 'imperial', youth: false, model: 'full', reducedMotion: false, aiModel: 'claude-opus-5-5', handedness: 'R', autoAnalyze: true };
 
 interface State {
   clips: Record<string, RuntimeClip>;
@@ -53,6 +70,9 @@ interface State {
   setSlot(slot: 'A' | 'B', id?: string): void;
   swapSlots(): void;
   analyze(id: string, opts?: { pick?: { x: number; y: number } }): Promise<void>;
+  /** Re-track a different person from the scan (e.g. the auto pick chose the wrong one). */
+  switchPerson(id: string, personId: number): Promise<void>;
+  measureVelo(id: string): Promise<void>;
   cancel(id: string): void;
   editEvents(id: string, edits: Partial<Events>): void;
   setView(id: string, view?: View): void;
@@ -63,6 +83,68 @@ interface State {
 }
 
 const DEMO_ATHLETE = 'demo-athlete';
+let analysisChain: Promise<void> = Promise.resolve();
+
+async function runAnalysis(id: string, opts?: { pick?: { x: number; y: number } }) {
+  const get = useStore.getState, set = useStore.setState;
+  const c = get().clips[id];
+  if (!c || c.kind === 'demo' || c.status === 'analyzing') return;
+  const rec = c.record;
+  const model = get().settings.model;
+  const abort = new AbortController();
+  const patch = (p: Partial<RuntimeClip>) => set((s) => ({ clips: { ...s.clips, [id]: { ...s.clips[id], ...p } } }));
+  patch({ status: 'analyzing', error: undefined, abort, progress: { done: 0, total: 0, etaS: null, stage: 'Preparing…' } });
+  try {
+    const key = trackKey(rec, model);
+    const sKey = scanKey(rec, model);
+    let cached = await db.tracks.get(key);
+    let frames = (await db.frames.get(key))?.frames;
+    let scan = cached?.scan ?? ((await db.kv.get(sKey))?.value as ScanResult | undefined);
+    let lostFrames = c.lostFrames;
+    if (!cached || !frames || opts?.pick) {
+      const file = c.file ?? (await db.videos.get(id))?.blob;
+      if (!file) throw new Error('The video file for this clip is missing from storage. Re-import it.');
+      const { runPose } = await import('../pose/pipeline');
+      const r = await runPose(file, {
+        startS: rec.trim.inS, endS: rec.trim.outS, fpsMedia: rec.meta.fpsMedia, slowmo: rec.slowmo, model, rotate: rec.rotate,
+        signal: abort.signal, pick: opts?.pick, scan: opts?.pick ? undefined : scan, personId: rec.personId,
+        onProgress: (p) => patch({ progress: p }),
+      });
+      scan = r.scan;
+      lostFrames = r.lostFrames;
+      cached = { id: key, track: r.track, scan };
+      frames = r.frames;
+      await db.tracks.put(cached);
+      await db.frames.put({ id: key, frames });
+      await db.kv.put({ key: sKey, value: scan });
+      const notes: string[] = [];
+      if (r.method === 'seek') notes.push('Frames were read by seeking (slower, approximate timing) because this browser could not decode the file directly.');
+      if (r.lostFrames > r.track.t.length * 0.15) notes.push(`The pitcher was not found on ${r.lostFrames} of ${r.track.t.length} frames — check lighting and framing.`);
+      patch({ info: [...(c.info ?? []).filter((x) => !/not found on|by seeking/.test(x)), ...notes] });
+      await get().updateRecord(id, { analyzedWith: model });
+    }
+    const full = analyzeTrack(cached.track, { view: rec.view, heightM: rec.heightM, editedEvents: rec.edits });
+    const a = full.analysis;
+    // slow-motion sanity check: a real FS→BR is ~120–200 ms
+    const fsbr = a.metrics.tFsBr?.value;
+    if (fsbr && rec.slowmo === 1 && fsbr > 450) a.warnings.push(`Foot strike to release took ${Math.round(fsbr)} ms — about ${Math.round(fsbr / 150)}× longer than normal. If this is a slow-motion clip, set its clip speed so the times are real.`);
+    const ignored = scan?.people.filter((p) => p.role !== 'pitcher') ?? [];
+    if (ignored.some((p) => p.role === 'runner')) a.warnings.unshift(`Ignored ${ignored.filter((p) => p.role === 'runner').length} running person(s) — only the pitcher is analysed.`);
+    const source = new JpegFrames(frames, cached.track.width, cached.track.height);
+    patch({ status: 'ready', full, analysis: a, source, scan, lostFrames, progress: undefined, abort: undefined, velo: undefined,
+      quality: clipQuality(a, full.cleaned, full.body, { lostFrames, sourceHeight: rec.meta.height }) });
+    void get().measureVelo(id);
+    void import('../ui/velocity').then(async (m) => {
+      const px = await m.pixelStats(get().clips[id]).catch(() => null);
+      const cur = get().clips[id];
+      if (px && cur?.full) patch({ quality: clipQuality(cur.full.analysis, cur.full.cleaned, cur.full.body, { lostFrames, sourceHeight: rec.meta.height, pixels: px }) });
+    });
+  } catch (e) {
+    const cancelled = (e as DOMException).name === 'AbortError';
+    patch({ status: cancelled ? 'new' : 'error', error: cancelled ? undefined : (e as Error).message, progress: undefined, abort: undefined });
+    if (!cancelled) get().toast(`Analysis failed: ${(e as Error).message}`, 'error');
+  }
+}
 let initPromise: Promise<void> | null = null;
 
 function demoClip(id: string, p: PitchParams, name: string, sessionId: string, daysAgo: number, tags: string[], starred = false): RuntimeClip {
@@ -74,8 +156,8 @@ function demoClip(id: string, p: PitchParams, name: string, sessionId: string, d
     edits: {}, tags: ['demo', ...tags], athleteId: DEMO_ATHLETE, sessionId, pitchType: 'FB', heightM: 1.85, starred,
   };
   return {
-    id, kind: 'demo', record, status: 'ready', full, analysis: full.analysis,
-    source: new SyntheticFrames(s.clean, p.heightPx, 650, p.hand === 'R' ? 'r' : 'l'),
+    id, kind: 'demo', record, status: 'ready', full, analysis: full.analysis, quality: clipQuality(full.analysis, full.cleaned, full.body),
+    source: new SyntheticFrames(s.clean, p.heightPx, 650, p.hand === 'R' ? 'r' : 'l', { brFrame: s.truth.BR, mph: p.veloMph, fps: p.fps, heightM: 1.85, dir: p.hand === 'R' ? 1 : -1 }),
   };
 }
 
@@ -85,8 +167,8 @@ function buildDemo(): RuntimeClip[] {
     demoClip('demo-off', OFF_DAY, 'Demo · Off day', 'demo-s2', 0, ['off-day']),
   ];
   // extra repeats give the demo athlete real pitch-to-pitch variability and two sessions for group compare
-  [3, 4].forEach((seed, k) => out.push(demoClip(`demo-good-${k + 2}`, { ...GOOD_DAY, seed, stride: GOOD_DAY.stride + (k ? 0.01 : -0.008), trunkTiltBR: GOOD_DAY.trunkTiltBR + (k ? -1.5 : 1) }, `Demo · Good day #${k + 2}`, 'demo-s1', 14, [])));
-  [5, 6].forEach((seed, k) => out.push(demoClip(`demo-off-${k + 2}`, { ...OFF_DAY, seed, stride: OFF_DAY.stride + (k ? 0.012 : -0.006), leadKneeBR: OFF_DAY.leadKneeBR + (k ? -2 : 1.5) }, `Demo · Off day #${k + 2}`, 'demo-s2', 0, [])));
+  [3, 4].forEach((seed, k) => out.push(demoClip(`demo-good-${k + 2}`, { ...GOOD_DAY, seed, stride: GOOD_DAY.stride + (k ? 0.01 : -0.008), trunkTiltBR: GOOD_DAY.trunkTiltBR + (k ? -1.5 : 1), veloMph: GOOD_DAY.veloMph + (k ? -0.8 : 0.6) }, `Demo · Good day #${k + 2}`, 'demo-s1', 14, [])));
+  [5, 6].forEach((seed, k) => out.push(demoClip(`demo-off-${k + 2}`, { ...OFF_DAY, seed, stride: OFF_DAY.stride + (k ? 0.012 : -0.006), leadKneeBR: OFF_DAY.leadKneeBR + (k ? -2 : 1.5), veloMph: OFF_DAY.veloMph + (k ? 0.7 : -0.5) }, `Demo · Off day #${k + 2}`, 'demo-s2', 0, [])));
   return out;
 }
 
@@ -120,9 +202,15 @@ export const useStore = create<State>((set, get) => ({
     });
     try {
       if (!(await db.athletes.get(DEMO_ATHLETE))) await db.athletes.put({ id: DEMO_ATHLETE, name: 'Demo Pitcher (synthetic)', throws: 'R', heightCm: 185, birthYear: 2007, level: 'High school', createdAt: Date.now() });
+      const day = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+      await db.sessions.bulkPut([
+        { id: 'demo-s1', athleteId: DEMO_ATHLETE, date: day(14), notes: 'Demo: good day bullpen' },
+        { id: 'demo-s2', athleteId: DEMO_ATHLETE, date: day(0), notes: 'Demo: off day bullpen' },
+      ]);
     } catch { /* storage may be unavailable */ }
-    // restore cached analyses in the background
+    // restore cached analyses in the background; measure the demo pitches' velocity from their frames
     for (const r of recs) if (r.analyzedWith) void get().analyze(r.id).catch(() => undefined);
+    for (const d of demo) void get().measureVelo(d.id);
     })();
     return initPromise;
   },
@@ -151,8 +239,11 @@ export const useStore = create<State>((set, get) => ({
         await db.videos.put({ id, blob: f });
         await db.clips.put(rec);
         set((s) => ({ clips: { ...s.clips, [id]: { ...s.clips[id], record: rec, progress: undefined, info: meta.notes } } }));
-        // auto-trim to the delivery in the background (motion energy); the user can still adjust it
-        if (meta.playable && meta.durationS > 3.5 && meta.durationS < 30) void import('../ui/bullpen').then((m) => m.autoTrim(id)).catch(() => undefined);
+        // auto-trim to the delivery (motion energy), then analyse straight away if that's switched on
+        void (async () => {
+          if (meta.playable && meta.durationS > 3.5 && meta.durationS < 30) await import('../ui/bullpen').then((m) => m.autoTrim(id)).catch(() => undefined);
+          if (get().settings.autoAnalyze && meta.durationS <= 30) await get().analyze(id);
+        })();
       } catch (e) {
         set((s) => ({ clips: { ...s.clips, [id]: { ...s.clips[id], status: 'error', error: (e as Error).message, progress: undefined } } }));
       }
@@ -171,45 +262,29 @@ export const useStore = create<State>((set, get) => ({
   swapSlots() { set((s) => ({ slotA: s.slotB, slotB: s.slotA })); },
 
   async analyze(id, opts) {
+    // one analysis at a time (one pose worker): queue the rest
+    const prev = analysisChain;
+    let release!: () => void;
+    analysisChain = new Promise<void>((r) => { release = r; });
+    await prev;
+    try { await runAnalysis(id, opts); } finally { release(); }
+  },
+
+  async switchPerson(id, personId) {
+    await get().updateRecord(id, { personId });
+    await get().analyze(id);
+  },
+
+  async measureVelo(id) {
     const c = get().clips[id];
-    if (!c || c.kind === 'demo' || c.status === 'analyzing') return;
-    const rec = c.record;
-    const model = get().settings.model;
-    const abort = new AbortController();
+    if (!c?.analysis || c.veloBusy) return;
     const patch = (p: Partial<RuntimeClip>) => set((s) => ({ clips: { ...s.clips, [id]: { ...s.clips[id], ...p } } }));
-    patch({ status: 'analyzing', error: undefined, abort, progress: { done: 0, total: 0, etaS: null, stage: 'Preparing…' } });
+    patch({ veloBusy: true });
     try {
-      const key = trackKey(rec, model);
-      let cached = await db.tracks.get(key);
-      let frames = (await db.frames.get(key))?.frames;
-      if (!cached || !frames || opts?.pick) {
-        const file = c.file ?? (await db.videos.get(id))?.blob;
-        if (!file) throw new Error('The video file for this clip is missing from storage. Re-import it.');
-        const { runPose } = await import('../pose/pipeline');
-        const r = await runPose(file, {
-          startS: rec.trim.inS, endS: rec.trim.outS, fpsMedia: rec.meta.fpsMedia, slowmo: rec.slowmo, model, signal: abort.signal, pick: opts?.pick,
-          onProgress: (p) => patch({ progress: p }),
-        });
-        cached = { id: key, track: r.track };
-        frames = r.frames;
-        await db.tracks.put(cached);
-        await db.frames.put({ id: key, frames });
-        const notes: string[] = [];
-        if (r.method === 'seek') notes.push('Frames were read by seeking (slower, approximate timing) because this browser could not decode the file directly.');
-        if (r.lostFrames > r.track.t.length * 0.15) notes.push(`The pitcher was not found on ${r.lostFrames} of ${r.track.t.length} frames — check lighting and framing.`);
-        patch({ info: [...(c.info ?? []), ...notes] });
-        await get().updateRecord(id, { analyzedWith: model });
-      }
-      const full = analyzeTrack(cached.track, { view: rec.view, heightM: rec.heightM, editedEvents: rec.edits });
-      const a = full.analysis;
-      // slow-motion sanity check: a real FS→BR is ~120–200 ms
-      const fsbr = a.metrics.tFsBr?.value;
-      if (fsbr && rec.slowmo === 1 && fsbr > 450) a.warnings.push(`Foot strike to release took ${Math.round(fsbr)} ms — about ${Math.round(fsbr / 150)}× longer than normal. If this is a slow-motion clip, set its clip speed so the times are real.`);
-      patch({ status: 'ready', full, analysis: a, source: new JpegFrames(frames, cached.track.width, cached.track.height), progress: undefined, abort: undefined });
+      const { measureVelocity } = await import('../ui/velocity');
+      patch({ velo: await measureVelocity(get().clips[id]), veloBusy: false });
     } catch (e) {
-      const cancelled = (e as DOMException).name === 'AbortError';
-      patch({ status: cancelled ? 'new' : 'error', error: cancelled ? undefined : (e as Error).message, progress: undefined, abort: undefined });
-      if (!cancelled) get().toast(`Analysis failed: ${(e as Error).message}`, 'error');
+      patch({ veloBusy: false, velo: { mph: null, low: null, high: null, method: 'none', points: [], notes: [`Velocity failed: ${(e as Error).message}`] } });
     }
   },
 

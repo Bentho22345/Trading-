@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { useStore, type RuntimeClip } from '../../state/store';
+import { clipVelo, useStore, type RuntimeClip } from '../../state/store';
+import { exportKeyframeSheet } from '../images';
 import { compareAnalyses, compareGroups, fmtDelta, pooledVariability, type Comparison, type Finding } from '../../core/compare';
 import { CAUSES, METRICS, METRIC_BY_KEY, PHASE_LABELS, type Phase } from '../../core/catalog';
 import { makeSync, type SyncMode } from '../../core/sync';
@@ -10,7 +11,7 @@ import { EventButtons, Timeline, TransportBar, type TimelineEvent } from '../com
 import { usePlayback, useKeys } from '../components/playback';
 import { LineChart, AngleAngle } from '../components/Chart';
 import { ClipThumb, Disclaimer, fmtMetric, StatusPill, TierBadge, useCssColors, useUnits } from '../components/common';
-import { arrow, compose, drawSkeleton, fit, label, normalizeBtoA, pt, type Affine } from '../draw';
+import { arrow, compose, drawSkeleton, isSmallPitcher, label, normalizeBtoA, pitcherView, pt, type Affine } from '../draw';
 import { DRILL_BY_ID } from '../../data/drills';
 import { go } from '../router';
 import { exportComparisonCsv, recordComposite } from '../export';
@@ -101,7 +102,9 @@ function CompareView({ A, B, group }: { A: RuntimeClip; B: RuntimeClip; group: b
   const differentAthlete = !!(A.record.athleteId && B.record.athleteId && A.record.athleteId !== B.record.athleteId) || (A.kind === 'demo') !== (B.kind === 'demo');
 
   const cmp: Comparison & { groupSizes?: [number, number] } = useMemo(() => {
-    const opt = { differentAthlete, pitchTypes: [A.record.pitchType, B.record.pitchType] as [string | undefined, string | undefined] };
+    const va = clipVelo(A), vb = clipVelo(B);
+    const velo = va && vb ? { a: va.mph, b: vb.mph, source: va.source === vb.source ? va.source : `${va.source} / ${vb.source}` } : undefined;
+    const opt = { differentAthlete, pitchTypes: [A.record.pitchType, B.record.pitchType] as [string | undefined, string | undefined], velo };
     const ga = sessionGroup(clips, A), gb = sessionGroup(clips, B);
     if (group && ga.length >= 2 && gb.length >= 2) return { ...compareGroups(ga, gb, opt), groupSizes: [ga.length, gb.length] };
     // athlete's own noise: pool every multi-pitch session of this athlete
@@ -113,7 +116,7 @@ function CompareView({ A, B, group }: { A: RuntimeClip; B: RuntimeClip; group: b
       variability = pooledVariability([...bySession.values()]);
     }
     return compareAnalyses(a, b, { ...opt, variability });
-  }, [a, b, group, clips, A, B, differentAthlete]);
+  }, [a, b, group, clips, A, B, differentAthlete, A.velo, B.velo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [layout, setLayout] = useState<Layout>('side');
   const [ovMode, setOvMode] = useState<OverlayMode>('skel-video');
@@ -163,7 +166,8 @@ function CompareView({ A, B, group }: { A: RuntimeClip; B: RuntimeClip; group: b
 
   const drawPane = (ctx: CanvasRenderingContext2D, w: number, h: number, which: 'A' | 'B') => {
     const clip = which === 'A' ? A : B, tr = which === 'A' ? trA : trB, f = which === 'A' ? fA : fB;
-    const T = fit(tr.width, tr.height, w, h);
+    const an = which === 'A' ? a : b, evx = which === 'A' ? evA : evB;
+    const T = pitcherView(tr, evx.FM, evx.END, w, h, isSmallPitcher(an.scale.heightPx, tr.height));
     clip.source?.draw(ctx, f, T.tx, T.ty, T.w, T.h);
     drawSkeleton(ctx, tr, f, T, { color: which === 'A' ? col.a : col.b, width: 3 });
     const ev = which === 'A' ? evA : evB;
@@ -172,7 +176,7 @@ function CompareView({ A, B, group }: { A: RuntimeClip; B: RuntimeClip; group: b
   };
 
   const drawOverlay = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
-    const T = fit(trA.width, trA.height, w, h);
+    const T = pitcherView(trA, evA.FM, evA.END, w, h, isSmallPitcher(a.scale.heightPx, trA.height));
     const TB: Affine = compose(T, BtoA);
     if (ovMode !== 'skel-only') A.source?.draw(ctx, fA, T.tx, T.ty, T.w, T.h);
     else { ctx.fillStyle = '#15181d'; ctx.fillRect(T.tx, T.ty, T.w, T.h); }
@@ -273,7 +277,7 @@ function CompareView({ A, B, group }: { A: RuntimeClip; B: RuntimeClip; group: b
 
       <ChartsAB A={A} B={B} cursor={pb.t - evA.FS / a.fps} onSeek={(t) => { pb.pause(); pb.setT(t + evA.FS / a.fps); }} />
       <Suspense fallback={<div className="card muted small">Loading AI coach…</div>}><AICoach A={A} B={B} cmp={cmp} /></Suspense>
-      <div className="row"><button onClick={() => go('/report')}>Open printable report (PDF)</button><button onClick={() => exportComparisonCsv(A, B, cmp)}>Export comparison CSV</button></div>
+      <div className="row"><button onClick={() => go('/report')}>Open printable report (PDF)</button><button onClick={() => exportComparisonCsv(A, B, cmp)}>Export comparison CSV</button><button onClick={() => exportKeyframeSheet(A, B, cmp.scorecard.headline + ' ' + cmp.scorecard.detail)}>Key-frame sheet (PNG)</button></div>
       <Disclaimer />
     </div>
   );
@@ -293,6 +297,7 @@ function Report({ cmp, A, B, onShow, youth, units }: { cmp: Comparison & { group
         <p className="muted" style={{ marginBottom: 0 }}>{cmp.verdict.summary}</p>
         <p className="tiny faint" style={{ margin: '6px 0 0' }}>“Changed” means bigger than {cmp.thresholdSource === 'athlete' ? "this athlete's own pitch-to-pitch variation (2 × SD from repeat pitches)" : 'default thresholds for normal pitch-to-pitch variation (film 3+ pitches per session to personalise)'}.</p>
       </div>
+      <ScorecardCard cmp={cmp} onShow={onShow} />
       {cmp.setup.warnings.map((w) => <div key={w} className="notice warn small">⚠︎ {w}</div>)}
       {cmp.flags.filter((f) => f.clip === 'B').map((f) => <div key={f.key} className="notice bad small">⚑ <span><b>B:</b> {f.text}{f.stress ? ' This pattern is associated with higher elbow/shoulder stress in research — it is not a diagnosis.' : ''}</span></div>)}
       {anyStress && <div className="notice info small">Workload matters more than mechanics for arm health: track pitch counts and rest on the <a href="#/workload">Workload</a> page. Pain → stop and see a qualified professional.</div>}
@@ -356,6 +361,54 @@ function Report({ cmp, A, B, onShow, youth, units }: { cmp: Comparison & { group
         </details>
       </section>
     </div>
+  );
+}
+
+function ScorecardCard({ cmp, onShow }: { cmp: Comparison; onShow: (f: Finding) => void }) {
+  const sc = cmp.scorecard;
+  if (sc.winner === 'none') return null;
+  const col = (title: string, list: Finding[], tone: 'ok' | 'bad' | 'na', empty: string) => (
+    <div className={`card flat`} style={{ borderTop: `4px solid ${tone === 'ok' ? 'var(--ok)' : tone === 'bad' ? 'var(--accent)' : 'var(--line-strong)'}` }}>
+      <h4 style={{ marginBottom: 6 }}>{title} <span className="faint">({list.length})</span></h4>
+      {!list.length && <p className="small muted" style={{ margin: 0 }}>{empty}</p>}
+      <ul className="small" style={{ paddingLeft: 18, margin: 0 }}>
+        {list.slice(0, 5).map((f) => (
+          <li key={f.key} style={{ marginBottom: 4 }}>
+            <button className="ghost small" style={{ padding: 0, minHeight: 0, textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--font-body)', fontWeight: 600 }} onClick={() => onShow(f)}>{f.def.label}</button>{' '}
+            <span className="muted">{fmtDelta(f.def, f.diff)}</span>
+            <div className="tiny faint">{f.judgmentWhy}</div>
+          </li>
+        ))}
+      </ul>
+      {list.length > 5 && (
+        <details className="small" style={{ marginTop: 4 }}>
+          <summary>{list.length - 5} more</summary>
+          <ul style={{ paddingLeft: 18, margin: '4px 0 0' }}>{list.slice(5).map((f) => <li key={f.key}>{f.def.label} <span className="muted">{fmtDelta(f.def, f.diff)}</span></li>)}</ul>
+        </details>
+      )}
+    </div>
+  );
+  return (
+    <section className="card" data-testid="scorecard">
+      <div className="row spread">
+        <h2 style={{ margin: 0 }}>{sc.headline}</h2>
+        {sc.winner !== 'tie' && <span className={sc.winner === 'A' ? 'chip-a' : 'chip-b'} style={{ width: 34, height: 34, fontSize: '1.3rem' }}>{sc.winner}</span>}
+      </div>
+      <p className="muted" style={{ marginTop: 4 }}>{sc.detail}</p>
+      {sc.velo && (
+        <div className="row" style={{ gap: 18, margin: '6px 0 12px' }}>
+          <span className="num" style={{ fontSize: '1.6rem' }}><span className="text-a">{sc.velo.a.toFixed(0)}</span> <span className="faint">→</span> <span className="text-b">{sc.velo.b.toFixed(0)}</span> <span className="small faint">mph</span></span>
+          <span className={`pill ${Math.abs(sc.velo.delta) >= 1.5 ? (sc.velo.delta > 0 ? 'steady' : 'big') : 'na'}`}>{sc.velo.delta >= 0 ? '+' : ''}{sc.velo.delta.toFixed(1)} mph</span>
+          <span className="tiny faint">{sc.velo.source}</span>
+        </div>
+      )}
+      <div className="grid cols-3">
+        {col('B is worse', sc.worse, 'bad', 'Nothing got worse.')}
+        {col('B is better', sc.better, 'ok', 'Nothing got better.')}
+        {col('Just different (style)', sc.neutral, 'na', 'No style-only changes.')}
+      </div>
+      <p className="tiny faint" style={{ marginBottom: 0 }}>"Better" means closer to what research links to velocity, efficiency or lower arm stress — not a guarantee for every pitcher. Changes smaller than normal pitch-to-pitch variation aren't counted.</p>
+    </section>
   );
 }
 

@@ -148,6 +148,7 @@ button, .btn {
 }
 button:hover:not(:disabled), .btn:hover { background: var(--bg-2); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.accent:disabled, button.primary:disabled { background: var(--bg-2); border-color: var(--line-strong); color: var(--text-3); opacity: 1; }
 button.primary, .btn.primary { background: var(--text); color: var(--surface); border-color: var(--text); }
 button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 85%, var(--accent)); }
 button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }

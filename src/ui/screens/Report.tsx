@@ -2,7 +2,7 @@
 // comparison, fix plan and drills.
 
 import { useMemo } from 'react';
-import { useStore, type RuntimeClip } from '../../state/store';
+import { clipVelo, useStore, type RuntimeClip } from '../../state/store';
 import { compareAnalyses } from '../../core/compare';
 import { METRICS, METRIC_BY_KEY, type Phase } from '../../core/catalog';
 import { EVENT_LABELS, resolvedEvents, type EventCode } from '../../core/types';
@@ -35,7 +35,12 @@ export function ReportScreen() {
   const { clips, slotA, slotB, settings } = useStore();
   const units = useUnits();
   const A = slotA ? clips[slotA] : undefined, B = slotB ? clips[slotB] : undefined;
-  const cmp = useMemo(() => (A?.analysis && B?.analysis ? compareAnalyses(A.analysis, B.analysis) : null), [A, B]);
+  const cmp = useMemo(() => {
+    if (!A?.analysis || !B?.analysis) return null;
+    const va = clipVelo(A), vb = clipVelo(B);
+    return compareAnalyses(A.analysis, B.analysis, { velo: va && vb ? { a: va.mph, b: vb.mph, source: va.source } : undefined });
+  }, [A, B]);
+  const mv = clipVelo(B?.analysis ? B : A);
   if (!A?.analysis) return <div className="card">Put an analysed clip in slot A (and optionally B) to build a report.</div>;
   const main = B?.analysis ? B : A;
   const heightM = main.record.heightM;
@@ -46,7 +51,18 @@ export function ReportScreen() {
         <div className="section-label">Mound Lab biomechanics report · {new Date().toLocaleDateString()}</div>
         <h1>{main.record.name}</h1>
         <p className="small muted">View: {main.analysis!.view} · {Math.round(main.analysis!.fps)} fps · throws {main.analysis!.roles.throw === 'R' ? 'right' : 'left'}{main.record.pitchType ? ` · ${main.record.pitchType}` : ''}{B?.analysis ? ` · compared with ${A.record.name}` : ''}</p>
+        {mv && <p className="num" style={{ fontSize: '1.6rem', margin: '0 0 8px' }}>{mv.mph.toFixed(0)} mph <span className="small faint">({mv.source}{mv.low && mv.high ? `, likely ${mv.low.toFixed(0)}–${mv.high.toFixed(0)}` : ''})</span></p>}
         {cmp && <div className="verdict"><h2>{cmp.verdict.headline}</h2><p className="small" style={{ margin: 0 }}>{cmp.verdict.summary}</p></div>}
+        {cmp && cmp.scorecard.winner !== 'none' && (
+          <div style={{ marginTop: 10 }}>
+            <h3 style={{ marginBottom: 4 }}>{cmp.scorecard.headline}</h3>
+            <p className="small" style={{ margin: 0 }}>{cmp.scorecard.detail}</p>
+            <div className="grid cols-2 small" style={{ marginTop: 6 }}>
+              <div><b>B is worse:</b> {cmp.scorecard.worse.map((f) => f.def.short).join(', ') || 'nothing'}</div>
+              <div><b>B is better:</b> {cmp.scorecard.better.map((f) => f.def.short).join(', ') || 'nothing'}</div>
+            </div>
+          </div>
+        )}
         <h3 style={{ marginTop: 14 }}>Key frames</h3>
         <Frames clip={main} />
         <p className="tiny faint">Events: PKH peak leg lift · FS foot strike · MER max layback (2D proxy) · BR release · MIR end of deceleration · HS hand separation.</p>

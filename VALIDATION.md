@@ -44,6 +44,27 @@ What this shows:
 - Moving foot strike to the current frame updates the stride metric.
 - The demo comparison renders its verdict, findings, compare screen and clip screen with no console errors.
 
+## 4. Version 2: pitcher identification, far cameras, velocity
+
+### Picking the pitcher out of a crowd
+- **Unit tests (`people.test.ts`)** use synthetic scenes with real motion: the pitcher, a base runner (constant 3.2 body heights/s, alternating knee drive and arm swing), and a person standing still. The pitcher is chosen when the runner is **bigger (520 vs 300 px) and more central**, when a still bystander is **twice the pitcher's size**, and when the pitcher is **70 px tall in a 1080p frame**. Scores separate clearly: pitcher 10.6, still bystander 2.3, runner −3.1.
+- **Real pose model, composite clip** (MediaPipe's public test person; a 1.4× copy sweeps across the frame at ~2 body heights/s and passes in front of the static person):
+  - the runner was labelled "Runner (ignored)" and the static person tracked;
+  - the occlusion split the static person into two tracks in the first version, so stitching was added; they are now one track.
+  - Limitation: during a full occlusion by a near-identical person, the scan picked up some false "leg lift / fast arm" readings. It still chose the right person, but the reasons shown were wrong for those frames.
+
+### Far / center-field cameras
+- **Detector size experiment** (real model, real frame): the person is ~130 px tall in a 1920×1080 frame and cropped at different zooms. Found when the person filled ≥ 22% of the crop; missed at 12–16%. The tile pyramid (frame-height, ½ and ⅓ height tiles, half-overlapping) follows from this. A unit test checks that every person between 0.2 and 0.5 of a tile's side fits fully inside some tile.
+- **Real pose model, far clip**: the person is 13% of a 1920×1080 frame. The first version (single full-frame detection) failed with "No person could be found". The tile pyramid finds them, and the full-rate pass tracks them in a following crop with the skeleton on the body. The player now zooms to small pitchers automatically.
+
+### Velocity
+- **Unit tests (`ballspeed.test.ts`)**: synthetic pixels with a textured background, sensor noise, a large decelerating "hand" blob and a ball. Recovered speeds are within 3% at 85 and 72 mph (240 fps) and 60 and 90 mph (120 fps), and for a lefty throwing the other way. With no ball it returns **no number** instead of guessing, and it refuses at 30 fps.
+- **Demo clips (rendered frames, real tracker)**: the true speed drawn is 85 / 81 mph; measured 86 / 82 mph (about +1.2%). The bias comes from the height estimate (nose-to-ankle ÷ 0.89).
+- **Not yet validated against a radar gun on real pitches.** The quoted ranges combine ±0.5 px centroid error, ±4% depth-plane error and ±2% (height entered) or ±6% (height assumed). Real-world error could be larger with motion blur, a bad camera angle, or a ball lost against a white background. The tool reports "couldn't see the ball" instead of guessing, and "Mark the ball" is the manual fallback.
+
+### Better / worse verdict
+- Unit tests: good day vs off day → "A is the better delivery", with all five injected faults listed as "B is worse". Reversed → "B is better". Identical clips → no winner. Style metrics are never called better or worse. Velocity enters the verdict.
+
 ## Not yet validated (needed before trusting the tiers)
 1. **Event timing on real pitches.** This needs 20+ real clips per view at 120–240 fps, with FS/MER/BR labelled frame by frame by two raters. Report the mean/max error in frames and ms per event and per view.
 2. **Angle accuracy on real pitches.** Compare against manual goniometer measurements on key frames by two raters (knee, trunk, elbow, forearm, arm slot, side bend).
