@@ -1,0 +1,31 @@
+# Render Blueprint for Mound Lab — its own Blueprint, separate from PULSE.
+# Render Blueprint "moundlab2": repo Bentho22345/Trading-, branch "mound-lab", Blueprint path render.yaml.
+# Static site: everything runs in the browser. The install step downloads the MediaPipe pose
+# models (postinstall) so the site serves them itself.
+services:
+  - type: web
+    name: moundlab2
+    runtime: static
+    # dev dependencies (vite, typescript) are the build tools, so always install them;
+    # type-checking runs in CI, the deploy only bundles
+    buildCommand: npm ci --include=dev && npx vite build
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+    headers:
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /models/*
+        name: Cache-Control
+        value: public, max-age=604800
+      - path: /mediapipe/*
+        name: Cache-Control
+        value: public, max-age=604800

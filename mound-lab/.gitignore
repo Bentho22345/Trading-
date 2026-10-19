@@ -1,0 +1,8 @@
+node_modules
+dist
+test-results
+playwright-report
+public/mediapipe
+public/models
+*.tmp.mjs
+public/tfjs
