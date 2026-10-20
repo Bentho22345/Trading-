@@ -24,7 +24,7 @@ export default function AutopilotPage() {
   useLive(({ ch, data }) => { if (ch === 'autopilot') setD((x: any) => (x ? { ...x, ...data } : x)); });
   const setMode = (mode: string) => api('/api/autopilot/mode', { method: 'POST', body: JSON.stringify({ mode }) }).then(load).catch((e) => setErr(e.message));
   const mode = d?.mode || 'off';
-  const sum = d?.summary?.[mode === 'real' ? 'real' : 'demo'];
+  const sum = d?.summary?.[mode === 'real' ? 'real' : mode === 'auto' ? 'auto' : 'demo'];
 
   return (
     <div className="pt-4">
@@ -40,19 +40,19 @@ export default function AutopilotPage() {
 
       <div className="glass mb-6 flex flex-wrap items-center gap-3 rounded-[28px] p-4">
         <div className="flex rounded-full bg-white/[0.05] p-1">
-          {(['off', 'demo', 'real'] as const).map((m) => (
+          {(['off', 'demo', 'auto', 'real'] as const).map((m) => (
             <button key={m} onClick={() => (m === 'real' ? setRealOpen(true) : setMode(m))}
-              className={`rounded-full px-5 py-2 text-[13px] font-bold uppercase tracking-wider transition ${mode === m ? (m === 'real' ? 'bg-down text-white' : m === 'demo' ? 'bg-up text-black' : 'bg-white text-black') : 'text-white/55 hover:text-white'}`}>
-              {m === 'off' ? 'Off' : m === 'demo' ? 'Demo' : 'Real money'}
+              className={`rounded-full px-5 py-2 text-[13px] font-bold uppercase tracking-wider transition ${mode === m ? (m === 'real' ? 'bg-down text-white' : m === 'demo' ? 'bg-up text-black' : m === 'auto' ? 'bg-flash text-white' : 'bg-white text-black') : 'text-white/55 hover:text-white'}`}>
+              {m === 'off' ? 'Off' : m === 'demo' ? 'Demo' : m === 'auto' ? 'Self-driving' : 'Real money'}
             </button>
           ))}
         </div>
         <span className={`flex items-center gap-2 text-[13px] ${mode === 'off' ? 'text-white/50' : 'text-white'}`}>
-          <span className={`h-2 w-2 rounded-full ${mode === 'real' ? 'animate-pulse bg-down' : mode === 'demo' ? 'animate-pulse bg-up' : 'bg-white/30'}`} />
-          {mode === 'off' ? 'Not buying (open positions are still managed)' : d?.paused_reason ? `Waiting: ${d.paused_reason}` : 'Hunting'}
+          <span className={`h-2 w-2 rounded-full ${mode === 'real' ? 'animate-pulse bg-down' : mode === 'demo' ? 'animate-pulse bg-up' : mode === 'auto' ? 'animate-pulse bg-flash' : 'bg-white/30'}`} />
+          {mode === 'off' ? 'Not buying (open positions are still managed)' : mode === 'auto' ? 'Driving itself on its own demo money' : d?.paused_reason ? `Waiting: ${d.paused_reason}` : 'Hunting'}
         </span>
         <div className="num ml-auto flex flex-wrap items-center gap-4 text-[13px]">
-          <span>Balance <b>{mode === 'real' ? sol(d?.wallet?.sol) : sol(d?.demo_balance)}</b></span>
+          <span>Balance <b>{mode === 'real' ? sol(d?.wallet?.sol) : mode === 'auto' ? sol(d?.auto_balance) : sol(d?.demo_balance)}</b></span>
           <span>Today <b className={(sum?.today?.pnl ?? 0) >= 0 ? 'text-up' : 'text-down'}>{sol(sum?.today?.pnl)}</b></span>
           <span>All-time <b className={(sum?.pnl_sol ?? 0) >= 0 ? 'text-up' : 'text-down'}>{sol(sum?.pnl_sol)}</b>{sum?.win_rate != null ? ` · ${sum.win_rate}% wins` : ''}</span>
           <button onClick={() => confirm('Sell every open position and switch Autopilot off?') && api('/api/autopilot/panic', { method: 'POST' }).then(load)}
@@ -60,10 +60,11 @@ export default function AutopilotPage() {
         </div>
       </div>
       {err && <p className="mb-4 text-[12px] text-down">{err}</p>}
+      {(mode === 'auto' || (d?.summary?.auto?.closed ?? 0) > 0 || (d?.open || []).some((p: Pos) => p.mode === 'auto')) && <SelfDriving now={now} on={mode === 'auto'} onMode={setMode} />}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_440px]">
         <div className="space-y-6">
-          <Positions rows={d?.open || []} now={now} onChange={load} />
+          <Positions rows={(d?.open || []).filter((p: Pos) => p.mode !== 'auto')} now={now} onChange={load} />
           <History now={now} />
         </div>
         <aside className="space-y-4">
@@ -320,5 +321,127 @@ function RealModal({ d, onClose, onDone }: { d: any; onClose: () => void; onDone
         </div>
       </motion.div>
     </motion.div>
+  );
+}
+
+type Brain = {
+  threshold: number; trained: number; balance: number; summary: any; mode: string;
+  weights: { key: string; label: string; w: number; prior: number }[];
+  candidates: { mint: string; symbol?: string; value: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string }[];
+  log: { ts: number; kind: string; text: string; mint?: string }[]; equity: { ts: number; equity: number }[]; open: Pos[];
+};
+const LOG_TONE: Record<string, string> = { buy: 'text-up', sell: 'text-warn', learn: 'text-accent', skip: 'text-white/55', error: 'text-down', mode: 'text-flash', reset: 'text-flash' };
+
+function Equity({ pts, start }: { pts: { ts: number; equity: number }[]; start: number }) {
+  if (pts.length < 2) return <div className="flex h-[120px] items-center justify-center text-[12px] text-white/35">The equity curve draws itself as it trades.</div>;
+  const W = 600, H = 120;
+  const ys = pts.map((p) => p.equity);
+  const lo = Math.min(start, ...ys), hi = Math.max(start, ...ys), span = hi - lo || 1;
+  const t0 = pts[0].ts, t1 = pts[pts.length - 1].ts || t0 + 1;
+  const xy = pts.map((p) => [((p.ts - t0) / Math.max(1, t1 - t0)) * W, H - 6 - ((p.equity - lo) / span) * (H - 12)]);
+  const line = xy.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const up = ys[ys.length - 1] >= start;
+  const baseY = H - 6 - ((start - lo) / span) * (H - 12);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="h-[120px] w-full" preserveAspectRatio="none">
+      <line x1={0} x2={W} y1={baseY} y2={baseY} stroke="currentColor" strokeOpacity={0.15} strokeDasharray="4 4" />
+      <path d={`${line} L${W},${H} L0,${H} Z`} fill={up ? 'var(--color-up)' : 'var(--color-down)'} fillOpacity={0.1} />
+      <path d={line} fill="none" stroke={up ? 'var(--color-up)' : 'var(--color-down)'} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m: string) => void }) {
+  const [b, setB] = useState<Brain | null>(null);
+  const load = useCallback(() => api<Brain>('/api/autopilot/brain').then(setB).catch(() => {}), []);
+  usePoll(load, 6000);
+  useLive(({ ch, data }) => {
+    if (ch !== 'brain') return;
+    setB((x) => {
+      if (!x) return x;
+      const n = { ...x };
+      if (data.event) n.log = [data.event, ...x.log].slice(0, 150);
+      if (data.candidates) n.candidates = data.candidates;
+      if (data.threshold != null) n.threshold = data.threshold;
+      return n;
+    });
+    if (data.event && ['buy', 'sell', 'learn'].includes(data.event.kind)) load();
+  });
+  const sm = b?.summary;
+  const start = 10;
+  const eq = b?.equity?.length ? b.equity[b.equity.length - 1].equity : b?.balance ?? start;
+  const maxW = Math.max(1, ...(b?.weights || []).map((w) => Math.max(Math.abs(w.w), Math.abs(w.prior))));
+  return (
+    <section className="mb-6 overflow-hidden rounded-[28px] border border-flash/30 bg-flash/[0.04]">
+      <header className="flex flex-wrap items-center gap-3 border-b border-flash/20 px-6 py-4">
+        <span className={`h-2.5 w-2.5 rounded-full ${on ? 'animate-pulse bg-flash' : 'bg-white/30'}`} />
+        <span className="display text-[30px]">Self-driving</span>
+        <span className="text-[12px] text-white/55">Radar&apos;s own algorithm · own demo money · learns from every trade</span>
+        <div className="num ml-auto flex flex-wrap items-center gap-4 text-[13px]">
+          <span>Equity <b className={eq >= start ? 'text-up' : 'text-down'}>◎{eq.toFixed(3)}</b> <span className="text-white/45">({((eq / start - 1) * 100).toFixed(1)}%)</span></span>
+          <span>Trades <b>{sm?.closed ?? 0}</b>{sm?.win_rate != null ? <> · <b>{sm.win_rate}%</b> wins</> : null}</span>
+          <span>Learned from <b>{b?.trained ?? 0}</b></span>
+          <span>Entry bar <b className="text-flash">{b?.threshold?.toFixed(0) ?? '—'}</b></span>
+          {!on && <button onClick={() => onMode('auto')} className="rounded-full bg-flash px-3 py-1 text-[12px] font-bold text-white">Start</button>}
+          <button onClick={() => confirm("Sell the brain's positions and reset what it learned (and its demo money)?") && api('/api/autopilot/brain/reset', { method: 'POST' }).then(load)}
+            className="rounded-full border border-white/15 px-3 py-1 text-[12px] text-white/60 hover:text-white">Reset brain</button>
+        </div>
+      </header>
+      <div className="px-6 pt-4"><Equity pts={b?.equity || []} start={start} /></div>
+      <div className="grid gap-px bg-white/[0.06] lg:grid-cols-3">
+        <div className="bg-[var(--color-bg)]/60 p-5">
+          <div className="eyebrow mb-3 flex items-center gap-2"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-flash" />What it&apos;s thinking</div>
+          <ul className="max-h-[420px] space-y-2 overflow-y-auto pr-1 text-[12.5px]">
+            <AnimatePresence initial={false}>
+              {(b?.log || []).map((e) => (
+                <motion.li key={`${e.ts}${e.text}`} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} className="leading-snug">
+                  <span className="num mr-1.5 text-[10.5px] text-white/35">{ago(e.ts, now)}</span>
+                  {e.mint ? <Link href={`/token?a=${e.mint}`} className={`hover:underline ${LOG_TONE[e.kind] || ''}`}>{e.text}</Link> : <span className={LOG_TONE[e.kind] || ''}>{e.text}</span>}
+                </motion.li>
+              ))}
+            </AnimatePresence>
+            {!b?.log?.length && <li className="text-white/40">Switch to Self-driving and watch it think.</li>}
+          </ul>
+        </div>
+        <div className="bg-[var(--color-bg)]/60 p-5">
+          <div className="eyebrow mb-3">What it&apos;s looking at · value vs its bar</div>
+          <ul className="space-y-2">
+            {(b?.candidates || []).map((c) => (
+              <li key={c.mint} className="text-[12px]" title={c.why}>
+                <div className="flex items-center gap-2">
+                  <Link href={`/token?a=${c.mint}`} className="w-24 truncate font-semibold hover:underline">${c.symbol || c.mint.slice(0, 5)}</Link>
+                  <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div className={`h-full rounded-full ${c.hard ? 'bg-down/50' : c.value >= (b?.threshold ?? 100) ? 'bg-up' : 'bg-white/30'}`} style={{ width: `${c.value}%` }} />
+                    <div className="absolute inset-y-0 w-px bg-flash" style={{ left: `${b?.threshold ?? 0}%` }} />
+                  </div>
+                  <b className="num w-8 text-right">{c.value.toFixed(0)}</b>
+                </div>
+                <div className="truncate pl-[104px] text-[10.5px] text-white/40">{c.hard ? `✗ ${c.hard}` : c.why}</div>
+              </li>
+            ))}
+            {!b?.candidates?.length && <li className="text-[12px] text-white/40">Waiting for live launches…</li>}
+          </ul>
+        </div>
+        <div className="bg-[var(--color-bg)]/60 p-5">
+          <div className="eyebrow mb-3">What it has learned · weight per signal</div>
+          <ul className="space-y-1.5">
+            {(b?.weights || []).map((w) => (
+              <li key={w.key} className="flex items-center gap-2 text-[11.5px]" title={`started at ${w.prior}`}>
+                <span className="w-36 truncate text-white/65">{w.label}</span>
+                <div className="relative h-2 flex-1 rounded-full bg-white/[0.05]">
+                  <div className="absolute inset-y-0 left-1/2 w-px bg-white/20" />
+                  <div className={`absolute inset-y-0 rounded-full ${w.w >= 0 ? 'bg-up' : 'bg-down'}`}
+                    style={w.w >= 0 ? { left: '50%', width: `${(w.w / maxW) * 50}%` } : { right: '50%', width: `${(-w.w / maxW) * 50}%` }} />
+                  <div className="absolute -inset-y-0.5 w-0.5 bg-white/60" style={{ left: `${50 + (w.prior / maxW) * 50}%` }} />
+                </div>
+                <b className={`num w-11 text-right ${w.w >= 0 ? 'text-up' : 'text-down'}`}>{w.w > 0 ? '+' : ''}{w.w.toFixed(2)}</b>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-[10.5px] text-white/35">Bars = what it believes now; white tick = where it started. Winners&apos; signals grow, losers&apos; shrink.</p>
+        </div>
+      </div>
+      {!!b?.open?.length && <div className="border-t border-flash/20"><Positions rows={b.open} now={now} onChange={load} /></div>}
+    </section>
   );
 }

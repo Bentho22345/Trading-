@@ -36,7 +36,22 @@ async def overview() -> dict[str, Any]:
     return {"config": ap.c, "defaults": DEFAULT, "real_phrase": REAL_PHRASE, "password_set": bool(auth.password()),
             "wallet": {"pubkey": pub, "sol": bal, "error": bal_err, "payout": (await S.cfg.kv_get("autopilot:payout"))},
             "demo_balance": await ap.demo_balance(), **(await ap.snapshot()),
-            "summary": {"demo": await ap.summary("demo"), "real": await ap.summary("real")}}
+            "summary": {"demo": await ap.summary("demo"), "auto": await ap.summary("auto"), "real": await ap.summary("real")}}
+
+
+@router.get("/brain")
+async def brain() -> dict[str, Any]:
+    """Self-driving mode: what it's looking at, what it thinks, what it has learned, and its equity curve."""
+    return {**(await S.autopilot.brain.snapshot()), "mode": S.autopilot.c["mode"],
+            "open": [p for p in (await S.autopilot.snapshot())["open"] if p["mode"] == "auto"]}
+
+
+@router.post("/brain/reset")
+async def brain_reset() -> dict[str, Any]:
+    for p in [p for p in S.autopilot.open.values() if p["mode"] == "auto"]:
+        await S.autopilot.sell(p, 1.0, "reset")
+    await S.autopilot.brain.reset()
+    return await S.autopilot.brain.snapshot()
 
 
 @router.post("/config")
@@ -75,7 +90,9 @@ class BuyBody(BaseModel):
 @router.post("/buy")
 async def manual_buy(b: BuyBody) -> dict[str, Any]:
     """Quick-buy from a card: uses the current mode (demo when Autopilot is off). Real needs real mode switched on."""
-    mode = b.mode or (S.autopilot.c["mode"] if S.autopilot.c["mode"] != "off" else "demo")
+    mode = b.mode or (S.autopilot.c["mode"] if S.autopilot.c["mode"] not in ("off", "auto") else "demo")
+    if mode == "auto":
+        mode = "demo"                       # the self-driving brain's pot is its own: your quick-buys go to your demo book
     if mode == "real" and S.autopilot.c["mode"] != "real":
         raise HTTPException(400, "Switch Autopilot to REAL first (that's where the safety confirmation lives)")
     if b.mint in S.autopilot.busy:

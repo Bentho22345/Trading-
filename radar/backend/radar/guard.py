@@ -42,7 +42,7 @@ async def prune_extra(db: Any, hard: bool = False) -> None:
                      ("DELETE FROM x_calls WHERE ts < ?", 30), ("DELETE FROM x_events WHERE ts < ?", 30),
                      ("DELETE FROM wallet_intel WHERE checked < ?", 14), ("DELETE FROM ai_labels WHERE ts < ?", 3),
                      ("DELETE FROM strategy_hits WHERE ts < ?", 45), ("DELETE FROM snipe_calls WHERE call_ts < ?", 60),
-                     ("DELETE FROM auto_orders WHERE ts < ?", 90), ("DELETE FROM trend_items WHERE ts < ?", 3)):
+                     ("DELETE FROM auto_orders WHERE ts < ?", 90), ("DELETE FROM auto_equity WHERE ts < ?", 30), ("DELETE FROM trend_items WHERE ts < ?", 3)):
         try:
             await db.exec(sql, (now - age * day,))
         except Exception:  # noqa: BLE001 - a table from a newer feature may not exist yet

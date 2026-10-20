@@ -568,3 +568,22 @@ def test_backup_download_is_a_valid_database(stack, tmp_path):
     p.write_bytes(r.content)
     with sqlite3.connect(p) as c:
         assert c.execute("SELECT COUNT(*) FROM x_accounts").fetchone()[0] >= 70
+
+
+def test_self_driving_mode_watches_values_and_streams(stack):
+    base = f"http://{stack}/api/autopilot"
+    assert httpx.post(f"{base}/mode", json={"mode": "auto"}).json()["mode"] == "auto"
+    b = None
+    for _ in range(40):
+        b = httpx.get(f"{base}/brain").json()
+        if b["candidates"]:
+            break
+        time.sleep(0.5)
+    assert b["mode"] == "auto" and b["candidates"] and all(0 <= c["value"] <= 100 for c in b["candidates"])
+    assert any(e["kind"] == "mode" for e in b["log"]) and len(b["weights"]) >= 10 and b["balance"] <= 10
+    q = httpx.post(f"{base}/buy", json={"mint": b["candidates"][0]["mint"], "sol": 0.05})
+    if q.status_code == 200:
+        assert q.json()["position"]["mode"] == "demo"                    # your quick-buys never land in the brain's pot
+    r = httpx.post(f"{base}/brain/reset").json()
+    assert r["trained"] == 0 and r["balance"] == 10
+    assert httpx.post(f"{base}/mode", json={"mode": "off"}).json()["mode"] == "off"

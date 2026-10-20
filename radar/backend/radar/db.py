@@ -324,8 +324,11 @@ CREATE TABLE IF NOT EXISTS trend_items (key TEXT PRIMARY KEY, term TEXT, source 
 CREATE TABLE IF NOT EXISTS auto_positions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, mode TEXT NOT NULL, mint TEXT NOT NULL, symbol TEXT, trigger TEXT, detail TEXT, opened REAL,
   entry_price_sol REAL, entry_mcap_sol REAL, sol_in REAL, tokens REAL, tokens_left REAL, sol_out REAL DEFAULT 0, peak_price_sol REAL,
-  last_price_sol REAL, tp_done TEXT, status TEXT, exit_reason TEXT, closed REAL, pnl_sol REAL, buy_sig TEXT
+  last_price_sol REAL, tp_done TEXT, status TEXT, exit_reason TEXT, closed REAL, pnl_sol REAL, buy_sig TEXT,
+  features_json TEXT, score REAL     -- self-driving mode: what the brain saw when it bought (it learns from these)
 );
+CREATE TABLE IF NOT EXISTS auto_equity (ts REAL NOT NULL, mode TEXT, equity REAL);
+CREATE INDEX IF NOT EXISTS auto_equity_ts ON auto_equity(mode, ts DESC);
 CREATE INDEX IF NOT EXISTS auto_positions_mode ON auto_positions(mode, status, opened DESC);
 CREATE TABLE IF NOT EXISTS auto_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, mode TEXT, position_id INTEGER, side TEXT, mint TEXT, symbol TEXT, sol REAL,

@@ -40,7 +40,7 @@ HELP = ("<b>Memecoin Radar</b> 🛰\n"
         "/top [safe|balanced|degen] — best live launches\n/calls — today's snipe calls &amp; results\n"
         "/coin &lt;CA or $TICKER&gt; — full read of one coin\n/x — hottest tweet narratives\n/callers — best X callers\n"
         "/wallets — top-wallet trades\n/intel — engine finds\n"
-        "/autopilot — positions &amp; PnL · /autopilot demo|off · /panic — sell all &amp; stop\n"
+        "/autopilot — positions &amp; PnL · /autopilot demo|auto|off · /panic — sell all &amp; stop\n"
         "/push degen|balanced|safe|off — auto-push coins at your appetite\n/mute 60 · /unmute\n/status — engines &amp; credits\n"
         "<i>Not financial advice. Radar never trades.</i>")
 
@@ -257,7 +257,9 @@ class TelegramBot:
             if ap is None:
                 await send("Autopilot isn't running.")
                 return
-            if arg.lower() in ("demo", "off"):
+            if arg.lower() in ("auto", "self", "selfdriving", "self-driving"):
+                arg = "auto"
+            if arg.lower() in ("demo", "off", "auto"):
                 await ap.set_mode(arg.lower())
                 await send(f"🤖 Autopilot: <b>{arg.upper()}</b>" + ("" if arg.lower() == "off" else " (simulated money). Real mode is switched on from the website only."))
                 return
@@ -266,7 +268,7 @@ class TelegramBot:
                 return
             snap = await ap.snapshot()
             lines = [f"🤖 <b>Autopilot: {snap['mode'].upper()}</b>" + (f" · paused: {esc(snap['paused_reason'])}" if snap.get("paused_reason") else "")]
-            for m in ("demo", "real"):
+            for m in ("demo", "auto", "real"):
                 sm = await ap.summary(m)
                 if sm["closed"] or sm["today"]["spent"]:
                     lines.append(f"{m}: {sm['closed']} closed · PnL {sm['pnl_sol']:+.3f} SOL · win {sm['win_rate'] or 0}% · today {sm['today']['pnl']:+.3f}")

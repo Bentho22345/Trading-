@@ -212,3 +212,48 @@ def test_real_buy_reads_fills_back_from_chain(tmp_path, monkeypatch):
         with pytest.raises(TradeError, match="not enough"):
             await w.buy("MINT" + "x" * 40, 0.1, 15, 0.0005)
     asyncio.run(run())
+
+
+def test_self_driving_brain_buys_values_exits_and_learns(tmp_path):
+    from radar.brain import PRIORS, features
+
+    async def run():
+        great = launch("GREATmint" + "1" * 31, upside=95, risk=5, buyers=60, alpha=[{"rank": 3}, {"rank": 9}], eta_min=4, organic=90,
+                       metrics={"buy_ratio_1m": 4, "ai_meme_score": 9, "x_tweet_score": 80, "dev_graduated": 2}, age_s=40, deployer="DevA")
+        meh = launch("MEHmint" + "2" * 33, upside=20, risk=60, buyers=8, deployer="DevB")
+        trap = launch("TRAPmint" + "3" * 32, upside=99, risk=10, tier="TRAP", buyers=90, deployer="DevC")
+        ap, db = await make(tmp_path, [great, meh, trap])
+        await ap.set_mode("auto")
+        b = ap.brain
+        vg, vm = b.value(features(great.result)), b.value(features(meh.result))
+        assert vg > b.threshold > vm and b.hard_no(trap.result) == "TRAP"
+        await b.tick()
+        auto = [p for p in ap.open.values() if p["mode"] == "auto"]
+        assert len(auto) == 1 and auto[0]["mint"] == great.mint and auto[0]["trigger"] == "brain"
+        assert await ap.demo_balance("auto") < 10 and await ap.demo_balance("demo") == 10      # its own pot, not yours
+        assert any(e["kind"] == "buy" for e in b.log)
+        p = auto[0]
+        assert p["sol_in"] > 0.3                                         # conviction sizing: ~3% of 10 SOL, scaled up for a strong coin
+        # its own exits: take 40% at 2.5×, then trailing stop from the peak
+        great.mcap_sol = 40 * 2.6
+        await ap.manage()
+        assert 100 in p["tp_done"] and p["tokens_left"] == pytest.approx(p["tokens"] * 0.6)
+        w_before = dict(b.w)
+        great.mcap_sol = 40 * 1.5
+        await ap.manage()
+        assert p["status"] == "closed" and "trailing" in p["exit_reason"]
+        assert b.trained == 1 and b.w != w_before                       # it learned from the trade
+        assert any(e["kind"] == "learn" for e in b.log)
+        snap = await b.snapshot()
+        assert snap["summary"]["closed"] == 1 and len(snap["weights"]) == len(PRIORS)
+        # losing streak raises the entry bar
+        for i in range(10):
+            await db.exec("INSERT INTO auto_positions (mode, mint, symbol, status, pnl_sol, closed, sol_in, sol_out, opened) VALUES "
+                          "('auto', ?, 'L', 'closed', -0.1, ?, 0.3, 0.2, ?)", (f"L{i}", time.time(), time.time()))
+        bar = b.threshold
+        await b.learn({"id": 0, "mint": "x", "symbol": "L", "sol_in": 0.3, "sol_out": 0.1, "features": features(meh.result)})
+        assert b.threshold > bar
+        await b.reset()
+        assert b.trained == 0 and await ap.demo_balance("auto") == 10
+        await db.close()
+    asyncio.run(run())

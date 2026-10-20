@@ -94,13 +94,17 @@ class Autopilot:
         self.last_buy = 0.0
         self.paused_reason: str | None = None
         self.stats = {"ticks": 0, "buys": 0, "sells": 0, "errors": 0, "last_error": None}
+        from .brain import Brain
+        self.brain = Brain(self)                                         # self-driving mode: its own algorithm, demo money
 
     # ---------------- config / state ----------------
     async def load(self) -> None:
         self.c = validate(merge(DEFAULT, await self.cfg.kv_get("autopilot:cfg") or {}))
+        await self.brain.load()
         for p in await self.db.all("SELECT * FROM auto_positions WHERE status IN ('open','closing')"):
             p = dict(p)
             p["tp_done"] = json.loads(p.get("tp_done") or "[]")
+            p["features"] = json.loads(p.get("features_json") or "null")
             self.open[p["id"]] = p
             self.entered[p["mint"]] = p["opened"]
 
@@ -121,29 +125,36 @@ class Autopilot:
                 raise ValueError(f'Type exactly: {REAL_PHRASE}')
             if not await self.wallet.pubkey():
                 raise ValueError("Create and fund a trading wallet first")
-        self.c["mode"] = mode if mode in ("off", "demo", "real") else "off"
+        self.c["mode"] = mode if mode in ("off", "demo", "auto", "real") else "off"
         await self.cfg.kv_set("autopilot:cfg", self.c)
-        await feed.push("autopilot", "mode", f"🤖 Autopilot {self.c['mode'].upper()}", "")
+        await feed.push("autopilot", "mode", f"🤖 Autopilot {'SELF-DRIVING' if self.c['mode'] == 'auto' else self.c['mode'].upper()}", "")
+        if self.c["mode"] == "auto":
+            await self.brain.note("mode", f"🚗 Self-driving on. ◎{await self.demo_balance('auto'):.2f} of demo money, entry bar "
+                                          f"{self.brain.threshold:.0f}, {self.brain.trained} trades learned so far.")
         await hub.publish("autopilot", await self.snapshot())
         return self.c
 
-    async def demo_balance(self) -> float:
-        d = await self.cfg.kv_get("autopilot:demo") or {}
+    async def demo_balance(self, mode: str = "demo") -> float:
+        """Virtual SOL. 'demo' is yours (manual rules); 'auto' is the self-driving brain's own pot."""
+        key = f"autopilot:{'auto' if mode == 'auto' else 'demo'}"
+        d = await self.cfg.kv_get(key) or {}
         if "balance" not in d:
             d = {"balance": float(self.c["demo"]["start_sol"]), "started": time.time()}
-            await self.cfg.kv_set("autopilot:demo", d)
+            await self.cfg.kv_set(key, d)
         return float(d["balance"])
 
-    async def _demo_add(self, delta: float) -> None:
-        b = await self.demo_balance()
-        d = await self.cfg.kv_get("autopilot:demo") or {}
+    async def _demo_add(self, delta: float, mode: str = "demo") -> None:
+        key = f"autopilot:{'auto' if mode == 'auto' else 'demo'}"
+        b = await self.demo_balance(mode)
+        d = await self.cfg.kv_get(key) or {}
         d["balance"] = round(b + delta, 9)
-        await self.cfg.kv_set("autopilot:demo", d)
+        await self.cfg.kv_set(key, d)
 
-    async def reset_demo(self) -> None:
-        await self.db.exec("DELETE FROM auto_positions WHERE mode='demo'")
-        self.open = {k: p for k, p in self.open.items() if p["mode"] != "demo"}
-        await self.cfg.kv_set("autopilot:demo", {"balance": float(self.c["demo"]["start_sol"]), "started": time.time()})
+    async def reset_demo(self, mode: str = "demo") -> None:
+        mode = "auto" if mode == "auto" else "demo"
+        await self.db.exec("DELETE FROM auto_positions WHERE mode=?", (mode,))
+        self.open = {k: p for k, p in self.open.items() if p["mode"] != mode}
+        await self.cfg.kv_set(f"autopilot:{mode}", {"balance": float(self.c["demo"]["start_sol"]), "started": time.time()})
 
     # ---------------- price ----------------
     async def price(self, mint: str) -> tuple[float | None, Any]:
@@ -161,7 +172,7 @@ class Autopilot:
     async def on_trade(self, t: dict[str, Any]) -> None:
         """Copy-trading input: top-ranked / followed / smart wallets buying."""
         cp = self.c["triggers"]["copy"]
-        if not cp["on"] or self.c["mode"] == "off" or t.get("side") != "buy" or not t.get("trader"):
+        if not cp["on"] or self.c["mode"] in ("off", "auto") or t.get("side") != "buy" or not t.get("trader"):
             return
         w = t["trader"]
         r = self.traders.ranked.get(w) if self.traders else None
@@ -178,7 +189,7 @@ class Autopilot:
 
     async def on_x_call(self, mint: str, handle: str, tier: str) -> None:
         xc = self.c["triggers"]["x_call"]
-        if xc["on"] and self.c["mode"] != "off" and tier in xc["tiers"]:
+        if xc["on"] and self.c["mode"] not in ("off", "auto") and tier in xc["tiers"]:
             self.signals.append({"mint": mint, "trigger": "x_call", "detail": f"@{handle} ({tier}) tweeted it"})
 
     # ---------------- the loop ----------------
@@ -189,8 +200,12 @@ class Autopilot:
             self.stats["ticks"] += 1
             try:
                 await self.manage()
-                if self.c["mode"] != "off":
+                if self.c["mode"] == "auto":
+                    await self.brain.tick()
+                elif self.c["mode"] != "off":
                     await self.scan()
+                if self.c["mode"] == "auto" or any(p["mode"] == "auto" for p in self.open.values()):
+                    await self.brain.equity_tick()
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -305,12 +320,14 @@ class Autopilot:
                 if tokens <= 0:
                     raise TradeError("bought nothing (slippage?)")
             else:
+                if await self.demo_balance(mode) < size:
+                    raise TradeError(f"{mode} balance too low")
                 impact = size / max(30.0, (L.vsol if L and L.vsol else 60.0))
                 fill = px * (1 + impact + 0.005)                         # price impact + PumpPortal fee
                 sol_in = size + self.c["exec"]["priority_fee_sol"]
                 tokens = size * 0.99 / fill                                # pump.fun 1% fee
                 sig = None
-                await self._demo_add(-sol_in)
+                await self._demo_add(-sol_in, mode)
             entry_px = sol_in / tokens
             pid = await self.db.exec(
                 "INSERT INTO auto_positions (mode, mint, symbol, trigger, detail, opened, entry_price_sol, entry_mcap_sol, sol_in, tokens, "
@@ -354,13 +371,18 @@ class Autopilot:
                 impact = qty * px / max(30.0, (L.vsol if L and L.vsol else 60.0))
                 got = max(0.0, qty * px * 0.99 * (1 - impact - 0.005) - self.c["exec"]["priority_fee_sol"])
                 sold, sig = qty, None
-                await self._demo_add(got)
+                await self._demo_add(got, p["mode"])
             p["tokens_left"] = max(0.0, p["tokens_left"] - sold)
             p["sol_out"] += got
             closing = p["tokens_left"] <= p["tokens"] * 0.001
             if closing:
                 p.update(status="closed", exit_reason=reason, closed=time.time(), pnl_sol=p["sol_out"] - p["sol_in"])
                 self.open.pop(p["id"], None)
+                if p["mode"] == "auto":
+                    try:
+                        await self.brain.learn(p)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("brain learn: %s", e)
             await self.db.exec("UPDATE auto_positions SET tokens_left=?, sol_out=?, status=?, exit_reason=?, closed=?, pnl_sol=?, tp_done=? WHERE id=?",
                                (p["tokens_left"], p["sol_out"], p["status"], p.get("exit_reason"), p.get("closed"), p.get("pnl_sol"),
                                 json.dumps(p["tp_done"]), p["id"]))
@@ -397,6 +419,16 @@ class Autopilot:
             p["peak_price_sol"] = max(p["peak_price_sol"], px)
             x = px / p["entry_price_sol"]
             peak_x = p["peak_price_sol"] / p["entry_price_sol"]
+            if p["mode"] == "auto":                                     # the brain runs its own exits
+                ex = self.brain.exit_for(p, L.result if L is not None else None, x, peak_x)
+                if ex:
+                    await self.sell(p, ex[0], ex[1])
+                    if p["id"] in self.open:
+                        await self.brain.note("sell", f"🟡 Sold {ex[0] * 100:.0f}% of ${p['symbol']} at {x:.2f}× — {ex[1]}", mint=p["mint"])
+                    else:
+                        await self.brain.note("sell", f"🔴 Closed ${p['symbol']} at {x:.2f}× — {ex[1]} · PnL {p['pnl_sol']:+.3f} SOL",
+                                              mint=p["mint"])
+                continue
             for i, step in enumerate(e["tp"]):
                 if i not in p["tp_done"] and x >= step["x"]:
                     p["tp_done"].append(i)
@@ -436,6 +468,7 @@ class Autopilot:
                         "x": round(x, 3) if x else None, "peak_x": round(p["peak_price_sol"] / p["entry_price_sol"], 3),
                         "value_sol": round(value, 6), "pnl_sol": round(p["sol_out"] + value - p["sol_in"], 6)})
         return {"mode": self.c["mode"], "open": sorted(out, key=lambda r: -r["opened"]), "paused_reason": self.paused_reason,
+                "auto_balance": await self.demo_balance("auto"),
                 "stats": self.stats}
 
     async def summary(self, mode: str) -> dict[str, Any]:
