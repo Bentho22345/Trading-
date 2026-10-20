@@ -309,9 +309,12 @@ class XRadar:
                     await asyncio.sleep(10)
                     continue
                 now = time.time()
-                if now - last_ids > 6 * 3600 or any(not r["user_id"] for r in self.roster.values()) and now - last_ids > 300:
+                if any(not r["user_id"] for r in self.roster.values()) and now - last_ids > 300:
                     last_ids = now
-                    await self.resolve_users(token)
+                    await self.resolve_users(token, only_missing=True)        # $0.01 per account, once
+                elif now - (self.stats.get("full_refresh") or 0) > 7 * 86400 and self.roster and all(r["user_id"] for r in self.roster.values()):
+                    self.stats["full_refresh"] = now
+                    await self.resolve_users(token)                            # weekly follower / picture refresh
                 for tier, qs in self.batches().items():
                     for q, _ in qs:
                         if now >= self.next_at.get(q, 0) and await self.allowed(tier):
@@ -322,10 +325,10 @@ class XRadar:
                     if now >= self.next_at.get(q, 0) and await self.allowed("search"):
                         self.next_at[q] = now + float(self.cfg.watch.get("x_search_every_s", 180))
                         await self.poll(token, q, "search", max_results=25)
-                if now - last_watch > float(os.environ.get("X_PROFILE_EVERY", "3600")) and await self.allowed("watch"):
+                if now - last_watch > float(os.environ.get("X_PROFILE_EVERY", "7200")) and await self.allowed("watch"):
                     last_watch = now
                     await self.watch_profiles(token)
-                if now - last_follow > float(os.environ.get("X_FOLLOW_EVERY", "7200")) and await self.allowed("watch"):
+                if now - last_follow > float(os.environ.get("X_FOLLOW_EVERY", "10800")) and await self.allowed("watch"):
                     last_follow = now
                     await self.watch_follows(token)
                 if now - last_recheck > 300 and await self.allowed("recheck"):
@@ -344,9 +347,10 @@ class XRadar:
                 await asyncio.sleep(3)
             await asyncio.sleep(2)
 
-    async def resolve_users(self, token: str) -> None:
-        """Handle → user id (+ followers, picture, bio) for the whole roster, 100 per request. Refreshed every 6h."""
-        keys = [r["handle"] for r in self.roster.values()]
+    async def resolve_users(self, token: str, only_missing: bool = False) -> None:
+        """Handle → user id (+ followers, picture, bio), 100 per request. X bills $0.01 per account returned, so new
+        accounts are resolved once and the whole roster only weekly."""
+        keys = [r["handle"] for r in self.roster.values() if not (only_missing and r["user_id"])]
         for i in range(0, len(keys), 100):
             d = await self._get(token, "/users/by", {"usernames": ",".join(keys[i:i + 100]),
                                                      "user.fields": "public_metrics,profile_image_url,description,name,verified,created_at"}, "users")
@@ -690,7 +694,10 @@ class XRadar:
 
     # ---------------- watchers: names / bios / pictures, and new follows ----------------
     async def watch_profiles(self, token: str) -> None:
-        s_tier = [r["handle"] for r in self.roster.values() if r["tier"] == "S"][:int(os.environ.get("X_PROFILE_MAX", "12"))]
+        # the accounts whose renames / new pictures have actually spawned coins; 6 × $0.01 every 2h ≈ $0.70 a day
+        pri = {"celebrity": 0, "politician": 1, "founder": 2}
+        s_tier = [r["handle"] for r in sorted(self.roster.values(), key=lambda r: (pri.get(r["category"], 9), -(r["followers"] or 0)))
+                  if r["tier"] == "S"][:int(os.environ.get("X_PROFILE_MAX", "6"))]
         if not s_tier:
             return
         d = await self._get(token, "/users/by", {"usernames": ",".join(s_tier), "user.fields": "profile_image_url,description,name,public_metrics"},

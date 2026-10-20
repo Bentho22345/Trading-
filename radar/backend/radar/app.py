@@ -194,7 +194,8 @@ async def lifespan(app: FastAPI):
         await S.custom.start_all()
         S.social.start()
         await S.smart.load()
-        jobs = [S.sniper.eval_loop(), loop_lag_monitor(), S.metadata.run(), S.playbook.loop(), periodic(300, load_pool), S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
+        from . import guard
+        jobs = [guard.disk_loop(S.db, str(settings.db_path)), guard.memory_loop(S), S.sniper.eval_loop(), loop_lag_monitor(), S.metadata.run(), S.playbook.loop(), periodic(300, load_pool), S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
                 S.onchain.run(), S.ytbuzz.loop(), S.narrator.loop(), S.tgbot.run(), S.tgbot.push_loop(), S.traders.dune_loop(),
@@ -316,11 +317,12 @@ async def healthz() -> dict[str, Any]:
     """Unauthenticated liveness probe for Render / Docker. Exposes only load / pipeline counters (no coins, keys or data),
     so a slow or empty deployment can be diagnosed from one URL."""
     out: dict[str, Any] = {"ok": True, "uptime_s": round(time.time() - STARTED), "loop_lag_ms": LAG["ms"], "loop_lag_max_ms": LAG["max_ms"]}
-    try:
-        import resource
-        out["rss_mb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
-    except Exception:  # noqa: BLE001
-        pass
+    from . import guard
+    out["rss_mb"] = guard.rss_mb()                       # current memory (was peak), the number that matters for OOM
+    out["storage"] = {k: guard.STATE[k] for k in ("disk_free_mb", "disk_total_mb", "db_mb", "wal_mb", "hard_prunes", "cache_trims")}
+    if guard.STATE["disk_free_mb"] is not None and guard.STATE["disk_free_mb"] < 150:
+        out["ok"] = False
+        out["problem"] = "disk almost full"
     sn = getattr(S, "sniper", None)
     if sn is not None:
         st = sn.stats

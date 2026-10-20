@@ -184,14 +184,16 @@ def yt_search(q: str = "", order: str = ""):
 
 @api.get("/yt/videos")
 def yt_videos(id: str = "", chart: str = ""):
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     out = []
     for vid in (id.split(",") if id else []):
         if vid == "buzz1":
             sn = {"title": "$HAWKTUAH is the next 100x memecoin?!", "description": f"CA: {fx.MINT}", "channelTitle": "Degen TV",
-                  "channelId": "UCdegen", "publishedAt": "2026-10-09T00:00:00Z"}
+                  "channelId": "UCdegen", "publishedAt": now}
         elif vid == "buzz2":
             sn = {"title": "Solana memecoins today: $WIF $BONK and $ZORP", "description": "", "channelTitle": "Coin Daily",
-                  "channelId": "UCdaily", "publishedAt": "2026-10-09T00:00:00Z"}
+                  "channelId": "UCdaily", "publishedAt": now}
         else:
             sn = {"title": f"My memecoin sniping filters ({vid})", "description": "I only buy when top 10 holders are under 25% and there are at least 60 holders.",
                   "channelTitle": "Trench Coach", "channelId": "UCcoach", "publishedAt": "2026-10-01T00:00:00Z"}

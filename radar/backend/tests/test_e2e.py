@@ -449,7 +449,7 @@ def test_x_radar_tweets_races_callers_watchers(stack):
     fake = stack_upstream()
     httpx.post(f"http://{stack}/api/connectors/telegram_bot", json={"values": {"bot_token": "123:abc", "chat_id": "555123"}})
     n0 = len(httpx.get(f"http://{fake}/tg/log").json())
-    httpx.post(f"http://{stack}/api/connectors/x", json={"values": {"bearer_token": "x-test"}})
+    httpx.post(f"http://{stack}/api/connectors/x", json={"values": {"bearer_token": "x-test", "daily_budget_usd": "50"}})
     st = httpx.get(f"http://{stack}/api/x/status").json()
     assert st["accounts"] >= 70 and st["tiers"]["S"] >= 10
     tw = None

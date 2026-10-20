@@ -372,8 +372,8 @@ class DB:
         # thread hop instead of two (execute + commit). Bulk writes wrap themselves in BEGIN/COMMIT (see many()).
         self.conn = await aiosqlite.connect(self.path, isolation_level=None)
         self.conn.row_factory = aiosqlite.Row
-        for pragma in ("journal_mode=WAL", "synchronous=NORMAL", "temp_store=MEMORY", "cache_size=-65536",
-                       "mmap_size=268435456", "busy_timeout=5000"):
+        for pragma in ("journal_mode=WAL", "synchronous=NORMAL", "temp_store=MEMORY", "cache_size=-32768",
+                       "mmap_size=67108864", "busy_timeout=5000", "journal_size_limit=67108864"):
             await self.conn.execute(f"PRAGMA {pragma}")
         self._bulk = asyncio.Lock()
         await self.migrate()
