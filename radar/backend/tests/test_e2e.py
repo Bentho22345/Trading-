@@ -604,34 +604,26 @@ def test_self_driving_mode_watches_values_and_streams(stack):
     assert httpx.post(f"{base}/mode", json={"mode": "off"}).json()["mode"] == "off"
 
 
-def test_zz_accounts_signup_verify_login_lock(stack):
-    """Runs last: once an account exists the whole API is locked behind log-in."""
-    import re as _re
-    fake = stack_upstream()
+def test_zz_accounts_signup_login_lock(stack):
+    """Runs last: once an account exists the whole API is locked behind log-in. No email verification: sign-up signs you in."""
     base = f"http://{stack}/api/auth"
-    httpx.post(f"http://{stack}/api/connectors/email", json={"values": {"from_address": "Radar <radar@test.dev>", "resend_api_key": "re_test"}})
     me = httpx.get(f"{base}/me").json()
-    assert me["user"] is None and me["signup_open"] and me["email_configured"]
+    assert me["user"] is None and me["signup_open"]
     assert httpx.post(f"{base}/signup", json={"email": "bad", "password": "Whatever123"}).status_code == 400
-    r = httpx.post(f"{base}/signup", json={"email": "owner@test.dev", "password": "Ownerpass123", "name": "Ben"}).json()
-    assert r["role"] == "owner" and r["sent"] and r["via"] == "resend"
-    mail = httpx.get(f"http://{fake}/resend/log").json()[-1]
-    assert mail["to"] == ["owner@test.dev"] and "Verify" in mail["subject"]
-    token = _re.search(r"token=([\w-]+)", mail["text"]).group(1)
-    assert httpx.get(f"http://{stack}/api/engines").status_code == 401             # locked now
-    assert httpx.post(f"{base}/login", json={"email": "owner@test.dev", "password": "Ownerpass123"}).status_code == 401  # unverified
-    assert httpx.post(f"{base}/verify", json={"token": token}).json()["ok"]
+    o = httpx.Client()
+    sr = o.post(f"{base}/signup", json={"email": "owner@test.dev", "password": "Ownerpass123", "name": "Ben"})
+    assert sr.json()["role"] == "owner" and "radar_sid" in sr.cookies
+    assert o.get(f"http://{stack}/api/session").json()["user"]["email"] == "owner@test.dev"     # signed in straight away
+    assert httpx.get(f"http://{stack}/api/engines").status_code == 401             # locked now for everyone else
     c = httpx.Client()
     lr = c.post(f"{base}/login", json={"email": "owner@test.dev", "password": "Ownerpass123", "remember": True})
-    assert lr.status_code == 200 and "radar_sid" in lr.cookies and "Max-Age=2592000" in lr.headers["set-cookie"]
+    assert lr.status_code == 200 and "radar_sid" in lr.cookies and f"Max-Age={400 * 86400}" in lr.headers["set-cookie"]
     assert c.get(f"http://{stack}/api/engines").status_code == 200
     assert c.get(f"http://{stack}/api/session").json()["user"]["email"] == "owner@test.dev"
-    assert len(c.get(f"{base}/sessions").json()) == 1
+    assert len(c.get(f"{base}/sessions").json()) == 2
     assert httpx.post(f"{base}/signup", json={"email": "x@test.dev", "password": "Anotherpass1"}).status_code == 403   # closed
     assert c.post(f"{base}/signup-setting", json={"open": True}).json()["signup_open"]
     assert httpx.post(f"{base}/signup", json={"email": "member@test.dev", "password": "Memberpass1"}).json()["role"] == "member"
-    mtoken = _re.search(r"token=([\w-]+)", httpx.get(f"http://{fake}/resend/log").json()[-1]["text"]).group(1)
-    httpx.post(f"{base}/verify", json={"token": mtoken})
     m = httpx.Client()
     m.post(f"{base}/login", json={"email": "member@test.dev", "password": "Memberpass1"})
     assert m.get(f"http://{stack}/api/autopilot").status_code == 200                # members can look

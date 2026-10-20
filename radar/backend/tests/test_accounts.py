@@ -1,4 +1,4 @@
-"""Accounts: hashing, sign-up → verification email → login (remembered), reset, sessions, roles, sign-up policy."""
+"""Accounts: hashing, sign-up signs you in (no verification), login (remembered, rolling), reset, sessions, roles, sign-up policy."""
 import asyncio
 import re
 import time
@@ -49,31 +49,30 @@ def test_signup_verify_login_reset_and_roles(tmp_path):
         await db.open()
         mail, kv = Mail(), KV()
         acc = Accounts(db, kv, mail)
-        r = await acc.signup("Me@Example.com", "Sup3rsecret!", "Ben", "https://radar.test")
-        assert r["role"] == "owner" and r["sent"] and mail.out[0][0] == "me@example.com"
-        with pytest.raises(PermissionError, match="Verify"):
-            await acc.login("me@example.com", "Sup3rsecret!", True, "1.1.1.1", "ua")
-        tok = link_token(mail.out[0][2])
-        u = await acc.verify(tok)
-        assert u["email"] == "me@example.com"
-        with pytest.raises(ValueError):
-            await acc.verify(tok)                                       # single use
+        t0, u0, age0 = await acc.signup("Me@Example.com", "Sup3rsecret!", "Ben", "1.1.1.1", "Chrome")
+        assert u0["role"] == "owner" and age0 == 400 * 86400 and not mail.out          # signed in, no email sent
+        assert (await acc.user_for(t0))["email"] == "me@example.com"
         token, user, max_age = await acc.login("ME@example.com", "Sup3rsecret!", True, "1.1.1.1", "Firefox")
-        assert user["role"] == "owner" and max_age == 30 * 86400
+        assert user["role"] == "owner" and max_age == 400 * 86400
         assert (await acc.user_for(token))["email"] == "me@example.com"
+        # rolling: a remembered device that keeps coming back keeps getting pushed out to 90 days
+        await db.exec("UPDATE sessions SET last_seen=?, expires=? WHERE user_id=?", (time.time() - 3600, time.time() + 60, user["id"]))
+        acc.cache.clear()
+        assert await acc.user_for(token) and await acc.user_for(t0)
+        assert all(r["expires"] > time.time() + 89 * 86400 for r in await db.all("SELECT expires FROM sessions"))
         row = await db.one("SELECT token_hash FROM sessions")
         assert token not in row["token_hash"]                           # only a hash is stored
         _, _, short = await acc.login("me@example.com", "Sup3rsecret!", False, "1.1.1.1", "Phone")
-        assert short == 0 and len(await acc.sessions(user["id"], token)) == 2
+        assert short == 0 and len(await acc.sessions(user["id"], token)) == 3
         with pytest.raises(PermissionError, match="Wrong"):
             await acc.login("me@example.com", "nope", True, "2.2.2.2", "x")
         # sign-ups close once an owner exists, unless the owner opens them; later accounts are read-only members
         with pytest.raises(PermissionError, match="closed"):
-            await acc.signup("friend@example.com", "Friendpass1", None, "https://radar.test")
+            await acc.signup("friend@example.com", "Friendpass1", None)
         await kv.kv_set("accounts:signup_open", True)
-        assert (await acc.signup("friend@example.com", "Friendpass1", None, "https://radar.test"))["role"] == "member"
+        assert (await acc.signup("friend@example.com", "Friendpass1", None))[1]["role"] == "member"
         with pytest.raises(ValueError, match="exists"):
-            await acc.signup("friend@example.com", "Friendpass1", None, "https://radar.test")
+            await acc.signup("friend@example.com", "Friendpass1", None)
         # reset: link → new password → every device signed out
         await acc.forgot("me@example.com", "https://radar.test")
         await acc.reset(link_token(mail.out[-1][2]), "Newpassword22")

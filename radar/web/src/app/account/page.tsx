@@ -55,14 +55,13 @@ export default function AccountPage() {
             </label>
           </div>
           {!me?.email_configured && <p className="mb-3 rounded-xl border border-warn/30 bg-warn/10 p-3 text-[12.5px] text-warn">
-            Email isn&apos;t configured — verification links go to the server log. Add <Link href="/connectors" className="underline">Email</Link> on Connectors (Resend or Gmail SMTP).</p>}
+            Email isn&apos;t configured — password-reset links go to the server log. Add <Link href="/connectors" className="underline">Email</Link> on Connectors (Resend or Gmail SMTP).</p>}
           <table className="w-full text-[13px]">
             <tbody>
               {users.map((x) => (
                 <tr key={x.id} className="border-t border-white/[0.06]">
                   <td className="py-2">{x.email}{x.name ? <span className="text-white/45"> · {x.name}</span> : null}</td>
                   <td className="capitalize text-white/70">{x.role}</td>
-                  <td>{x.verified ? <span className="text-up">verified</span> : <button onClick={() => post(`/api/auth/users/${x.id}`, { verified: true }).then(load)} className="text-warn underline">verify manually</button>}</td>
                   <td className="text-white/45">{x.last_login ? `${ago(x.last_login, now)} ago` : 'never'}</td>
                   <td className="text-right">
                     {x.id !== u.id && <>

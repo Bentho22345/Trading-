@@ -35,13 +35,13 @@ export default function LoginPage() {
         <Input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Password" autoFocus={legacy} />
         {!legacy && (
           <div className="flex items-center justify-between text-[12.5px]">
-            <label className="flex items-center gap-2 text-white/65"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--color-accent)]" />Remember me for 30 days</label>
+            <label className="flex items-center gap-2 text-white/65"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--color-accent)]" />Keep me signed in on this device</label>
             <button type="button" onClick={() => email ? post('/api/auth/forgot', { email }).then(() => setInfo('If that email has an account, a reset link is on its way.')).catch((x) => setErr(x.message)) : setErr('Type your email first')}
               className="text-white/55 hover:text-white">Forgot password?</button>
           </div>
         )}
         <button disabled={busy || !pw || (!legacy && !email)} className="btn-primary w-full justify-center disabled:opacity-40">{busy ? 'Checking…' : 'Log in'}</button>
-        {err && <p className="text-[12.5px] text-down">{err}{err.includes('Verify') && <> · <button type="button" onClick={() => post('/api/auth/resend', { email }).then(() => setInfo('Verification email sent again.'))} className="underline">resend link</button></>}</p>}
+        {err && <p className="text-[12.5px] text-down">{err}</p>}
         {info && <p className="text-[12.5px] text-up">{info}</p>}
         {legacy && <button type="button" onClick={() => setLegacy(false)} className="w-full text-[12px] text-white/50 hover:text-white">Log in with email instead</button>}
       </form>

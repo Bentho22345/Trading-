@@ -51,21 +51,25 @@ class SignupBody(BaseModel):
     email: str
     password: str
     name: str | None = None
+    remember: bool = True
 
 
 @router.post("/signup")
-async def signup(b: SignupBody, request: Request) -> dict[str, Any]:
+async def signup(b: SignupBody, request: Request, response: Response) -> dict[str, Any]:
+    """Creates the account and signs this device in straight away (no verification email)."""
     from .accounts import rate_ok
     if not rate_ok(f"signup:{_ip(request)}", 5):
         raise HTTPException(429, "Too many sign-ups from here — wait a minute")
     try:
-        r = await S.accounts.signup(b.email, b.password, b.name, _base(request))
+        token, user, max_age = await S.accounts.signup(b.email, b.password, b.name, _ip(request),
+                                                       request.headers.get("user-agent", ""), b.remember)
     except PermissionError as e:
         raise HTTPException(403, str(e)) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     auth.HAS_USERS[0] = True
-    return r
+    response.set_cookie(COOKIE, token, max_age=max_age or None, httponly=True, secure=_secure(request), samesite="lax")
+    return {"ok": True, "user": user, "role": user["role"]}
 
 
 class TokenBody(BaseModel):

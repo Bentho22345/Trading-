@@ -1,10 +1,12 @@
-"""Accounts: email + password sign-up with email verification, remembered log-ins, password reset, owner / member roles.
+"""Accounts: email + password sign-up (signed in straight away, no verification email), remembered log-ins,
+password reset, owner / member roles.
 
-  users          email (unique, lower-case), scrypt password hash (stdlib, salted, N=2^14), role, verified
+  users          email (unique, lower-case), scrypt password hash (stdlib, salted, N=2^14), role
   sessions       one row per signed-in device: only a SHA-256 of the cookie token is stored, so a leaked database
-                 can't be replayed; "remember me" = 30 days, otherwise 12 hours; last-seen, device and IP shown on
-                 the Account page where any device can be signed out
-  email_tokens   single-use verify / reset links (hashed), 24h / 1h
+                 can't be replayed; "remember me" = 90 days that ROLL forward every time you use the site (so a device
+                 you use stays signed in), otherwise 12 hours; last-seen, device and IP shown on the Account page where
+                 any device can be signed out
+  email_tokens   single-use password-reset links (hashed), 1h
 
   The first account becomes the OWNER (everything, including Autopilot real money and the trading wallet). Sign-ups
   after that are closed unless the owner opens them; later accounts are MEMBERS (read-only) unless promoted.
@@ -26,7 +28,8 @@ from typing import Any
 
 log = logging.getLogger("radar.accounts")
 COOKIE = "radar_sid"
-REMEMBER_S = 30 * 86400
+REMEMBER_S = 90 * 86400            # rolling: every visit pushes the expiry out again
+COOKIE_S = 400 * 86400             # the browser keeps the cookie; the server-side expiry is what counts
 SESSION_S = 12 * 3600
 EMAIL_RX = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,24}$")
 _attempts: dict[str, deque] = defaultdict(lambda: deque(maxlen=50))
@@ -83,8 +86,12 @@ class Accounts:
             return True
         return bool(await self.cfg.kv_get("accounts:signup_open", False))
 
-    # ---------------- sign-up / verification ----------------
-    async def signup(self, email: str, password: str, name: str | None, base_url: str) -> dict[str, Any]:
+    async def init(self) -> None:
+        await self.db.exec("UPDATE users SET verified=1 WHERE verified=0")     # verification is gone: nobody stays locked out
+
+    # ---------------- sign-up ----------------
+    async def signup(self, email: str, password: str, name: str | None, ip: str = "", ua: str = "",
+                     remember: bool = True) -> tuple[str, dict[str, Any], int]:
         email = (email or "").strip().lower()
         if not EMAIL_RX.match(email):
             raise ValueError("That doesn't look like an email address")
@@ -98,9 +105,9 @@ class Accounts:
         role = "member" if await self.any_users() else "owner"
         pw_hash = await asyncio.to_thread(hash_password, password)
         uid = await self.db.exec("INSERT INTO users (email, pw_hash, role, verified, created, name) VALUES (?,?,?,?,?,?)",
-                                 (email, pw_hash, role, 0, time.time(), (name or "").strip()[:60] or None))
-        sent = await self.send_link(uid, email, "verify", base_url)
-        return {"ok": True, "role": role, **sent}
+                                 (email, pw_hash, role, 1, time.time(), (name or "").strip()[:60] or None))
+        u = await self.db.one("SELECT * FROM users WHERE id=?", (uid,))
+        return await self._session(u, remember, ip, ua)
 
     async def send_link(self, uid: int, email: str, kind: str, base_url: str) -> dict[str, Any]:
         token = pysecrets.token_urlsafe(32)
@@ -136,10 +143,7 @@ class Accounts:
         return await self.db.one("SELECT id, email, role, name FROM users WHERE id=?", (uid,))
 
     async def resend(self, email: str, base_url: str) -> dict[str, Any]:
-        u = await self.db.one("SELECT id, email, verified FROM users WHERE email=?", ((email or "").strip().lower(),))
-        if u and not u["verified"]:
-            return await self.send_link(u["id"], u["email"], "verify", base_url)
-        return {"sent": True}                         # same answer either way: don't reveal which emails exist
+        return {"sent": True, "note": "Email verification is off — just log in"}
 
     async def forgot(self, email: str, base_url: str) -> dict[str, Any]:
         u = await self.db.one("SELECT id, email FROM users WHERE email=?", ((email or "").strip().lower(),))
@@ -168,15 +172,16 @@ class Accounts:
             ok = await asyncio.to_thread(lambda: check_password("x", hash_password("y")) and False)
         if not u or not ok:
             raise PermissionError("Wrong email or password")
-        if not u["verified"]:
-            raise PermissionError("Verify your email first — check your inbox (or resend the link)")
+        return await self._session(u, remember, ip, ua)
+
+    async def _session(self, u: dict[str, Any], remember: bool, ip: str, ua: str) -> tuple[str, dict[str, Any], int]:
         token = pysecrets.token_urlsafe(32)
         ttl = REMEMBER_S if remember else SESSION_S
         now = time.time()
         await self.db.exec("INSERT INTO sessions (token_hash, user_id, created, expires, last_seen, ua, ip, remember) VALUES (?,?,?,?,?,?,?,?)",
                            (_h(token), u["id"], now, now + ttl, now, (ua or "")[:200], ip, 1 if remember else 0))
         await self.db.exec("UPDATE users SET last_login=? WHERE id=?", (now, u["id"]))
-        return token, {"id": u["id"], "email": u["email"], "role": u["role"], "name": u["name"]}, (ttl if remember else 0)
+        return token, {"id": u["id"], "email": u["email"], "role": u["role"], "name": u["name"]}, (COOKIE_S if remember else 0)
 
     async def user_for(self, token: str | None) -> dict[str, Any] | None:
         if not token:
@@ -186,13 +191,14 @@ class Accounts:
         now = time.time()
         if hit and now - hit[0] < 30:
             return hit[1]
-        row = await self.db.one("SELECT s.token_hash, s.expires, s.last_seen, u.id, u.email, u.role, u.name FROM sessions s "
+        row = await self.db.one("SELECT s.token_hash, s.expires, s.last_seen, s.remember, u.id, u.email, u.role, u.name FROM sessions s "
                                 "JOIN users u ON u.id=s.user_id WHERE s.token_hash=?", (th,))
         user = None
         if row and row["expires"] > now:
             user = {"id": row["id"], "email": row["email"], "role": row["role"], "name": row["name"]}
-            if now - (row["last_seen"] or 0) > 300:
-                await self.db.exec("UPDATE sessions SET last_seen=? WHERE token_hash=?", (now, th))
+            if now - (row["last_seen"] or 0) > 300:          # rolling: a remembered device you keep using never gets logged out
+                exp = max(row["expires"], now + REMEMBER_S) if row["remember"] else row["expires"]
+                await self.db.exec("UPDATE sessions SET last_seen=?, expires=? WHERE token_hash=?", (now, exp, th))
         if len(self.cache) > 5000:
             self.cache.clear()
         self.cache[th] = (now, user)

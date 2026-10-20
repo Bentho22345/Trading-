@@ -187,6 +187,7 @@ async def lifespan(app: FastAPI):
     S.mailer = Mailer(S.connectors)
     S.accounts = Accounts(S.db, S.cfg, S.mailer)
     _auth.ACCOUNTS = S.accounts
+    await S.accounts.init()
     _auth.HAS_USERS[0] = await S.accounts.any_users()
     from .api_engines import engines_status, load_budgets
     S.tgbot.status_fn = engines_status

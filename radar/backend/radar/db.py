@@ -343,6 +343,8 @@ CREATE TABLE IF NOT EXISTS auto_positions (
 );
 CREATE TABLE IF NOT EXISTS auto_equity (ts REAL NOT NULL, mode TEXT, equity REAL);
 CREATE INDEX IF NOT EXISTS auto_equity_ts ON auto_equity(mode, ts DESC);
+-- the self-driving brain's experience replay: every labelled lesson (shadow coin or real trade), compact float32 vectors
+CREATE TABLE IF NOT EXISTS brain_examples (id INTEGER PRIMARY KEY, ts REAL NOT NULL, ver TEXT, vec BLOB, y REAL, rug REAL, src TEXT, w REAL);
 CREATE INDEX IF NOT EXISTS auto_positions_mode ON auto_positions(mode, status, opened DESC);
 CREATE TABLE IF NOT EXISTS auto_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, mode TEXT, position_id INTEGER, side TEXT, mint TEXT, symbol TEXT, sol REAL,
