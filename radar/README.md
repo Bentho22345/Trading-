@@ -141,7 +141,7 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - Execution: PumpPortal Local Transaction API (pump.fun, PumpSwap, Raydium) signed locally and sent through your RPC (Helius
   when connected); Jupiter as fallback. Fills are read back from the chain. Telegram: `/autopilot`, `/autopilot demo|off`, `/panic`.
 
-### Self-driving brain (v4)
+### Self-driving brain (v5)
 
 Its own algorithm on its own 10 SOL of demo money (and real money only if you pick it under your hard caps).
 
@@ -158,6 +158,14 @@ Its own algorithm on its own 10 SOL of demo money (and real money only if you pi
   smaller size, fewer positions; 4 losses in a row = a short cool-off; a deep drawdown caps the mood.
 - **Pattern memory**: a decaying win/loss record for ~40 readable patterns ("coins under 2 min old", "serial-launcher
   devs", "liquidity draining"…). Losing patterns get penalised and it tells you; winning ones get a boost.
+- **Copies top traders' sells**: a wallet it followed in sells → it follows them out; any top-ranked wallet dumping a coin
+  it holds → it sells part (all of it when several top wallets are leaving). Post-mortems tune how hard it follows them.
+- **Copies an influx, not a wallet**: 3+ top wallets piling into one coin within 5 minutes (or two top-10s within 2) — and
+  only if its own read agrees. Copies are capped at ~35% of open positions; its own picks fill the rest, several per tick.
+- **Sells as coins move**: scale-out ladder (hyper/degen: 25% at 1.25×, 30% at 1.6×, 35% at 2.2×, 50% at 4×), back-to-entry
+  protection, trailing stop, momentum-fade partials, thesis-broken / volume-dried-up / stalled / time exits that recycle
+  flat money fast. Patience is learned from what coins do after it exits. Positions can't get stuck: held coins stay in
+  the live feed, and a position with no price for 3 minutes is closed.
 - **Blacklists**: copied wallets that keep losing get benched for 12h; devs whose coins rugged it are blocked.
 - **Adaptive exits**: after every stop / trailing exit it keeps watching the coin — shaken out → stops get more room,
   kept dumping → stops tighten. Instant exits on rug patterns (liquidity drained, one sell dumping the curve, whales

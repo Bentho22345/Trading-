@@ -338,12 +338,13 @@ function RealModal({ d, onClose, onDone }: { d: any; onClose: () => void; onDone
 type Brain = {
   threshold: number; trained: number; balance: number; summary: any; mode: string; aggression: string; levels: Record<string, any>;
   shadow: { trained: number; hit_rate: number | null; pending: number; brier: number | null; accuracy?: number | null };
-  diag: { launches?: number; scored?: number; copy_watch?: number; shadow_pending?: number; mood?: number; top_pct?: number };
+  diag: { launches?: number; scored?: number; copy_watch?: number; shadow_pending?: number; mood?: number; top_pct?: number; influx?: number; smart_selling?: number };
   mood?: { value: number; word: string; streak: number; cool_s: number; drawdown_pct: number; top_pct: number };
   rug_model?: { trained: number; brier: number | null; accuracy: number | null; rugs_seen: number; top: { key: string; label: string; w: number }[] };
   learning?: { lessons_per_hour: number; replay: number; rehearsed: number; models: number; signals: number };
   patterns?: { base_win_pct: number | null; worst: Pat[]; best: Pat[] };
-  exits?: { stop_pct: number; trail_mult: number; shaken: number; stop_right: number; sold_early: number; trail_right: number; watching: number };
+  exits?: { stop_pct: number; trail_mult: number; shaken: number; stop_right: number; sold_early: number; trail_right: number; watching: number;
+    patience?: number; smart_follow?: number; copied_sells?: number; too_early?: number; early_right?: number; smart_right?: number; smart_wrong?: number; ladder?: string[] };
   benched?: { wallet: string; n: number; wins: number; until: number }[];
   blocked_devs?: number;
   copies: { mint: string; symbol?: string | null; wallets: number; best_rank: number; last: number; age_s: number }[];
@@ -423,7 +424,9 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
       </header>
       <div className="num flex flex-wrap gap-x-5 gap-y-1 px-6 pt-3 text-[11.5px] text-white/55">
         <span>watching <b className="text-white">{b?.diag?.scored ?? 0}</b> of {b?.diag?.launches ?? 0} live launches</span>
-        <span>copy signals <b className="text-white">{b?.diag?.copy_watch ?? 0}</b></span>
+        <span>top-wallet influxes <b className="text-white">{b?.diag?.influx ?? 0}</b> <span className="text-white/35">(of {b?.diag?.copy_watch ?? 0} coins they touched)</span></span>
+        <span>top wallets selling <b className="text-white">{b?.diag?.smart_selling ?? 0}</b> coins</span>
+        <span>copied sells <b className="text-white">{b?.exits?.copied_sells ?? 0}</b></span>
         <span>learned from <b className="text-white">{(b?.shadow?.trained ?? 0).toLocaleString()}</b> watched coins{b?.shadow?.hit_rate != null ? ` (${b.shadow.hit_rate}% hit +60% before the stop)` : ''}</span>
         {b?.shadow?.brier != null && <span>forecast error <b className="text-white">{b.shadow.brier}</b></span>}
         <span>sizing: <b className="text-white">{b?.sizing && b.sizing.n >= 10 ? `half-Kelly (${Math.round(b.sizing.wr * 100)}% wins)` : 'base % until 10 trades'}</b></span>
@@ -486,7 +489,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
             ))}
             {!b?.candidates?.length && <li className="text-[12px] text-white/40">Waiting for live launches…</li>}
           </ul>
-          <div className="eyebrow mb-2 mt-5">Copy-trading · best wallets buying now</div>
+          <div className="eyebrow mb-2 mt-5">Top wallets buying now · copied only on an influx</div>
           <ul className="space-y-1">
             {(b?.copies || []).map((c) => (
               <li key={c.mint} className="num flex items-center gap-2 text-[11.5px]">
@@ -495,7 +498,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
                 <span className="ml-auto text-white/35">{ago(c.last, now)}</span>
               </li>
             ))}
-            {!b?.copies?.length && <li className="text-[11.5px] text-white/40">When a top-20 wallet (or two top-100s) buys, it copies — and mirrors their sells.</li>}
+            {!b?.copies?.length && <li className="text-[11.5px] text-white/40">It copies an influx — 3+ top wallets piling into one coin within 5 min (or two top-10s within 2 min) — never a single wallet, and it copies their sells.</li>}
           </ul>
         </div>
         <div className="bg-[var(--color-bg)]/60 p-5">
@@ -529,7 +532,9 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
         </div>
         <div className="num bg-[var(--color-bg)]/60 p-5 text-[12px] text-white/65">
           <div className="eyebrow mb-2">Adaptive exits & blacklists</div>
-          <p>Stop loss now <b className="text-white">−{b?.exits?.stop_pct ?? '—'}%</b> · trailing ×<b className="text-white">{b?.exits?.trail_mult ?? 1}</b></p>
+          <p>Stop loss now <b className="text-white">−{b?.exits?.stop_pct ?? '—'}%</b> · trailing ×<b className="text-white">{b?.exits?.trail_mult ?? 1}</b> · patience ×<b className="text-white">{b?.exits?.patience ?? 1}</b></p>
+          {!!b?.exits?.ladder?.length && <p className="mt-1 text-[11px] text-white/45">Scales out: {b.exits.ladder.join(' · ')} — the rest rides a trailing stop</p>}
+          <p className="mt-1 text-[11px] text-white/45">Copies top traders&apos; sells (×{b?.exits?.smart_follow ?? 1}): right {b?.exits?.smart_right ?? 0}× · wrong {b?.exits?.smart_wrong ?? 0}× · recycled flat coins too early {b?.exits?.too_early ?? 0}× / right {b?.exits?.early_right ?? 0}×</p>
           <p className="mt-1 text-[11px] text-white/45">After every stop it keeps watching: shaken out {b?.exits?.shaken ?? 0}× (stops loosen) · stop was right {b?.exits?.stop_right ?? 0}× (stops tighten) · sold too early {b?.exits?.sold_early ?? 0}× · trailing right {b?.exits?.trail_right ?? 0}×{b?.exits?.watching ? ` · watching ${b.exits.watching} exits now` : ''}</p>
           <p className="mt-3">Blocked devs <b className="text-white">{b?.blocked_devs ?? 0}</b> <span className="text-white/45">(their coin rugged it)</span></p>
           <p className="mt-1">Benched wallets <b className="text-white">{b?.benched?.length ?? 0}</b> <span className="text-white/45">(copying them kept losing)</span></p>

@@ -235,32 +235,97 @@ def test_brain_v2_buys_the_best_it_sees_exits_and_learns(tmp_path):
         p = auto[0]
         assert 0.2 < p["sol_in"] < 2.6
         great.mcap_sol = 40 * 2.6
-        await ap.manage()
-        assert 100 in p["tp_done"] and p["tokens_left"] == pytest.approx(p["tokens"] * 0.6)
+        for _ in range(4):                                              # it scales out rung by rung as the coin climbs
+            await ap.manage()
+        assert {101, 102, 103} <= set(p["tp_done"]) and p["tokens_left"] < p["tokens"] * 0.4 and p["status"] == "open"
         w_before = dict(b.w)
         great.mcap_sol = 40 * 1.5
         await ap.manage()
-        assert p["status"] == "closed" and ("trailing" in p["exit_reason"] or "break-even" in p["exit_reason"])
+        assert p["status"] == "closed" and ("trailing" in p["exit_reason"] or "entry" in p["exit_reason"])
         assert b.trained == 1 and b.w != w_before and any(e["kind"] == "learn" for e in b.log)
         assert len((await b.snapshot())["weights"]) == len(PRIORS)
         await db.close()
     asyncio.run(run())
 
 
-def test_brain_copies_top_wallets_and_mirrors_their_sells(tmp_path):
+def test_brain_copies_an_influx_not_one_wallet_and_copies_top_trader_sells(tmp_path):
     async def run():
         coin = launch("COPYmint" + "4" * 32, upside=10, risk=40, buyers=12, deployer="DevX")
-        ap, db = await make(tmp_path, [coin])
-        ap.traders.ranked = {"W1" + "a" * 38: {"rank": 7}, "W2" + "b" * 38: {"rank": 60}}
+        other = launch("OWNNmint" + "9" * 32, upside=70, risk=10, buyers=40, deployer="DevY")
+        ap, db = await make(tmp_path, [coin, other])
+        W = {f"W{i}" + "a" * 38: {"rank": r} for i, r in enumerate((7, 30, 60, 15))}
+        ap.traders.ranked = W
+        ws = list(W)
         await ap.set_mode("auto")
         b = ap.brain
-        await b.on_trade({"trader": "W1" + "a" * 38, "mint": coin.mint, "side": "buy"})
+        await b.on_trade({"trader": ws[0], "mint": coin.mint, "side": "buy"})          # one top wallet alone: not copied
+        assert not b.influx(coin.mint)[0]
+        for w in ws[1:3]:                                                             # …three in five minutes: an influx
+            await b.on_trade({"trader": w, "mint": coin.mint, "side": "buy"})
+        assert b.influx(coin.mint)[0]
+        b.threshold = 0
+        await b.tick("auto")
+        auto = {p["mint"]: p for p in ap.open.values() if p["mode"] == "auto"}
+        p = auto[coin.mint]
+        assert p["trigger"] == "copy" and "influx" in p["detail"] and set(p["leaders"]) == set(ws[:3])
+        assert other.mint in auto and auto[other.mint]["trigger"] == "brain"          # it still makes its own picks in the same tick
+        left = p["tokens_left"]
+        await b.on_trade({"trader": ws[0], "mint": coin.mint, "side": "sell", "sol": 1})  # a leader gets out → we sell half
+        assert p["status"] == "open" and p["tokens_left"] < left
+        # a top wallet we never copied dumps the coin it bought on its own → it copies the sell
+        own = auto[other.mint]
+        left = own["tokens_left"]
+        await b.on_trade({"trader": ws[3], "mint": other.mint, "side": "sell", "sol": 2})
+        assert own["tokens_left"] < left and b.copied_sells == 2 and any("Copied a top trader" in e["text"] for e in b.log)
+        await b.on_trade({"trader": ws[1], "mint": other.mint, "side": "sell", "sol": 2})   # two top wallets out → all of it
+        assert own["status"] == "closed" and "top wallet" in own["exit_reason"]
+        assert features_of_selling(b, other) > 0
+        await db.close()
+    asyncio.run(run())
+
+
+def features_of_selling(b, L):
+    from radar.brain import features
+    return features(L.result, 0, {"smart_sells": b.smart_selling(L.mint)})["smart_selling"]
+
+
+def test_brain_sells_fast_as_coins_move_and_never_gets_stuck(tmp_path):
+    async def run():
+        coin = launch("FASTmint" + "5" * 32, upside=60, risk=10, buyers=40)
+        ap, db = await make(tmp_path, [coin])
+        await ap.set_mode("auto")
+        b = ap.brain
         await b.tick("auto")
         p = next(p for p in ap.open.values() if p["mode"] == "auto")
-        assert p["trigger"] == "copy" and "#7" in p["detail"] and p["leaders"] == ["W1" + "a" * 38]
-        left = p["tokens_left"]
-        await b.on_trade({"trader": "W1" + "a" * 38, "mint": coin.mint, "side": "sell"})            # the leader dumps → so do we
-        assert p["status"] == "closed" and "leader" in p["exit_reason"] and left > 0
+        coin.mcap_sol = 40 * 1.3
+        await ap.manage()
+        assert 101 in p["tp_done"] and p["status"] == "open"                     # first rung: a quick partial sell at +25%
+        coin.mcap_sol = 40 * 0.98
+        await ap.manage()
+        assert p["status"] == "closed" and "back to entry" in p["exit_reason"]   # gave it all back → out, not a loss
+        assert b.post.get(coin.mint, {}).get("kind") == "trail"                  # …and it watches what happens next
+        # a flat position gets recycled quickly
+        await b.tick("auto")
+        ap.entered.clear()
+        b.last_buy_ts = 0
+        await b.tick("auto")
+        q = next((q for q in ap.open.values() if q["mode"] == "auto"), None)
+        if q:
+            q["opened"] -= 400
+            q["_high_ts"] = q["opened"]
+            await ap.manage()
+            assert q["status"] == "closed" and ("stalled" in q["exit_reason"] or "time stop" in q["exit_reason"])
+        # the coin drops out of the live feed and nothing prices it: closed after 3 minutes instead of sitting there forever
+        ap.entered.clear()
+        b.last_buy_ts = 0
+        await b.tick("auto")
+        z = next(z for z in ap.open.values() if z["mode"] == "auto")
+        ap.sniper.launches.pop(coin.mint)
+        await ap.manage()
+        assert z["status"] == "open" and "_no_px" in z
+        z["_no_px"] -= 200
+        await ap.manage()
+        assert z["status"] == "closed" and "price feed lost" in z["exit_reason"]
         await db.close()
     asyncio.run(run())
 

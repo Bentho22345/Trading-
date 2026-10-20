@@ -1,4 +1,4 @@
-"""Self-driving Autopilot, v4: Radar's own trading algorithm — it trades its own demo money (and, if you switch it on
+"""Self-driving Autopilot, v5: Radar's own trading algorithm — it trades its own demo money (and, if you switch it on
 there, real money under your hard caps), and it never stops learning.
 
 How it decides
@@ -36,8 +36,15 @@ How it gets discouraged (and confident again)
   Stops           after every stop / trailing exit it keeps watching the coin: shaken out and it ran → stops get more
                   room; it kept dumping → stops tighten. Consistent stop-losses therefore change how it exits.
 
-Exits: adaptive stop · 40% off at 2.5× · break-even after 1.8× · adaptive trailing stop · instant rug-pattern exit ·
-rug-model exit · sellers took over · stalled · 30-min time stop · leader sold.
+Top wallets (v5)
+  Their sells     a wallet it followed in sells → it follows them out; any top-ranked wallet dumping a coin it holds →
+                  it sells part, all of it when several are leaving. Post-mortems tune how hard it follows them.
+  Their buys      it copies an INFLUX (3+ top wallets in 5 min, or two top-10s in 2 min) and only when its own read
+                  agrees — never a single wallet. Copies are capped at ~35% of positions; its own picks come several a tick.
+
+Exits (one decision per tick, so you see it scale in and out as coins move): adaptive stop · scale-out ladder ·
+back-to-entry protection · adaptive trailing stop · momentum-fade partials · rug-pattern and rug-model exits · copied
+top-wallet sells · thesis broken · volume dried up · stalled / time stops scaled by a learned patience.
 """
 from __future__ import annotations
 
@@ -64,6 +71,8 @@ PRIORS: dict[str, float] = {
     "clusters": -0.6, "cluster_hold": -1.4, "dev_hold": -0.8, "dev_dumping": -0.6, "dev_big_buy": -0.4, "dev_serial": -1.0,
     "dev_fresh": -0.3, "graduated": 0.3, "age_0_2m": 0.2, "age_2_5m": 0.3, "age_5_15m": 0.0, "age_15m": -0.3,
     "mc_lt8k": 0.3, "mc_8_25k": 0.2, "mc_25_70k": 0.0, "mc_70k": -0.3,
+    # v5 — what the best wallets are doing right now, and short-term momentum
+    "influx": 1.2, "smart_selling": -1.8, "mom_30s": 0.5, "mom_2m": 0.4, "quiet": -0.8,
 }
 RUG_PRIORS: dict[str, float] = {k: 0.0 for k in PRIORS} | {
     "risk": 1.6, "insiders": 1.6, "bundle": 1.2, "snipers": 0.8, "top10": 1.0, "fresh": 0.6, "bots": 0.5, "dev_sold": 0.4,
@@ -71,6 +80,7 @@ RUG_PRIORS: dict[str, float] = {k: 0.0 for k in PRIORS} | {
     "liq_drain": 1.6, "dump_candle": 1.4, "whale_sells": 1.0, "sell_streak": 0.6, "vertical": 0.8, "wash": 0.8,
     "coordinated": 1.2, "clusters": 0.6, "cluster_hold": 1.5, "dev_hold": 1.0, "dev_dumping": 1.0, "dev_big_buy": 0.6,
     "dev_serial": 1.2, "dev_fresh": 0.5, "holders": -0.5, "retail": -0.4, "staircase": -0.5, "drawdown": 0.6,
+    "smart_selling": 1.0, "influx": -0.3, "quiet": 0.3,
 }
 LABELS = {"upside": "Upside score", "risk": "Risk score", "alpha": "Top wallets in", "copy": "Best wallets buying now",
           "velocity": "Graduation pace", "progress": "Bonding-curve progress", "flow": "Net SOL flowing in", "sol_rate": "Curve SOL / min",
@@ -89,17 +99,28 @@ LABELS = {"upside": "Upside score", "risk": "Risk score", "alpha": "Top wallets 
           "clusters": "Funder clusters", "cluster_hold": "Biggest cluster's holding", "dev_hold": "Dev holding", "dev_dumping": "Dev selling",
           "dev_big_buy": "Dev's launch buy", "dev_serial": "Serial-launcher dev", "dev_fresh": "Brand-new dev wallet", "graduated": "Graduated",
           "age_0_2m": "Age < 2 min", "age_2_5m": "Age 2-5 min", "age_5_15m": "Age 5-15 min", "age_15m": "Age 15 min +",
-          "mc_lt8k": "Mcap < $8k", "mc_8_25k": "Mcap $8-25k", "mc_25_70k": "Mcap $25-70k", "mc_70k": "Mcap $70k +"}
+          "mc_lt8k": "Mcap < $8k", "mc_8_25k": "Mcap $8-25k", "mc_25_70k": "Mcap $25-70k", "mc_70k": "Mcap $70k +",
+          "influx": "Top-wallet influx", "smart_selling": "Top wallets selling it", "mom_30s": "Momentum (30s)",
+          "mom_2m": "Momentum (2m)", "quiet": "Trading gone quiet"}
 KEYS = list(PRIORS)                       # fixed order for the compact replay vectors
 KEYS_VER = "v4:" + str(len(KEYS))
 BIAS0, RUG_BIAS0 = -3.0, -1.6
-AGGRESSION = {   # top-share of what it sees that it will buy, max positions, stop loss, base size of balance, rug veto
-    "careful": {"top": 0.03, "max_open": 3, "stop": 0.25, "base": 0.02, "floor": 30, "cooldown": 6, "copy_rank": 10, "rug_veto": 0.45, "cool_s": 900},
-    "aggressive": {"top": 0.08, "max_open": 6, "stop": 0.30, "base": 0.03, "floor": 20, "cooldown": 3, "copy_rank": 25, "rug_veto": 0.55, "cool_s": 480},
-    "degen": {"top": 0.15, "max_open": 10, "stop": 0.40, "base": 0.03, "floor": 14, "cooldown": 2, "copy_rank": 50, "rug_veto": 0.65, "cool_s": 240},
-    # demo default: lots of small bets — volume is how it learns and how it finds the runners
-    "hyper": {"top": 0.25, "max_open": 20, "stop": 0.40, "base": 0.015, "floor": 9, "cooldown": 1, "copy_rank": 50, "rug_veto": 0.70, "cool_s": 150},
+AGGRESSION = {   # top-share of what it sees that it will buy, max positions, stop loss, base size, rug veto, buys per tick,
+                 # how long a position may go without a new high (stall_s) and at all (time_s) before it's recycled
+    "careful": {"top": 0.03, "max_open": 3, "stop": 0.20, "base": 0.02, "floor": 30, "cooldown": 6, "copy_rank": 10, "rug_veto": 0.45,
+                "cool_s": 900, "burst": 1, "stall_s": 480, "time_s": 1800, "ladder": "steady"},
+    "aggressive": {"top": 0.08, "max_open": 6, "stop": 0.25, "base": 0.03, "floor": 20, "cooldown": 3, "copy_rank": 25, "rug_veto": 0.55,
+                   "cool_s": 480, "burst": 1, "stall_s": 360, "time_s": 1500, "ladder": "steady"},
+    "degen": {"top": 0.15, "max_open": 10, "stop": 0.30, "base": 0.03, "floor": 14, "cooldown": 2, "copy_rank": 50, "rug_veto": 0.65,
+              "cool_s": 240, "burst": 2, "stall_s": 240, "time_s": 1200, "ladder": "quick"},
+    # demo default: lots of small bets, in and out fast — volume is how it learns and how it finds the runners
+    "hyper": {"top": 0.25, "max_open": 20, "stop": 0.25, "base": 0.015, "floor": 9, "cooldown": 0.5, "copy_rank": 50, "rug_veto": 0.70,
+              "cool_s": 150, "burst": 3, "stall_s": 180, "time_s": 900, "ladder": "quick"},
 }
+# scale-out ladders: (multiple, share of what's left to sell, marker). Partial sells as a coin moves = buys AND sells all day.
+LADDERS = {"quick": [(1.25, 0.25, 101), (1.6, 0.30, 102), (2.2, 0.35, 103), (4.0, 0.50, 104)],
+           "steady": [(1.4, 0.30, 101), (2.0, 0.35, 102), (3.0, 0.40, 103), (6.0, 0.50, 104)]}
+SMART_SELL_SOL = 0.2                         # a top wallet's sell this size or bigger is a signal
 LR_TRADE, LR_SHADOW, LR_REPLAY = 0.12, 0.03, 0.012
 WIN_X = 1.6                                  # a shadow coin "wins" if it hits +60% before the stop
 RUG_X = 0.4                                  # …and "rugs" if it falls to 0.4× (−60%) inside 20 minutes
@@ -159,6 +180,8 @@ def features(r: dict[str, Any], copy_n: float = 0.0, ctx: dict[str, Any] | None 
         "mention_speed": max(0.0, min(1.0, (n.get("z") or 0) / 5)),
         "x_calls": min(1.0, xc / 2),
         "hype_bots": min(1.0, (n.get("bot_share") or 0) * 1.5),
+        "influx": min(1.0, ((ctx or {}).get("influx") or 0) / 4),
+        "smart_selling": min(1.0, ((ctx or {}).get("smart_sells") or 0) / 2),
     }
     ch = (ctx or {}).get("chart")
     if ch:
@@ -246,6 +269,10 @@ class Brain:
         self.shadow: dict[str, dict[str, Any]] = {}
         self.sampled: dict[str, tuple[int, float]] = {}      # mint -> (snapshots taken, last ts)
         self.copy_buys: dict[str, dict[str, Any]] = {}         # mint -> {wallets: {w: (rank, ts)}, ...}
+        self.smart_sells: dict[str, dict[str, tuple[int, float]]] = {}   # mint -> {wallet: (rank, ts)}: top wallets getting out
+        self.smart_follow = 1.0                                         # how hard it follows their sells (learned)
+        self.patience = 1.0                                             # how long it lets a flat position breathe (learned)
+        self.copied_sells = 0
         self.threshold = 50.0
         self.last_publish = self.last_skip_note = self.last_equity = self.last_buy_ts = self.last_rehearse = 0.0
         self.real_balance: tuple[float, float] = (0.0, 0.0)  # (ts, SOL)
@@ -273,7 +300,8 @@ class Brain:
         self.stop_mult = 1.0
         self.trail_mult = 1.0
         self.post: dict[str, dict[str, Any]] = {}        # mint -> post-mortem watch after a stop / trailing exit
-        self.exit_stats = {"shaken": 0, "stop_right": 0, "sold_early": 0, "trail_right": 0}
+        self.exit_stats = {"shaken": 0, "stop_right": 0, "sold_early": 0, "trail_right": 0, "early_right": 0, "too_early": 0,
+                           "smart_right": 0, "smart_wrong": 0}
         self.recent_exits: deque[str] = deque(maxlen=12)
 
     # ---------------- compat ----------------
@@ -310,6 +338,9 @@ class Brain:
         self.bad_devs = s.get("bad_devs") or {}
         self.stop_mult = float(s.get("stop_mult", 1.0))
         self.trail_mult = float(s.get("trail_mult", 1.0))
+        self.smart_follow = float(s.get("smart_follow", 1.0))
+        self.patience = float(s.get("patience", 1.0))
+        self.copied_sells = int(s.get("copied_sells", 0))
         self.exit_stats.update(s.get("exit_stats") or {})
         self.rehearsed = int(s.get("rehearsed", 0))
         try:
@@ -328,11 +359,12 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "version": 4, "win": self.win.state(), "rug": self.rug.state(), "trained": self.trained,
+            "version": 5, "win": self.win.state(), "rug": self.rug.state(), "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
             "aggression": self.aggression, "mood": round(self.mood, 4), "streak": self.streak, "peak_equity": self.peak_equity,
             "tags": {k: [round(x, 4) for x in v] for k, v in self.tags.items()}, "base": [round(x, 4) for x in self.base],
             "leaders": self.leaders, "bad_devs": self.bad_devs, "stop_mult": round(self.stop_mult, 4), "trail_mult": round(self.trail_mult, 4),
+            "smart_follow": round(self.smart_follow, 4), "patience": round(self.patience, 4), "copied_sells": self.copied_sells,
             "exit_stats": self.exit_stats, "rehearsed": self.rehearsed, "saved": now})
         await self.flush_examples()
 
@@ -360,7 +392,9 @@ class Brain:
         self.mood, self.streak, self.cool_until, self.peak_equity, self.drawdown = 1.0, 0, 0.0, 10.0, 0.0
         self.tags, self.base, self.told, self.leaders, self.bad_devs = {}, [0.0, 0.0, 0.0], {}, {}, {}
         self.stop_mult = self.trail_mult = 1.0
-        self.exit_stats = {"shaken": 0, "stop_right": 0, "sold_early": 0, "trail_right": 0}
+        self.smart_follow = self.patience = 1.0
+        self.copied_sells = 0
+        self.exit_stats = {k: 0 for k in self.exit_stats}
         for c in (self.log, self.shadow, self.sampled, self.cache, self.replay, self.post, self.recent_exits):
             c.clear()
         self.pending = []
@@ -444,13 +478,51 @@ class Brain:
             if len(self.copy_buys) > 3000:
                 cut = now - 3600
                 self.copy_buys = {m: v for m, v in self.copy_buys.items() if v["first"] > cut}
-        else:  # mirror sells: a leader of one of our positions is getting out
-            for p in list(self.ap.open.values()):
-                if p["mint"] == mint and w in (p.get("leaders") or []) and p["mint"] not in self.ap.busy:
-                    p["leaders"] = [x for x in p["leaders"] if x != w]
-                    frac = 1.0 if not p["leaders"] else 0.5
-                    await self.ap.sell(p, frac, f"leader {w[:4]}… sold")
-                    await self.note("sell", f"🪞 Mirrored a sell: #{rank} wallet left ${p['symbol']} → sold {frac * 100:.0f}%", mint=mint)
+        else:
+            await self.on_smart_sell(w, rank, mint, float(t.get("sol") or 0), now)
+
+    def managed(self, p: dict[str, Any]) -> bool:
+        return p["mode"] == "auto" or p.get("trigger") in ("brain", "copy")
+
+    async def on_smart_sell(self, w: str, rank: int, mint: str, sol: float, now: float) -> None:
+        """A top trader selling is information: a leader we copied → we follow them out; any top wallet dumping a coin
+        we hold → we sell some (more if several are getting out, or the seller is top-20). It also scares off new buys."""
+        s = self.smart_sells.setdefault(mint, {})
+        s[w] = (rank, now)
+        if len(self.smart_sells) > 3000:
+            self.smart_sells = {m: v for m, v in self.smart_sells.items() if max(ts for _, ts in v.values()) > now - 3600}
+        for p in list(self.ap.open.values()):
+            if p["mint"] != mint or p["mint"] in self.ap.busy or not self.managed(p) or p["tokens_left"] <= 0:
+                continue
+            if w in (p.get("leaders") or []):                         # a wallet we copied is getting out → so do we
+                p["leaders"] = [x for x in p["leaders"] if x != w]
+                frac = 1.0 if not p["leaders"] else 0.5
+                p["_exit_kind"] = "smart"
+                await self.ap.sell(p, frac, f"leader {w[:4]}… sold")
+                self.copied_sells += 1
+                await self.note("sell", f"🪞 Copied a sell: the #{rank} wallet I followed into ${p['symbol']} sold → sold {frac * 100:.0f}%", mint=mint)
+                continue
+            if sol < SMART_SELL_SOL:
+                continue
+            recent = {x: r for x, (r, ts) in s.items() if ts > now - 300}
+            several = len(recent) >= 2
+            full = several and min(recent.values()) <= 50                  # several top wallets out: everything, right now
+            if (not several and rank > 100) or (not full and now - p.get("_smart_ts", 0) < 15):
+                continue
+            frac = 1.0 if full else _clip((0.6 if rank <= 20 else 0.35) * self.smart_follow, 0.2, 1.0)
+            p["_smart_ts"] = now
+            p["_exit_kind"] = "smart"
+            await self.ap.sell(p, frac, f"top wallet #{rank} sold" + (f" ({len(recent)} top wallets out)" if several else ""))
+            self.copied_sells += 1
+            await self.note("sell", f"🧠 Copied a top trader's sell: #{rank} sold ${p['symbol']}"
+                                    f"{f' ({len(recent)} top wallets out in 5 min)' if several else ''} → sold {frac * 100:.0f}%", mint=mint)
+
+    def smart_selling(self, mint: str) -> int:
+        s = self.smart_sells.get(mint)
+        if not s:
+            return 0
+        cut = time.time() - 600
+        return sum(1 for r, ts in s.values() if ts >= cut)
 
     def copy_signal(self, mint: str) -> tuple[float, list[str], str]:
         e = self.copy_buys.get(mint)
@@ -463,6 +535,22 @@ class Brain:
         n = sum(1.5 if r <= 20 else 1.0 if r <= 100 else 0.5 for r in live.values())
         ranks = sorted(live.values())
         return n, list(live), ", ".join(f"#{r}" for r in ranks[:4])
+
+    def influx(self, mint: str) -> tuple[bool, int, str]:
+        """It doesn't copy any one wallet: it copies an INFLUX — several top wallets piling into the same coin within
+        minutes (3+ ranked wallets in 5 min, or 2 top-10s within 2 min), and nobody top-ranked selling it."""
+        e = self.copy_buys.get(mint)
+        if not e:
+            return False, 0, ""
+        now = time.time()
+        live = {w: (r, ts) for w, (r, ts) in e["wallets"].items() if ts >= now - 300 and not self.benched(w)}
+        k = len(live)
+        if not k:
+            return False, 0, ""
+        weight = sum(1.5 if r <= 20 else 1.0 if r <= 100 else 0.5 for r, _ in live.values())
+        fast_top = [r for r, ts in live.values() if r <= 10 and ts >= now - 120]
+        ok = ((k >= 3 and weight >= 3.0) or len(fast_top) >= 2) and not self.smart_selling(mint)
+        return ok, k, f"{k} top wallets in 5 min ({', '.join(f'#{r}' for r, _ in sorted(live.values())[:4])})"
 
     # ---------------- narrative context (refreshed every 15 s, off the per-coin path) ----------------
     async def refresh_context(self, now: float) -> None:
@@ -494,7 +582,10 @@ class Brain:
             ch = pat.normalise(raw, age, r.get("mcap_usd"))
         except Exception:  # noqa: BLE001 - a launch object without a tape (graduated, restored) just skips the chart read
             ch = None
-        f = features({**r, "age_s": age}, cn, {"narr": self.narr.get(L.mint), "x_calls": self.x_calls.get(L.mint, 0), "chart": ch})
+        e = self.copy_buys.get(L.mint)
+        infl = sum(1 for _, ts in e["wallets"].values() if ts >= now - 300) if e else 0
+        f = features({**r, "age_s": age}, cn, {"narr": self.narr.get(L.mint), "x_calls": self.x_calls.get(L.mint, 0), "chart": ch,
+                                               "influx": infl, "smart_sells": self.smart_selling(L.mint)})
         v, p_win, p_rug, worst = self.read(f)
         return f, v, p_win, p_rug, worst
 
@@ -569,6 +660,8 @@ class Brain:
         scored.sort(key=lambda c: -c["value"])
         self.candidates = scored[:14]
         self.diag = {"launches": len(launches), "scored": len(scored), "copy_watch": len(self.copy_buys), "shadow_pending": len(self.shadow),
+                     "influx": sum(1 for m in list(self.copy_buys)[-200:] if self.influx(m)[0]),
+                     "smart_selling": sum(1 for v in self.smart_sells.values() if max(ts for _, ts in v.values()) > now - 600),
                      "mood": round(mf, 2), "top_pct": round(top * 100, 1)}
         if now - self.last_publish > 2:
             self.last_publish = now
@@ -597,47 +690,55 @@ class Brain:
             return
         cooling = now < self.cool_until
         devs = {(launches[p["mint"]].deployer if p["mint"] in launches else None) for p in mine}
-        # 1) copy-trades first (they're time-critical), including graduated coins outside the launch feed
+        room = min(agg["burst"], max_open - len(mine))
+        copies_open = sum(1 for p in mine if p.get("trigger") == "copy")
+        copy_cap = max(1, int(max_open * 0.35))                            # copying never takes over: its own picks come first
+        bought = 0
+        # 1) influx copy-trades (time-critical): several top wallets piling into one coin, not any single wallet
         for mint, e in list(self.copy_buys.items()):
+            if bought >= room or copies_open >= copy_cap:
+                break
             if mint in ap.entered or mint in ap.busy:
                 continue
+            ok, k, desc = self.influx(mint)
+            if not ok or (cooling and k < 4):
+                continue
             n, leaders, ranks = self.copy_signal(mint)
-            if not leaders:
-                continue
-            best = min((r for w, (r, _) in e["wallets"].items() if w in leaders), default=999)
-            if cooling and best > 10:
-                continue
-            if not (best <= agg["copy_rank"] or n >= 2):
-                continue
             L = launches.get(mint)
-            if L is not None and L.result and (self.hard_no(L.result) or self.veto(L, now)):
-                continue
-            if L is None and not await self._tradeable(mint):
-                continue
-            f = None
+            f, v = None, None
             if L is not None and L.result:
-                f = self._score(L, now, n)[0]
+                if self.hard_no(L.result) or self.veto(L, now):
+                    continue
+                f, v, _, p_rug, _ = self._score(L, now, n)
+                if v < self.threshold * 0.5 or self.veto(L, now, p_rug):          # its own read still has to agree
+                    continue
+            elif k < 4 or not await self._tradeable(mint):
+                continue
             size = self.size(bal, 0.8, mode, copy=True)
-            await self._buy(mint, size, mode, "copy", f"copying {ranks} (top wallets)", L.result if L else None, f, None, leaders)
+            await self._buy(mint, size, mode, "copy", f"influx: {desc}", L.result if L else None, f, v, leaders)
+            bought += 1
+            copies_open += 1
+            bal = await self.balance(mode)
+        if cooling or bought >= room:
             return
-        if cooling:
-            return
-        # 2) the best coin it can see, if it's above its (percentile) bar
+        # 2) its own picks: the best coins it can see above its (percentile) bar — several per tick when it's hot
         for c in scored:
+            if bought >= room or bal < 0.06:
+                break
             if c["mint"] in ap.entered or c["mint"] in ap.busy or c["hard"]:
                 continue
             if c["deployer"] and (c["deployer"] in devs or c["deployer"] in self.bad_devs):
                 continue
             L = launches.get(c["mint"])
             veto = self.veto(L, now, c["p_rug"] / 100) if L is not None else None
-            if veto:
+            if veto or self.smart_selling(c["mint"]) >= 2:
                 continue
             explore = False
             if c["value"] < self.threshold:
-                if c["value"] >= self.threshold - 6 and self.rng.random() < 0.12 * mf:
+                if not bought and c["value"] >= self.threshold - 6 and self.rng.random() < 0.12 * mf:
                     explore = True
                 else:
-                    if now - self.last_skip_note > 25:
+                    if not bought and now - self.last_skip_note > 25:
                         self.last_skip_note = now
                         await self.note("skip", f"👀 Best right now: ${c['symbol']} at {c['value']:.0f} — bar is {self.threshold:.0f} "
                                                 f"(top {top * 100:.0f}% of {len(vals)} recent reads, mood {self.mood_word()}). Waiting.",
@@ -647,7 +748,11 @@ class Brain:
             size = self.size(bal, 0.3 if explore else conv, mode, explore=explore)
             detail = (f"value {c['value']:.0f} (bar {self.threshold:.0f}) · rug {c['p_rug']}%{' · explore' if explore else ''} · {c['why']}")
             await self._buy(c["mint"], size, mode, "explore" if explore else "brain", detail, c["r"], c["f"], c["value"], c["leaders"])
-            return
+            devs.add(c["deployer"])
+            bought += 1
+            if explore:
+                break
+            bal = await self.balance(mode)
 
     def veto(self, L: Any, now: float, p_rug: float | None = None) -> str | None:
         """Rug tells on the chart, a burnt dev, or the rug model being sure — any of these and it won't touch the coin."""
@@ -678,7 +783,8 @@ class Brain:
             return
         p["leaders"] = list(leaders or [])
         p["features"], p["score"] = f, value
-        meta = {"f": f, "leaders0": p["leaders"], "trig": trig}
+        meta = {"f": f, "leaders0": p["leaders"], "trig": trig, "v": value}
+        p["entry_value"] = value
         await ap.db.exec("UPDATE auto_positions SET features_json=?, score=?, leaders_json=? WHERE id=?",
                          (json.dumps(meta) if f else None, value, json.dumps(p["leaders"]), p["id"]))
         p["leaders0"], p["brain_trig"] = list(p["leaders"]), trig
@@ -836,39 +942,67 @@ class Brain:
         return _clip(AGGRESSION[self.aggression]["stop"] * self.stop_mult, 0.15, 0.6)
 
     def exit_for(self, p: dict[str, Any], r: dict[str, Any] | None, x: float, peak_x: float) -> tuple[float, str] | None:
-        age = time.time() - p["opened"]
+        """One decision per tick, so as a coin moves you see it scale out, cut, and recycle the money into the next trade."""
+        agg = AGGRESSION[self.aggression]
+        now = time.time()
+        age = now - p["opened"]
         mx = (r or {}).get("metrics") or {}
         if r and (r.get("tier") == "TRAP" or (mx.get("insider_hold_pct") or 0) >= 20):
-            return 1.0, "rug exit: " + ", ".join(r.get("flags") or ["insiders"])
+            return self._exit(p, 1.0, "rug exit: " + ", ".join(r.get("flags") or ["insiders"]), "rug")
         raw = self.charts.get(p["mint"])
         alarm = pat.rug_alarm(raw) if raw else None
         if alarm:
-            return 1.0, f"rug pattern: {alarm}"
+            return self._exit(p, 1.0, f"rug pattern: {alarm}", "rug")
         hit = self.cache.get(p["mint"])
         if hit and self.rug.n >= 300 and hit[5] >= 0.85 and x < 2:
-            return 1.0, f"rug model {hit[5] * 100:.0f}% — getting out"
+            return self._exit(p, 1.0, f"rug model {hit[5] * 100:.0f}% — getting out", "rug")
         stop = self.stop_pct()
         if x <= 1 - stop:
-            return 1.0, f"stop −{stop * 100:.0f}%"
-        if x >= 2.5 and 100 not in p["tp_done"]:
-            p["tp_done"].append(100)
-            return 0.4, "took 40% at 2.5×"
-        if peak_x >= 1.8 and x <= 1.05:
-            return 1.0, f"break-even stop (was {peak_x:.1f}×)"
-        if peak_x >= 1.5:
-            trail = _clip((0.35 if peak_x < 2 else 0.25 if peak_x < 5 else 0.18) * self.trail_mult, 0.1, 0.5)
+            return self._exit(p, 1.0, f"stop −{stop * 100:.0f}%", "stop")
+        # scale out as it climbs: partial sells at each rung (the rest rides with a trailing stop)
+        ladder = LADDERS[agg["ladder"]]
+        for mult, frac, mark in ladder:
+            if x >= mult and mark not in p["tp_done"]:
+                p["tp_done"].append(mark)
+                return frac, f"took {frac * 100:.0f}% at {mult:g}×"
+        first = ladder[0][0]
+        if peak_x >= first and x <= 1.02:
+            return self._exit(p, 1.0, f"back to entry after {peak_x:.2f}× — protecting the trade", "trail")
+        if peak_x >= first:
+            trail = _clip((0.30 if peak_x < 2 else 0.25 if peak_x < 5 else 0.18) * self.trail_mult, 0.08, 0.5)
             if x <= peak_x * (1 - trail):
-                return 1.0, f"trailing stop ({peak_x:.1f}× peak, {trail * 100:.0f}% trail)"
+                return self._exit(p, 1.0, f"trailing stop ({peak_x:.1f}× peak, {trail * 100:.0f}% trail)", "trail")
+        # momentum fading while in profit: take half off the table (once every 30 s at most)
+        if raw and x >= 1.08 and raw.get("drop_60", 0) >= 0.15 and raw.get("net_30s", 0) < 0 and now - p.get("_mom_ts", 0) > 30:
+            p["_mom_ts"] = now
+            return 0.5, f"momentum fading (−{raw['drop_60'] * 100:.0f}% in 60s, sellers in control)"
         if (mx.get("sells_1m") or 0) >= 6 and (mx.get("sells_1m") or 0) > 2 * (mx.get("buys_1m") or 0) and x < peak_x * 0.85:
-            return 1.0, "sellers took over"
+            return self._exit(p, 1.0, "sellers took over", "early")
+        # the reason it bought is gone: its own read of the coin collapsed and it isn't up
+        ev = p.get("entry_value")
+        if hit and ev and age > 60 and x < 1.1 and hit[4] < max(4.0, ev * 0.4):
+            return self._exit(p, 1.0, f"thesis broken (value {ev:.0f} → {hit[4]:.0f})", "early")
+        if self.smart_selling(p["mint"]) >= 2 and x < 1.3:
+            return self._exit(p, 1.0, "top wallets are leaving", "smart")
+        L = self.ap.sniper.launches.get(p["mint"])
+        tape = getattr(L, "trades", None) if L is not None else None
+        if tape and age > 90 and x < 1.2 and now - tape[-1][0] > 120 * self.patience:
+            return self._exit(p, 1.0, f"volume dried up (no trades for {now - tape[-1][0]:.0f}s)", "early")
+        stall = agg["stall_s"] * self.patience
         last_high = p.setdefault("_high_ts", p["opened"])
-        if x >= peak_x * 0.999:
-            p["_high_ts"] = time.time()
-        elif time.time() - last_high > 480 and x < 1.3 and age > 480:
-            return 1.0, "stalled (no new high in 8 min)"
-        if age > 1800 and x < 1.2:
-            return 1.0, "30-min time stop"
+        if x > p.get("_best_x", 1.0) * 1.02:                               # a real new high (+2%), not just sitting flat
+            p["_best_x"], p["_high_ts"] = x, now
+        elif now - last_high > stall and x < 1.15 and age > stall:
+            return self._exit(p, 1.0, f"stalled (no new high in {stall / 60:.0f} min)", "early")
+        tmax = agg["time_s"] * self.patience
+        if age > tmax and x < 1.3:
+            return self._exit(p, 1.0, f"{tmax / 60:.0f}-min time stop", "early")
         return None
+
+    @staticmethod
+    def _exit(p: dict[str, Any], frac: float, reason: str, kind: str) -> tuple[float, str]:
+        p["_exit_kind"] = kind
+        return frac, reason
 
     def post_mortem(self, now: float) -> list[tuple[str, str]]:
         """After a stop or trailing exit it keeps watching: were the stops right, or did it get shaken out?"""
@@ -881,23 +1015,42 @@ class Brain:
             if now - w["ts"] < 900 and L is not None:
                 continue
             self.post.pop(mint)
+            ran, dumped = w["max"] >= w["exit"] * 1.5, w["min"] <= w["exit"] * 0.7
             if w["kind"] == "stop":
                 if w["max"] >= w["entry"] * 1.3:
                     self.stop_mult = min(1.5, self.stop_mult * 1.06)
                     self.exit_stats["shaken"] += 1
                     w["lesson"] = (f"😤 Got shaken out of ${w['symbol']} — it ran to {w['max'] / w['entry']:.1f}× after my stop. "
                                    f"Giving stops more room (−{self.stop_pct() * 100:.0f}%).")
-                elif w["min"] <= w["exit"] * 0.7:
+                elif dumped:
                     self.stop_mult = max(0.7, self.stop_mult * 0.98)
                     self.exit_stats["stop_right"] += 1
-            else:
-                if w["max"] >= w["exit"] * 1.5:
+            elif w["kind"] == "trail":
+                if ran:
                     self.trail_mult = min(1.5, self.trail_mult * 1.05)
                     self.exit_stats["sold_early"] += 1
                     w["lesson"] = f"🏃 Sold ${w['symbol']} too early — it went another {w['max'] / w['exit']:.1f}×. Loosening my trailing stop."
-                elif w["min"] <= w["exit"] * 0.7:
+                elif dumped:
                     self.trail_mult = max(0.7, self.trail_mult * 0.98)
                     self.exit_stats["trail_right"] += 1
+            elif w["kind"] == "early":                                # stalled / time / thesis / dried-up exits
+                if ran:
+                    self.patience = min(1.8, self.patience * 1.05)
+                    self.exit_stats["too_early"] += 1
+                    w["lesson"] = (f"⏳ Recycled ${w['symbol']} too soon — it went {w['max'] / w['exit']:.1f}× after. "
+                                   f"Giving flat positions more time (×{self.patience:.2f}).")
+                elif dumped or w["max"] <= w["exit"] * 1.1:
+                    self.patience = max(0.6, self.patience * 0.98)
+                    self.exit_stats["early_right"] += 1
+            elif w["kind"] == "smart":                                # we copied a top trader's sell
+                if dumped:
+                    self.smart_follow = min(1.6, self.smart_follow * 1.04)
+                    self.exit_stats["smart_right"] += 1
+                    w["lesson"] = f"🎯 Copying the top wallets' sell on ${w['symbol']} was right — it fell {(1 - w['min'] / w['exit']) * 100:.0f}% after. Following their sells harder."
+                elif ran:
+                    self.smart_follow = max(0.5, self.smart_follow * 0.95)
+                    self.exit_stats["smart_wrong"] += 1
+                    w["lesson"] = f"🤔 ${w['symbol']} kept running after the top wallets sold — I'll follow their sells a little less."
             if w.get("lesson"):
                 out.append((mint, w["lesson"]))
         return out
@@ -958,8 +1111,10 @@ class Brain:
             self.bad_devs[dev] = time.time()
             notes.append(f"🚫 Blocked dev {dev[:4]}…{dev[-4:]} — their coin ${p['symbol']} burnt me ({mult:.2f}×).")
         # --- adaptive exits: watch what happens after a stop / trailing exit ---
-        if L is not None and L.mcap_sol and (reason.startswith("stop") or reason.startswith("trailing")):
-            self.post[p["mint"]] = {"ts": time.time(), "kind": "stop" if reason.startswith("stop") else "trail", "symbol": p["symbol"],
+        kind = p.get("_exit_kind") or ("stop" if reason.startswith("stop") else "trail" if reason.startswith(("trailing", "back to entry"))
+                                       else "smart" if "sold" in reason or "leaving" in reason else "early")
+        if L is not None and L.mcap_sol and kind in ("stop", "trail", "early", "smart"):
+            self.post[p["mint"]] = {"ts": time.time(), "kind": kind, "symbol": p["symbol"],
                                     "entry": p.get("entry_mcap_sol") or L.mcap_sol, "exit": L.mcap_sol, "max": L.mcap_sol, "min": L.mcap_sol}
         lesson = "no features recorded"
         pred = None
@@ -1066,7 +1221,8 @@ class Brain:
                              "models": 2, "signals": len(KEYS)},
                 "mood": self.mood_public(), "patterns": self.patterns_public(),
                 "exits": {"stop_pct": round(self.stop_pct() * 100), "trail_mult": round(self.trail_mult, 2), **self.exit_stats,
-                          "watching": len(self.post)},
+                          "watching": len(self.post), "patience": round(self.patience, 2), "smart_follow": round(self.smart_follow, 2),
+                          "copied_sells": self.copied_sells, "ladder": [f"{f * 100:.0f}% at {m:g}×" for m, f, _ in LADDERS[AGGRESSION[self.aggression]["ladder"]]]},
                 "benched": [{"wallet": w, "n": s["n"], "wins": s["w"], "until": s["bench_until"]} for w, s in self.leaders.items()
                             if s.get("bench_until", 0) > now][:10],
                 "blocked_devs": len(self.bad_devs),

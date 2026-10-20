@@ -172,6 +172,8 @@ class Autopilot:
         sol = self.tracker.sol_usd
         if tok and tok.get("price_usd") and sol:
             return float(tok["price_usd"]) / sol, None
+        if tok and tok.get("pump_mcap_sol") and (tok.get("pump_mcap_as_of") or 0) > time.time() - 900:
+            return float(tok["pump_mcap_sol"]) / SUPPLY, None       # still on the bonding curve: last curve price from the trade feed
         return None, None
 
     # ---------------- external triggers ----------------
@@ -209,7 +211,7 @@ class Autopilot:
             fast = self.c["mode"] == "auto" or (self.c["mode"] == "real" and self.c.get("real_engine") == "brain")
             self.kick.clear()
             try:   # event-driven: wake the moment the sniper re-scores coins (or a top wallet buys), else poll
-                await asyncio.wait_for(self.kick.wait(), timeout=0.5 if fast else 1.0)
+                await asyncio.wait_for(self.kick.wait(), timeout=0.25 if fast else 1.0)
             except asyncio.TimeoutError:
                 pass
             self.stats["ticks"] += 1
@@ -357,6 +359,8 @@ class Autopilot:
             await self._order(mode, pid, "buy", mint, sym, sol_in, tokens, px, sig, "filled", None, f"{trigger}: {detail}")
             self.stats["buys"] += 1
             self.tracker.launch_watch[mint] = max(self.tracker.launch_watch.get(mint, 0), time.time() + 6 * 3600)
+            if L is not None and hasattr(L, "until"):
+                L.until = max(L.until, time.time() + 6 * 3600)          # the sniper keeps scoring (and pricing) what we hold
             tag = "🤖" if mode == "real" else "🧪"
             await feed.push("autopilot", "buy", f"{tag} {mode.upper()} bought ${sym} · {sol_in:.3f} SOL", f"{trigger}: {detail}", mint)
             await self.alerts.send("buy" if mode == "real" else "info", f"{tag} Autopilot {mode} BUY ${sym}",
@@ -430,8 +434,15 @@ class Autopilot:
         now = time.time()
         for p in list(self.open.values()):
             px, L = await self.price(p["mint"])
+            if L is not None and hasattr(L, "until") and L.until < now + 3600:
+                L.until = now + 6 * 3600                                  # never let the coin we hold drop out of the live feed
             if not px:
+                # no price at all for 3 minutes: don't sit on it forever — close (demo at the last price, real via the router)
+                lost = p.setdefault("_no_px", now)
+                if now - lost > 180 and p["mint"] not in self.busy:
+                    await self.sell(p, 1.0, "price feed lost — closed at the last price")
                 continue
+            p.pop("_no_px", None)
             p["last_price_sol"] = px
             p["peak_price_sol"] = max(p["peak_price_sol"], px)
             x = px / p["entry_price_sol"]

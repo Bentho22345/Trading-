@@ -56,6 +56,11 @@ def chart(L: Any, now: float) -> dict[str, float]:
     drawdown = 1 - (L.mcap_sol or 0) / peak if peak and L.mcap_sol else 0.0
     p_60 = next((p for ts, p in pts if ts >= now - 60), p_now)
     vertical = p_now / p_60 if p_60 else 1.0
+    p_30 = next((p for ts, p in pts if ts >= now - 30), p_now)
+    p_2m = next((p for ts, p in pts if ts >= now - 120), p_now)
+    peak_60 = max((p for ts, p in pts if ts >= now - 60), default=p_now)
+    net_30 = sum((t[2] or 0) * (1 if t[1] == "buy" else -1) for t in recent if t[0] >= now - 30)
+    last_ts = recent[-1][0] if recent else (tape[-1][0] if tape else now - 300)
     mins: dict[int, float] = {}
     for ts, p in pts:                                           # one pass: the low of each of the last 5 minutes
         k = int((now - ts) // 60)
@@ -118,6 +123,8 @@ def chart(L: Any, now: float) -> dict[str, float]:
     return {
         "vol_1m": vol1, "vol_prev": vol_prev, "vol_accel": (vol1 + 0.2) / (vol_prev + 0.2), "liq": liq, "liq_2m": liq_2m,
         "liq_delta": liq - liq_2m, "liq_drain_pct": max(0.0, (liq_2m - liq) / liq_2m) if liq_2m > 1 else 0.0,
+        "ret_30s": p_now / p_30 - 1 if p_30 else 0.0, "ret_2m": p_now / p_2m - 1 if p_2m else 0.0,
+        "drop_60": max(0.0, 1 - p_now / peak_60) if peak_60 else 0.0, "net_30s": net_30, "quiet_s": max(0.0, now - last_ts),
         "holders": holders, "joined_1m": joined, "left_3m": left, "drawdown": max(0.0, drawdown), "vertical": vertical,
         "stairs": stairs, "vola": vola, "top3_sell": top3_sell, "big_sell_liq": big_sell / max(1.0, liq), "sell_streak": streak,
         "sell_vol_3m": sell_vol, "wash": wash, "wallets_5m": len(seen), "avg_buy": avg_buy, "retail": retail,
@@ -135,6 +142,9 @@ def normalise(c: dict[str, float], age_s: float, mcap_usd: float | None) -> dict
     return {
         "vol_accel": _clip(math.log2(max(0.25, c["vol_accel"])) / 3, -1, 1),
         "vol_1m": _clip(math.log10(1 + c["vol_1m"]) / 2),
+        "mom_30s": _clip(c["ret_30s"] / 0.3, -1, 1),
+        "mom_2m": _clip(c["ret_2m"] / 0.6, -1, 1),
+        "quiet": _clip((c["quiet_s"] - 20) / 120),
         "liq": _clip(c["liq"] / 60),
         "liq_influx": _clip(c["liq_delta"] / 10, -1, 1),
         "liq_drain": _clip(c["liq_drain_pct"] / 0.4),
