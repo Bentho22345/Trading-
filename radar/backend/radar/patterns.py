@@ -113,6 +113,22 @@ def chart(L: Any, now: float) -> dict[str, float]:
             except AttributeError:
                 pass
     coord_hold = sum(bal.get(w, 0.0) for w in coord_wallets) / SUPPLY * 100
+    # the apes: new buyers per 10 s now vs the minute before, the first 20 buyers cashing out, pros among the holders
+    bmap = getattr(L, "buyers", None) or {}
+    r10 = sum(1 for ts in bmap.values() if ts >= now - 10)
+    prev10 = sum(1 for ts in bmap.values() if now - 70 <= ts < now - 10) / 6
+    first = getattr(L, "_first20", None)
+    if first is None:
+        first = [w for w, _ in sorted(bmap.items(), key=lambda kv: kv[1])[:20]]
+        if len(first) >= 20:
+            try:
+                L._first20 = first                              # the first 20 buyers never change: compute once
+            except AttributeError:
+                pass
+    early_out = sum(1 for w in first if bal.get(w, 0.0) <= 1) / len(first) if len(first) >= 5 else 0.0
+    vol5 = sum(t[2] or 0 for t in recent)
+    hi_before = max((p for ts, p in pts if now - 180 <= ts < now - 30), default=None)
+    pros = len(getattr(L, "pros", None) or ())
     it = getattr(L, "intel", None) or {}
     clusters = it.get("clusters") or []
     cl_hold = max((sum(bal.get(w, 0.0) for w in (c.get("wallets") or [])) for c in clusters), default=0.0) / SUPPLY * 100
@@ -125,6 +141,9 @@ def chart(L: Any, now: float) -> dict[str, float]:
         "liq_delta": liq - liq_2m, "liq_drain_pct": max(0.0, (liq_2m - liq) / liq_2m) if liq_2m > 1 else 0.0,
         "ret_30s": p_now / p_30 - 1 if p_30 else 0.0, "ret_2m": p_now / p_2m - 1 if p_2m else 0.0,
         "drop_60": max(0.0, 1 - p_now / peak_60) if peak_60 else 0.0, "net_30s": net_30, "quiet_s": max(0.0, now - last_ts),
+        "ape_10s": r10, "ape_prev10": prev10, "early_out": early_out, "turnover": vol5 / max(1.0, liq),
+        "breakout": 1.0 if hi_before and p_now >= hi_before and (vol1 + 0.2) / (vol_prev + 0.2) >= 1.5 else 0.0,
+        "pro_share": pros / max(1, holders), "progress": liq / 85.0,
         "holders": holders, "joined_1m": joined, "left_3m": left, "drawdown": max(0.0, drawdown), "vertical": vertical,
         "stairs": stairs, "vola": vola, "top3_sell": top3_sell, "big_sell_liq": big_sell / max(1.0, liq), "sell_streak": streak,
         "sell_vol_3m": sell_vol, "wash": wash, "wallets_5m": len(seen), "avg_buy": avg_buy, "retail": retail,
@@ -145,6 +164,18 @@ def normalise(c: dict[str, float], age_s: float, mcap_usd: float | None) -> dict
         "mom_30s": _clip(c["ret_30s"] / 0.3, -1, 1),
         "mom_2m": _clip(c["ret_2m"] / 0.6, -1, 1),
         "quiet": _clip((c["quiet_s"] - 20) / 120),
+        "ape_wave": _clip(c["ape_10s"] / 4),
+        "ape_accel": _clip(math.log2((c["ape_10s"] + 0.5) / (c["ape_prev10"] + 0.5)) / 2, -1, 1),
+        # buyers drying up right at the highs after a run: the classic top
+        "exhaustion": (1.0 if c["drop_60"] < 0.08 and c["ret_2m"] > 0.3 else 0.0)
+        * _clip(-math.log2((c["ape_10s"] + 0.5) / (c["ape_prev10"] + 0.5)) / 2),
+        "early_exit": c["early_out"],
+        "turnover": _clip(c["turnover"] / 6),
+        "breakout": c["breakout"],
+        # a real dip that buyers are stepping back into (the "holds bids" entry), not a falling knife
+        "dip_reclaim": 1.0 if 0.2 <= c["drawdown"] <= 0.5 and c["ret_30s"] > 0.03 and c["net_30s"] > 0 else 0.0,
+        "near_grad": 1.0 if 0.75 <= c["progress"] < 1 and not c["graduated"] else 0.0,
+        "pro_share": _clip(c["pro_share"] / 0.15),
         "liq": _clip(c["liq"] / 60),
         "liq_influx": _clip(c["liq_delta"] / 10, -1, 1),
         "liq_drain": _clip(c["liq_drain_pct"] / 0.4),
@@ -208,7 +239,9 @@ def tags(f: dict[str, float], trigger: str) -> list[str]:
                            ("dev_fresh", "fresh-dev", 0.5), ("coordinated", "coordinated-buys", 0.25), ("cluster_hold", "clustered-holders", 0.25),
                            ("insiders", "insiders", 0.2), ("bundle", "bundlers", 0.3), ("snipers", "snipers-heavy", 0.5),
                            ("whale_buys", "whale-buyers", 0.5), ("drawdown", "off-the-highs", 0.5), ("tweet", "tweet-spawned", 0.3),
-                           ("dev_hold", "dev-holding", 0.5), ("graduated", "graduated", 0.5)):
+                           ("dev_hold", "dev-holding", 0.5), ("graduated", "graduated", 0.5), ("ape_wave", "ape-wave", 0.5),
+                           ("exhaustion", "exhausted-top", 0.3), ("early_exit", "early-holders-out", 0.5), ("breakout", "breakout", 0.5),
+                           ("dip_reclaim", "dip-reclaim", 0.5), ("near_grad", "near-graduation", 0.5), ("mom_30s", "momentum-up", 0.3)):
         if f.get(key, 0) >= cut:
             t.append(name)
     return t
@@ -226,6 +259,8 @@ TAG_TEXT = {
     "coordinated-buys": "coordinated buys (bubble map)", "clustered-holders": "funder-linked holder clusters", "insiders": "insiders holding",
     "bundlers": "bundlers holding", "snipers-heavy": "snipers holding a lot", "whale-buyers": "whale-sized buys",
     "off-the-highs": "charts already well off the highs", "tweet-spawned": "tweet-spawned coins", "dev-holding": "devs still holding a lot",
-    "graduated": "graduated coins",
+    "graduated": "graduated coins", "ape-wave": "ape waves (lots of new buyers)", "exhausted-top": "buying at an exhausted top",
+    "early-holders-out": "coins whose first buyers already sold", "breakout": "breakouts above the recent high",
+    "dip-reclaim": "dips that buyers stepped back into", "near-graduation": "coins about to graduate", "momentum-up": "coins already moving up",
 }
 

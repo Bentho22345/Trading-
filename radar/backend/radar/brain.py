@@ -1,4 +1,4 @@
-"""Self-driving Autopilot, v5: Radar's own trading algorithm — it trades its own demo money (and, if you switch it on
+"""Self-driving Autopilot, v6: Radar's own trading algorithm — it trades its own demo money (and, if you switch it on
 there, real money under your hard caps), and it never stops learning.
 
 How it decides
@@ -35,6 +35,13 @@ How it gets discouraged (and confident again)
   Leaders         copied wallets that keep losing it money get benched; devs whose coins rugged it get blocked.
   Stops           after every stop / trailing exit it keeps watching the coin: shaken out and it ran → stops get more
                   room; it kept dumping → stops tighten. Consistent stop-losses therefore change how it exits.
+
+Apes and timing (v6)
+  The tape        ape waves (new buyers / 10 s vs the minute before), first buyers cashing out, pros among holders,
+                  turnover, breakouts, dips being bought, near-graduation, exhaustion at the highs.
+  Timing models   UP / DOWN odds for the next 3 minutes, trained on a snapshot of every live coin every 30 s; entries
+                  lean on UP, exits fire on DOWN with a learned threshold. Buys capped at ~4% curve impact; oversized
+                  positions trimmed into strength; a learned share sold into graduation.
 
 Top wallets (v5)
   Their sells     a wallet it followed in sells → it follows them out; any top-ranked wallet dumping a coin it holds →
@@ -73,6 +80,9 @@ PRIORS: dict[str, float] = {
     "mc_lt8k": 0.3, "mc_8_25k": 0.2, "mc_25_70k": 0.0, "mc_70k": -0.3,
     # v5 — what the best wallets are doing right now, and short-term momentum
     "influx": 1.2, "smart_selling": -1.8, "mom_30s": 0.5, "mom_2m": 0.4, "quiet": -0.8,
+    # v6 — the apes, the tape and the curve: who's piling in, who's leaving, and where the coin is in its life
+    "ape_wave": 0.8, "ape_accel": 0.7, "exhaustion": -1.0, "early_exit": -1.2, "turnover": 0.3, "breakout": 0.6,
+    "dip_reclaim": 0.5, "near_grad": 0.4, "pro_share": 0.8,
 }
 RUG_PRIORS: dict[str, float] = {k: 0.0 for k in PRIORS} | {
     "risk": 1.6, "insiders": 1.6, "bundle": 1.2, "snipers": 0.8, "top10": 1.0, "fresh": 0.6, "bots": 0.5, "dev_sold": 0.4,
@@ -80,8 +90,22 @@ RUG_PRIORS: dict[str, float] = {k: 0.0 for k in PRIORS} | {
     "liq_drain": 1.6, "dump_candle": 1.4, "whale_sells": 1.0, "sell_streak": 0.6, "vertical": 0.8, "wash": 0.8,
     "coordinated": 1.2, "clusters": 0.6, "cluster_hold": 1.5, "dev_hold": 1.0, "dev_dumping": 1.0, "dev_big_buy": 0.6,
     "dev_serial": 1.2, "dev_fresh": 0.5, "holders": -0.5, "retail": -0.4, "staircase": -0.5, "drawdown": 0.6,
-    "smart_selling": 1.0, "influx": -0.3, "quiet": 0.3,
+    "smart_selling": 1.0, "influx": -0.3, "quiet": 0.3, "early_exit": 0.8, "exhaustion": 0.4, "pro_share": -0.5,
 }
+# short-horizon TIMING models: will it be +12% before −10% in the next 3 minutes (UP), or −15% first (DOWN)?
+# Trained on a snapshot of every live coin every 30 s, so they learn the tape's next move fast — entries wait for UP,
+# exits fire on DOWN.
+UP_PRIORS: dict[str, float] = {k: 0.0 for k in PRIORS} | {
+    "mom_30s": 0.8, "ape_wave": 0.8, "ape_accel": 0.8, "breakout": 0.8, "dip_reclaim": 0.6, "vol_accel": 0.8, "liq_influx": 0.8,
+    "influx": 0.8, "copy": 0.6, "exhaustion": -1.0, "early_exit": -0.6, "smart_selling": -1.0, "sell_streak": -0.8, "quiet": -0.8,
+    "near_grad": 0.4, "narrative": 0.4, "x_calls": 0.5, "holder_growth": 0.6, "buy_pressure": 0.5,
+}
+DN_PRIORS: dict[str, float] = {k: 0.0 for k in PRIORS} | {
+    "exhaustion": 1.2, "early_exit": 1.0, "smart_selling": 1.2, "sell_streak": 0.8, "whale_sells": 1.0, "dump_candle": 1.0,
+    "liq_drain": 1.2, "quiet": 0.6, "vertical": 0.8, "mom_30s": -0.4, "ape_accel": -0.6, "holders_leaving": 0.8, "dev_dumping": 0.8,
+    "drawdown": 0.4, "buy_pressure": -0.5,
+}
+TIMING_H, UP_X, DN_X = 180, 1.12, 0.85
 LABELS = {"upside": "Upside score", "risk": "Risk score", "alpha": "Top wallets in", "copy": "Best wallets buying now",
           "velocity": "Graduation pace", "progress": "Bonding-curve progress", "flow": "Net SOL flowing in", "sol_rate": "Curve SOL / min",
           "buy_pressure": "Buy pressure", "buyers": "Buyer count", "organic": "Organic flow", "meme": "Claude meme score",
@@ -101,9 +125,12 @@ LABELS = {"upside": "Upside score", "risk": "Risk score", "alpha": "Top wallets 
           "age_0_2m": "Age < 2 min", "age_2_5m": "Age 2-5 min", "age_5_15m": "Age 5-15 min", "age_15m": "Age 15 min +",
           "mc_lt8k": "Mcap < $8k", "mc_8_25k": "Mcap $8-25k", "mc_25_70k": "Mcap $25-70k", "mc_70k": "Mcap $70k +",
           "influx": "Top-wallet influx", "smart_selling": "Top wallets selling it", "mom_30s": "Momentum (30s)",
-          "mom_2m": "Momentum (2m)", "quiet": "Trading gone quiet"}
+          "mom_2m": "Momentum (2m)", "quiet": "Trading gone quiet",
+          "ape_wave": "Ape wave (new buyers / 10s)", "ape_accel": "Apes accelerating", "exhaustion": "Exhausted at the highs",
+          "early_exit": "First buyers sold out", "turnover": "Volume vs liquidity", "breakout": "Breakout", "dip_reclaim": "Dip being bought",
+          "near_grad": "About to graduate", "pro_share": "Pros among holders"}
 KEYS = list(PRIORS)                       # fixed order for the compact replay vectors
-KEYS_VER = "v4:" + str(len(KEYS))
+KEYS_VER = "v6:" + str(len(KEYS))
 BIAS0, RUG_BIAS0 = -3.0, -1.6
 AGGRESSION = {   # top-share of what it sees that it will buy, max positions, stop loss, base size, rug veto, buys per tick,
                  # how long a position may go without a new high (stall_s) and at all (time_s) before it's recycled
@@ -121,7 +148,8 @@ AGGRESSION = {   # top-share of what it sees that it will buy, max positions, st
 LADDERS = {"quick": [(1.25, 0.25, 101), (1.6, 0.30, 102), (2.2, 0.35, 103), (4.0, 0.50, 104)],
            "steady": [(1.4, 0.30, 101), (2.0, 0.35, 102), (3.0, 0.40, 103), (6.0, 0.50, 104)]}
 SMART_SELL_SOL = 0.2                         # a top wallet's sell this size or bigger is a signal
-LR_TRADE, LR_SHADOW, LR_REPLAY = 0.12, 0.03, 0.012
+LR_TRADE, LR_SHADOW, LR_REPLAY, LR_TIMING = 0.12, 0.03, 0.012, 0.03
+IMPACT_CAP = 0.04                            # never move the curve more than ~4% with one buy (that's the price you'd pay)
 WIN_X = 1.6                                  # a shadow coin "wins" if it hits +60% before the stop
 RUG_X = 0.4                                  # …and "rugs" if it falls to 0.4× (−60%) inside 20 minutes
 
@@ -253,6 +281,13 @@ class Brain:
         self.ap = ap
         self.win = Logit(PRIORS, BIAS0)
         self.rug = Logit(RUG_PRIORS, RUG_BIAS0)
+        self.up = Logit(UP_PRIORS, -1.6)
+        self.dn = Logit(DN_PRIORS, -1.6)
+        self.tsnap: dict[str, dict[str, Any]] = {}          # timing snapshots waiting 3 min for their answer
+        self.tlast: dict[str, float] = {}
+        self.replay_t: deque[tuple[array, float, float]] = deque(maxlen=4000)
+        self.dn_exit = 0.62                                 # learned: how sure the DOWN model must be before it sells
+        self.grad_frac = 0.5                                # learned: how much it sells into a graduation
         self.aggression = "hyper"
         self.narr: dict[str, dict[str, Any]] = {}        # mint -> strongest live narrative it's matched to (social engine)
         self.x_calls: dict[str, int] = {}                # mint -> calls by tracked X accounts (last 2h)
@@ -264,7 +299,7 @@ class Brain:
         self.log: deque[dict[str, Any]] = deque(maxlen=300)
         self.candidates: list[dict[str, Any]] = []
         self.vals: dict[str, tuple[float, float]] = {}      # mint -> (ts, latest value): the market the bar is a percentile of
-        self.cache: dict[str, tuple[int, float, float, dict[str, float], float, float]] = {}  # mint -> (id(r), copy_n, ts, f, value, p_rug)
+        self.cache: dict[str, dict[str, Any]] = {}          # mint -> {rid, cn, ts, f, v, rug, up, dn}: latest read of each coin
         self.charts: dict[str, dict[str, float]] = {}        # mint -> latest raw chart read (exits use it)
         self.shadow: dict[str, dict[str, Any]] = {}
         self.sampled: dict[str, tuple[int, float]] = {}      # mint -> (snapshots taken, last ts)
@@ -320,6 +355,8 @@ class Brain:
         if ver >= 4:
             self.win.restore(s.get("win"))
             self.rug.restore(s.get("rug"))
+            self.up.restore(s.get("up"))
+            self.dn.restore(s.get("dn"))
         else:                                             # v1-v3 kept one weight set: it becomes the win model
             self.win.restore({"w": s.get("w") or {}, "b": s.get("b", BIAS0), "n": s.get("trained", 0)})
         self.trained = int(s.get("trained", 0))
@@ -341,14 +378,19 @@ class Brain:
         self.smart_follow = float(s.get("smart_follow", 1.0))
         self.patience = float(s.get("patience", 1.0))
         self.copied_sells = int(s.get("copied_sells", 0))
+        self.dn_exit = float(s.get("dn_exit", 0.62))
+        self.grad_frac = float(s.get("grad_frac", 0.5))
         self.exit_stats.update(s.get("exit_stats") or {})
         self.rehearsed = int(s.get("rehearsed", 0))
         try:
-            rows = await self.ap.db.all("SELECT vec, y, rug, w FROM brain_examples WHERE ver=? ORDER BY id DESC LIMIT 4000", (KEYS_VER,))
+            rows = await self.ap.db.all("SELECT vec, y, rug, w, src FROM brain_examples WHERE ver=? ORDER BY id DESC LIMIT 8000", (KEYS_VER,))
             for r in reversed(rows):
                 v = array("f")
                 v.frombytes(r["vec"])
-                self.replay.append((v, float(r["y"]), float(r["rug"]), float(r["w"] or 1)))
+                if r["src"] == "timing":
+                    self.replay_t.append((v, float(r["y"]), float(r["rug"])))
+                else:
+                    self.replay.append((v, float(r["y"]), float(r["rug"]), float(r["w"] or 1)))
         except Exception:  # noqa: BLE001 - fresh database
             pass
 
@@ -359,7 +401,8 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "version": 5, "win": self.win.state(), "rug": self.rug.state(), "trained": self.trained,
+            "version": 6, "win": self.win.state(), "rug": self.rug.state(),
+            "up": self.up.state(), "dn": self.dn.state(), "dn_exit": round(self.dn_exit, 4), "grad_frac": round(self.grad_frac, 4), "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
             "aggression": self.aggression, "mood": round(self.mood, 4), "streak": self.streak, "peak_equity": self.peak_equity,
             "tags": {k: [round(x, 4) for x in v] for k, v in self.tags.items()}, "base": [round(x, 4) for x in self.base],
@@ -388,6 +431,10 @@ class Brain:
 
     async def reset(self) -> None:
         self.win, self.rug = Logit(PRIORS, BIAS0), Logit(RUG_PRIORS, RUG_BIAS0)
+        self.up, self.dn = Logit(UP_PRIORS, -1.6), Logit(DN_PRIORS, -1.6)
+        self.dn_exit, self.grad_frac = 0.62, 0.5
+        self.tsnap.clear()
+        self.replay_t.clear()
         self.trained = self.shadow_trained = self.shadow_hits = self.rug_seen = self.rehearsed = 0
         self.mood, self.streak, self.cool_until, self.peak_equity, self.drawdown = 1.0, 0, 0.0, 10.0, 0.0
         self.tags, self.base, self.told, self.leaders, self.bad_devs = {}, [0.0, 0.0, 0.0], {}, {}, {}
@@ -430,7 +477,13 @@ class Brain:
         adj, worst = self.tag_adj(pat.tags(f, trigger))
         p_win = _sig(self.win.z(f) + adj)
         p_rug = self.rug.p(f)
-        return round(100 * p_win * (1 - 0.6 * p_rug), 1), p_win, p_rug, worst
+        v = 100 * p_win * (1 - 0.6 * p_rug)
+        if self.up.n >= 400:                        # once the timing model knows the tape: buy when the next move is UP
+            v *= 0.7 + 0.6 * self.up.p(f)
+        return round(min(100.0, v), 1), p_win, p_rug, worst
+
+    def timing(self, f: dict[str, float]) -> tuple[float, float]:
+        return self.up.p(f), self.dn.p(f)
 
     def why(self, f: dict[str, float], n: int = 3) -> str:
         contrib = sorted(((self.win.w[k] * f.get(k, 0.0), k) for k in self.win.w), reverse=True)
@@ -625,12 +678,14 @@ class Brain:
                 continue
             cn, leaders, ranks = self.copy_signal(L.mint)
             hit = self.cache.get(L.mint)
-            if hit and ((hit[0] == id(r) and hit[1] == cn and now - hit[2] < 10) or budget <= 0):   # unchanged: reuse
-                f, v, p_rug = hit[3], hit[4], hit[5]
+            held = L.mint in holding
+            if hit and ((hit["rid"] == id(r) and hit["cn"] == cn and now - hit["ts"] < (3 if held else 10)) or (budget <= 0 and not held)):
+                f, v, p_rug = hit["f"], hit["v"], hit["rug"]                # unchanged: reuse (held coins refresh every 3 s)
             else:
                 budget -= 1
                 f, v, _, p_rug, _ = self._score(L, now, cn)
-                self.cache[L.mint] = (id(r), cn, now, f, v, p_rug)
+                p_up, p_dn = self.timing(f)
+                self.cache[L.mint] = {"rid": id(r), "cn": cn, "ts": now, "f": f, "v": v, "rug": p_rug, "up": p_up, "dn": p_dn}
                 raw = self.charts.get(L.mint)
                 if raw and L.mint in self.sampled and pat.rug_alarm(raw):
                     for key in (L.mint, *(f"{L.mint}#{k}" for k in range(1, 4))):
@@ -639,11 +694,15 @@ class Brain:
             if now - L.created > 1200:
                 continue
             self.vals[L.mint] = (now, v)
+            c = self.cache[L.mint]
+            self.timing_sample(L, c["f"], now)
             scored.append({"mint": L.mint, "symbol": r.get("symbol"), "value": v, "p_rug": round(p_rug * 100), "hard": self.hard_no(r),
+                           "p_up": round(c["up"] * 100), "p_dn": round(c["dn"] * 100),
                            "why": self.why(f), "f": f, "mcap_usd": r.get("mcap_usd"), "age_s": round(now - L.created), "tier": r.get("tier"),
                            "deployer": L.deployer, "leaders": leaders, "copy_ranks": ranks, "mcap_sol": L.mcap_sol, "r": r})
             self.sample(L, f, v, now)
         await self.shadow_step(now)
+        self.timing_step(now)
         for mint, lesson in self.post_mortem(now):
             await self.note("learn", lesson, mint=mint)
         if now - self.last_rehearse > 20:
@@ -653,6 +712,7 @@ class Brain:
             self.vals = {m: tv for m, tv in self.vals.items() if tv[0] > now - 1200}
             self.cache = {m: c for m, c in self.cache.items() if m in launches}
             self.charts = {m: c for m, c in self.charts.items() if m in launches}
+            self.tlast = {m: t for m, t in self.tlast.items() if m in launches}
         mf = self.mood_factor()
         vals = [v for ts, v in self.vals.values() if ts > now - 1200]
         top = agg["top"] * mf                                                # discouraged → only the very best slice
@@ -766,6 +826,9 @@ class Brain:
             lim = AGGRESSION[self.aggression]["rug_veto"] if self.rug.n >= 150 else max(0.8, AGGRESSION[self.aggression]["rug_veto"])
             if p_rug >= lim:
                 return f"rug model {p_rug * 100:.0f}%"
+        c = self.cache.get(L.mint)
+        if c and self.dn.n >= 400 and c["dn"] >= self.dn_exit:
+            return f"timing model sees a dump ({c['dn'] * 100:.0f}%)"
         return None
 
     async def _tradeable(self, mint: str) -> bool:
@@ -775,6 +838,12 @@ class Brain:
     async def _buy(self, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
                    f: dict[str, float] | None, value: float | None, leaders: list[str]) -> None:
         ap = self.ap
+        L = ap.sniper.launches.get(mint)
+        if L is not None and getattr(L, "vsol", None):
+            cap = max(0.02, IMPACT_CAP * L.vsol)                       # don't pay more than ~4% price impact on the curve
+            if size > cap:
+                size = round(cap, 4)
+                detail += f" · size capped at ◎{cap:.2f} by liquidity"
         try:
             p = await ap.buy(mint, "copy" if trig == "copy" else "brain", detail, r, sol=size, mode=mode)
         except Exception as e:  # noqa: BLE001
@@ -861,6 +930,12 @@ class Brain:
 
     def rehearse(self, n: int) -> None:
         """Background practice on remembered lessons: the models keep sharpening between trades."""
+        if len(self.replay_t) >= 50:
+            for _ in range(n):
+                v, up, dn = self.replay_t[self.rng.randrange(len(self.replay_t))]
+                f = dict(zip(KEYS, v))
+                self.up.step(f, up, LR_REPLAY, track=False)
+                self.dn.step(f, dn, LR_REPLAY, track=False)
         if len(self.replay) < 50:
             return
         for _ in range(n):
@@ -932,6 +1007,36 @@ class Brain:
             if self.shadow_trained % 50 < len(done) or len(self.pending) > 200:
                 await self.save()
 
+    # ---------------- timing models: the tape's next 3 minutes ----------------
+    def timing_sample(self, L: Any, f: dict[str, float], now: float) -> None:
+        if not L.mcap_sol or now - self.tlast.get(L.mint, 0) < 30 or len(self.tsnap) >= 3000:
+            return
+        self.tlast[L.mint] = now
+        self.tsnap[f"{L.mint}@{int(now)}"] = {"mint": L.mint, "ts": now, "vec": self._vec(f), "px": L.mcap_sol, "up": None}
+
+    def timing_step(self, now: float) -> None:
+        launches = self.ap.sniper.launches
+        done = []
+        for key, t in self.tsnap.items():
+            L = launches.get(t["mint"])
+            px = L.mcap_sol if L is not None else None
+            if px and t["up"] is None:
+                if px >= t["px"] * UP_X:
+                    t["up"], t["dn"] = 1.0, 0.0                    # +12% came first
+                elif px <= t["px"] * DN_X:
+                    t["up"], t["dn"] = 0.0, 1.0                    # −15% came first
+            if t["up"] is not None or now - t["ts"] >= TIMING_H or L is None:
+                done.append(key)
+        for key in done:
+            t = self.tsnap.pop(key)
+            up, dn = (t["up"], t["dn"]) if t["up"] is not None else (0.0, 0.0)
+            f = dict(zip(KEYS, t["vec"]))
+            self.up.step(f, up, LR_TIMING)
+            self.dn.step(f, dn, LR_TIMING * (1.3 if dn else 1.0))
+            self.replay_t.append((t["vec"], up, dn))
+            self.pending.append((now, KEYS_VER, t["vec"].tobytes(), up, dn, "timing", 1.0))
+            self.label_ts.append(now)
+
     def _learn_win(self, s: dict[str, Any]) -> None:
         self.win.step(dict(zip(KEYS, s["vec"])), s["won"], LR_SHADOW)
         self.shadow_trained += 1
@@ -954,11 +1059,38 @@ class Brain:
         if alarm:
             return self._exit(p, 1.0, f"rug pattern: {alarm}", "rug")
         hit = self.cache.get(p["mint"])
-        if hit and self.rug.n >= 300 and hit[5] >= 0.85 and x < 2:
-            return self._exit(p, 1.0, f"rug model {hit[5] * 100:.0f}% — getting out", "rug")
+        if hit and self.rug.n >= 300 and hit["rug"] >= 0.85 and x < 2:
+            return self._exit(p, 1.0, f"rug model {hit['rug'] * 100:.0f}% — getting out", "rug")
         stop = self.stop_pct()
         if x <= 1 - stop:
             return self._exit(p, 1.0, f"stop −{stop * 100:.0f}%", "stop")
+        L = self.ap.sniper.launches.get(p["mint"])
+        # graduation: early holders sell into the migration — it sells a learned share into the move
+        if L is not None and getattr(L, "graduated_at", None) and L.graduated_at > p["opened"] and 200 not in p["tp_done"]:
+            p["tp_done"].append(200)
+            self.post[f"{p['mint']}#grad"] = {"mint": p["mint"], "ts": now, "kind": "grad", "symbol": p["symbol"], "entry": p.get("entry_mcap_sol") or 1,
+                                             "exit": L.mcap_sol or 1, "max": L.mcap_sol or 1, "min": L.mcap_sol or 1}
+            return self.grad_frac, f"graduated — sold {self.grad_frac * 100:.0f}% into the migration"
+        # the timing model sees the next 3 minutes going −15% first
+        if hit and self.dn.n >= 400 and hit["dn"] >= self.dn_exit and now - p.get("_dn_ts", 0) > 30:
+            p["_dn_ts"] = now
+            if hit["dn"] >= self.dn_exit + 0.15 or x < 1.0:
+                return self._exit(p, 1.0, f"timing model: dump likely ({hit['dn'] * 100:.0f}%) — out", "model")
+            return 0.5, f"timing model: dump likely ({hit['dn'] * 100:.0f}%) — took half off"
+        if raw and x >= 1.15 and now - p.get("_ape_ts", 0) > 45:
+            n = pat.normalise(raw, age, None)
+            if n["exhaustion"] >= 0.5:
+                p["_ape_ts"] = now
+                return 0.4, "apes exhausted — buyers drying up at the highs"
+            if n["early_exit"] >= 0.6 and 201 not in p["tp_done"]:
+                p["tp_done"].append(201)
+                return 0.35, f"first buyers cashing out ({n['early_exit'] * 100:.0f}% of the first 20 are gone)"
+        # exit liquidity: a position too big for the pool gets trimmed while there are buyers to sell to
+        if raw and x >= 1.2 and raw.get("liq", 0) > 0 and now - p.get("_liq_ts", 0) > 20:
+            share = p["tokens_left"] * p["last_price_sol"] / raw["liq"]
+            if share >= 0.06:
+                p["_liq_ts"] = now
+                return _clip(1 - 0.04 / share, 0.2, 0.8), f"trimmed — position was {share * 100:.0f}% of the pool's liquidity"
         # scale out as it climbs: partial sells at each rung (the rest rides with a trailing stop)
         ladder = LADDERS[agg["ladder"]]
         for mult, frac, mark in ladder:
@@ -980,11 +1112,10 @@ class Brain:
             return self._exit(p, 1.0, "sellers took over", "early")
         # the reason it bought is gone: its own read of the coin collapsed and it isn't up
         ev = p.get("entry_value")
-        if hit and ev and age > 60 and x < 1.1 and hit[4] < max(4.0, ev * 0.4):
-            return self._exit(p, 1.0, f"thesis broken (value {ev:.0f} → {hit[4]:.0f})", "early")
+        if hit and ev and age > 60 and x < 1.1 and hit["v"] < max(4.0, ev * 0.4):
+            return self._exit(p, 1.0, f"thesis broken (value {ev:.0f} → {hit['v']:.0f})", "early")
         if self.smart_selling(p["mint"]) >= 2 and x < 1.3:
             return self._exit(p, 1.0, "top wallets are leaving", "smart")
-        L = self.ap.sniper.launches.get(p["mint"])
         tape = getattr(L, "trades", None) if L is not None else None
         if tape and age > 90 and x < 1.2 and now - tape[-1][0] > 120 * self.patience:
             return self._exit(p, 1.0, f"volume dried up (no trades for {now - tape[-1][0]:.0f}s)", "early")
@@ -1008,13 +1139,14 @@ class Brain:
         """After a stop or trailing exit it keeps watching: were the stops right, or did it get shaken out?"""
         launches = self.ap.sniper.launches
         out = []
-        for mint, w in list(self.post.items()):
+        for key, w in list(self.post.items()):
+            mint = w.get("mint", key)
             L = launches.get(mint)
             if L is not None and L.mcap_sol:
                 w["max"], w["min"] = max(w["max"], L.mcap_sol), min(w["min"], L.mcap_sol)
             if now - w["ts"] < 900 and L is not None:
                 continue
-            self.post.pop(mint)
+            self.post.pop(key)
             ran, dumped = w["max"] >= w["exit"] * 1.5, w["min"] <= w["exit"] * 0.7
             if w["kind"] == "stop":
                 if w["max"] >= w["entry"] * 1.3:
@@ -1042,6 +1174,21 @@ class Brain:
                 elif dumped or w["max"] <= w["exit"] * 1.1:
                     self.patience = max(0.6, self.patience * 0.98)
                     self.exit_stats["early_right"] += 1
+            elif w["kind"] == "model":                                # the timing model called a dump
+                if w["max"] >= w["exit"] * 1.3:
+                    self.dn_exit = min(0.85, self.dn_exit + 0.02)
+                    self.exit_stats["model_wrong"] = self.exit_stats.get("model_wrong", 0) + 1
+                    w["lesson"] = f"🤔 The timing model sold ${w['symbol']} and it ran {w['max'] / w['exit']:.1f}× — it needs more certainty now ({self.dn_exit * 100:.0f}%)."
+                elif dumped or w["min"] <= w["exit"] * 0.85:
+                    self.dn_exit = max(0.5, self.dn_exit - 0.01)
+                    self.exit_stats["model_right"] = self.exit_stats.get("model_right", 0) + 1
+            elif w["kind"] == "grad":                                 # sold part into a graduation
+                if w["max"] >= w["exit"] * 1.5:
+                    self.grad_frac = max(0.2, self.grad_frac * 0.9)
+                    w["lesson"] = f"🎓 ${w['symbol']} kept running after graduating — selling less into migrations ({self.grad_frac * 100:.0f}%)."
+                elif dumped:
+                    self.grad_frac = min(0.9, self.grad_frac * 1.06)
+                    w["lesson"] = f"🎓 ${w['symbol']} dumped after graduating — selling more into migrations ({self.grad_frac * 100:.0f}%)."
             elif w["kind"] == "smart":                                # we copied a top trader's sell
                 if dumped:
                     self.smart_follow = min(1.6, self.smart_follow * 1.04)
@@ -1113,7 +1260,7 @@ class Brain:
         # --- adaptive exits: watch what happens after a stop / trailing exit ---
         kind = p.get("_exit_kind") or ("stop" if reason.startswith("stop") else "trail" if reason.startswith(("trailing", "back to entry"))
                                        else "smart" if "sold" in reason or "leaving" in reason else "early")
-        if L is not None and L.mcap_sol and kind in ("stop", "trail", "early", "smart"):
+        if L is not None and L.mcap_sol and kind in ("stop", "trail", "early", "smart", "model"):
             self.post[p["mint"]] = {"ts": time.time(), "kind": kind, "symbol": p["symbol"],
                                     "entry": p.get("entry_mcap_sol") or L.mcap_sol, "exit": L.mcap_sol, "max": L.mcap_sol, "min": L.mcap_sol}
         lesson = "no features recorded"
@@ -1179,7 +1326,7 @@ class Brain:
 
     # ---------------- reads ----------------
     def public_candidates(self) -> list[dict[str, Any]]:
-        return [{k: c.get(k) for k in ("mint", "symbol", "value", "p_rug", "hard", "why", "mcap_usd", "age_s", "tier", "copy_ranks")}
+        return [{k: c.get(k) for k in ("mint", "symbol", "value", "p_rug", "p_up", "p_dn", "hard", "why", "mcap_usd", "age_s", "tier", "copy_ranks")}
                 for c in self.candidates]
 
     def mood_public(self) -> dict[str, Any]:
@@ -1217,8 +1364,12 @@ class Brain:
                 "rug_model": {**rug_st, "rugs_seen": self.rug_seen,
                               "top": [{"key": k, "label": LABELS[k], "w": round(v, 2)} for k, v in
                                       sorted(self.rug.w.items(), key=lambda kv: -kv[1])[:6]]},
-                "learning": {"lessons_per_hour": per_hour, "replay": len(self.replay), "rehearsed": self.rehearsed,
-                             "models": 2, "signals": len(KEYS)},
+                "learning": {"lessons_per_hour": per_hour, "replay": len(self.replay) + len(self.replay_t), "rehearsed": self.rehearsed,
+                             "models": 4, "signals": len(KEYS)},
+                "timing": {"up": self.up.stats(), "down": self.dn.stats(), "pending": len(self.tsnap), "dn_exit": round(self.dn_exit * 100),
+                           "grad_frac": round(self.grad_frac * 100), "active": self.up.n >= 400,
+                           "up_top": [{"key": k, "label": LABELS[k], "w": round(v, 2)} for k, v in sorted(self.up.w.items(), key=lambda kv: -kv[1])[:5]],
+                           "dn_top": [{"key": k, "label": LABELS[k], "w": round(v, 2)} for k, v in sorted(self.dn.w.items(), key=lambda kv: -kv[1])[:5]]},
                 "mood": self.mood_public(), "patterns": self.patterns_public(),
                 "exits": {"stop_pct": round(self.stop_pct() * 100), "trail_mult": round(self.trail_mult, 2), **self.exit_stats,
                           "watching": len(self.post), "patience": round(self.patience, 2), "smart_follow": round(self.smart_follow, 2),

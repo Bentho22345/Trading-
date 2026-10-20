@@ -141,7 +141,7 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - Execution: PumpPortal Local Transaction API (pump.fun, PumpSwap, Raydium) signed locally and sent through your RPC (Helius
   when connected); Jupiter as fallback. Fills are read back from the chain. Telegram: `/autopilot`, `/autopilot demo|off`, `/panic`.
 
-### Self-driving brain (v5)
+### Self-driving brain (v6)
 
 Its own algorithm on its own 10 SOL of demo money (and real money only if you pick it under your hard caps).
 
@@ -166,6 +166,14 @@ Its own algorithm on its own 10 SOL of demo money (and real money only if you pi
   protection, trailing stop, momentum-fade partials, thesis-broken / volume-dried-up / stalled / time exits that recycle
   flat money fast. Patience is learned from what coins do after it exits. Positions can't get stuck: held coins stay in
   the live feed, and a position with no price for 3 minutes is closed.
+- **Reads the apes**: new buyers per 10 s vs the minute before (an ape wave starting or fading), the first 20 buyers
+  cashing out, pros among holders, volume vs liquidity, breakouts above the recent high, dips that buyers step back
+  into, coins about to graduate — and "exhaustion": buyers drying up right at the highs after a run.
+- **Timing models (next 3 minutes)**: two more models trained on a snapshot of every live coin every 30 s — will it be
+  +12% before −10% (UP), or −15% first (DOWN)? Entries lean on UP; exits fire on DOWN (half when in profit, all when
+  not), with the threshold learned from what coins did after it sold.
+- **Liquidity-aware**: buys are capped at ~4% price impact on the curve; positions too big for the pool get trimmed into
+  strength; a learned share is sold into graduation (less if migrations keep running, more if they dump).
 - **Blacklists**: copied wallets that keep losing get benched for 12h; devs whose coins rugged it are blocked.
 - **Adaptive exits**: after every stop / trailing exit it keeps watching the coin — shaken out → stops get more room,
   kept dumping → stops tighten. Instant exits on rug patterns (liquidity drained, one sell dumping the curve, whales

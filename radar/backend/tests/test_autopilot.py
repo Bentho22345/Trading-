@@ -466,3 +466,79 @@ def test_brain_v4_replay_memory_survives_a_restart_and_rug_model_learns(tmp_path
         assert snap["learning"]["replay"] == 60 and snap["mood"]["word"] and "rug_model" in snap and "patterns" in snap
         await db.close()
     asyncio.run(run())
+
+
+def test_patterns_read_the_apes_and_the_top():
+    from radar import patterns as pat
+    now = time.time()
+    # a run that's topping: lots of buyers a minute ago, almost none now, price at the high, first buyers gone
+    trades = [(now - 165 + i * 1.4, "buy", 0.5, 1e6, f"a{i}", 31 + i * 0.25) for i in range(110)]
+    trades += [(now - 5, "buy", 0.1, 1e5, "late", 31 + 110 * 0.25)]
+    L = _tape_launch("TOPPmint" + "1" * 32, trades, vsol=31 + 110 * 0.25)
+    for w in [f"a{i}" for i in range(20)]:
+        L.balances[w] = 0                                       # the first 20 buyers have sold
+    c = pat.chart(L, now)
+    n = pat.normalise(c, 200, 20000)
+    assert n["early_exit"] == 1.0 and n["ape_accel"] < 0 and n["exhaustion"] > 0.3
+    # an ape wave starting: new buyers in the last 10 seconds
+    wave = [(now - 9 + i * 0.5, "buy", 0.3, 1e6, f"n{i}", 35 + i * 0.2) for i in range(16)]
+    W = _tape_launch("WAVEmint" + "2" * 32, wave, vsol=38.0)
+    nw = pat.normalise(pat.chart(W, now), 30, 5000)
+    assert nw["ape_wave"] == 1.0 and nw["ape_accel"] > 0.5
+
+
+def test_brain_v6_timing_models_learn_the_tape_and_drive_exits(tmp_path):
+    async def run():
+        coin = launch("TIMEmint" + "3" * 32, upside=60, risk=10, buyers=40)
+        ap, db = await make(tmp_path, [coin])
+        b = ap.brain
+        f = {"exhaustion": 1.0, "early_exit": 1.0, "upside": 0.5}
+        dn0 = b.dn.p(f)
+        for i in range(30):                                         # snapshots taken, then the coin dumps −15% first
+            b.tsnap[f"k{i}"] = {"mint": coin.mint, "ts": time.time(), "vec": b._vec(f), "px": 40.0, "up": None}
+        coin.mcap_sol = 33.0
+        b.timing_step(time.time())
+        assert not b.tsnap and b.dn.p(f) > dn0 and b.dn.n == 30 and len(b.replay_t) == 30
+        # once trained, a held coin with a high DOWN read gets sold — half if it's up, all of it if it isn't
+        await ap.set_mode("auto")
+        coin.mcap_sol = 40.0
+        await b.tick("auto")
+        p = next(p for p in ap.open.values() if p["mode"] == "auto")
+        b.dn.n = 500
+        b.cache[coin.mint]["dn"] = 0.7
+        coin.mcap_sol = 40 * 1.1
+        ex = b.exit_for(p, coin.result, 1.1, 1.1)
+        assert ex and ex[0] == 0.5 and "timing model" in ex[1]
+        p["_dn_ts"] = 0
+        b.cache[coin.mint]["dn"] = 0.9
+        ex = b.exit_for(p, coin.result, 1.1, 1.1)
+        assert ex[0] == 1.0 and p["_exit_kind"] == "model"
+        # the timing model also blocks new entries into coins it thinks are about to dump
+        assert "timing model" in (b.veto(coin, time.time()) or "")
+        await db.close()
+    asyncio.run(run())
+
+
+def test_brain_v6_sells_into_graduation_and_caps_size_by_liquidity(tmp_path):
+    async def run():
+        coin = launch("GRADmint" + "4" * 32, upside=60, risk=10, buyers=40)
+        coin.vsol = 31.0                                            # a thin curve: ~4% impact cap ≈ ◎1.24
+        ap, db = await make(tmp_path, [coin])
+        b = ap.brain
+        await ap.set_mode("auto")
+        await b._buy(coin.mint, 5.0, "auto", "brain", "test", coin.result, {"upside": 0.6}, 50.0, [])
+        p = next(p for p in ap.open.values() if p["mode"] == "auto")
+        assert p["sol_in"] < 1.3 and "capped" in p["detail"]
+        coin.graduated_at = time.time()
+        ex = b.exit_for(p, coin.result, 1.05, 1.05)
+        assert ex and ex[0] == b.grad_frac and "graduated" in ex[1] and any(k.endswith("#grad") for k in b.post)
+        assert b.exit_for(p, coin.result, 1.05, 1.05) is None or "graduated" not in b.exit_for(p, coin.result, 1.05, 1.05)[1]
+        # it learns from what the coin did after: it kept running → sell less into migrations next time
+        k = next(k for k in b.post if k.endswith("#grad"))
+        b.post[k]["ts"] -= 1000
+        coin.mcap_sol = b.post[k]["exit"] * 2
+        g0 = b.grad_frac
+        b.post_mortem(time.time())
+        assert b.grad_frac < g0
+        await db.close()
+    asyncio.run(run())

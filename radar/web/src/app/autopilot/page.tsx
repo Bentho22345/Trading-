@@ -350,7 +350,9 @@ type Brain = {
   copies: { mint: string; symbol?: string | null; wallets: number; best_rank: number; last: number; age_s: number }[];
   sizing: { n: number; wr: number; avg_win: number; avg_loss: number } | null;
   weights: { key: string; label: string; w: number; prior: number }[];
-  candidates: { mint: string; symbol?: string; value: number; p_rug?: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
+  timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_exit: number;
+    grad_frac: number; active: boolean; up_top: { label: string; w: number }[]; dn_top: { label: string; w: number }[] };
+  candidates: { mint: string; symbol?: string; value: number; p_rug?: number; p_up?: number; p_dn?: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
   log: { ts: number; kind: string; text: string; mint?: string }[]; equity: { ts: number; equity: number }[]; open: Pos[];
 };
 type Pat = { tag: string; text: string; n: number; win_pct: number; avg_pnl_pct: number };
@@ -432,7 +434,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
         <span>sizing: <b className="text-white">{b?.sizing && b.sizing.n >= 10 ? `half-Kelly (${Math.round(b.sizing.wr * 100)}% wins)` : 'base % until 10 trades'}</b></span>
         {(b?.diag?.launches ?? 1) === 0 && <span className="text-warn">No live launches are reaching Radar — check PumpPortal on the Health page.</span>}
       </div>
-      <div className="mx-6 mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mx-6 mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3">
           <div className="eyebrow">Mood</div>
           <div className={`display text-[24px] capitalize ${MOOD_TONE[md?.word || ''] || ''}`}>{md?.word || '—'}</div>
@@ -447,6 +449,12 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <div className="eyebrow">Rug detector</div>
           <div className="display text-[24px]">{b?.rug_model?.accuracy != null ? `${b.rug_model.accuracy}%` : '—'} <span className="text-[12px] text-white/45">right</span></div>
           <div className="num truncate text-[11px] text-white/50" title={(b?.rug_model?.top || []).map((t) => t.label).join(', ')}>{b?.rug_model?.rugs_seen ?? 0} rugs studied · {(b?.rug_model?.top || []).slice(0, 2).map((t) => t.label.toLowerCase()).join(', ') || 'learning'}</div>
+        </div>
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3">
+          <div className="eyebrow">Timing · next 3 min</div>
+          <div className="display text-[24px]">{b?.timing?.down?.accuracy != null ? `${b.timing.down.accuracy}%` : '—'} <span className="text-[12px] text-white/45">{b?.timing?.active ? 'live' : 'warming up'}</span></div>
+          <div className="num truncate text-[11px] text-white/50" title={`Up: ${(b?.timing?.up_top || []).map((t) => t.label).join(', ')} · Dump: ${(b?.timing?.dn_top || []).map((t) => t.label).join(', ')}`}>
+            {(b?.timing?.down?.trained ?? 0).toLocaleString()} tape lessons · sells at {b?.timing?.dn_exit ?? 62}% dump odds · {b?.timing?.grad_frac ?? 50}% into graduation</div>
         </div>
         <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3">
           <div className="eyebrow">Always learning</div>
@@ -483,6 +491,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
                   </div>
                   <b className="num w-8 text-right">{c.value.toFixed(0)}</b>
                   {c.p_rug != null && <span className={`num w-12 text-right text-[10.5px] ${c.p_rug >= 50 ? 'text-down' : c.p_rug >= 30 ? 'text-warn' : 'text-white/40'}`} title="Rug model: odds it collapses −60% within 20 min">rug {c.p_rug}%</span>}
+                  {c.p_up != null && <span className="num hidden w-16 text-right text-[10.5px] text-white/45 sm:inline" title="Timing model: odds of +12% (▲) or −15% (▼) first in the next 3 minutes"><span className="text-up">▲{c.p_up}</span> <span className="text-down">▼{c.p_dn}</span></span>}
                 </div>
                 <div className="truncate pl-[104px] text-[10.5px] text-white/40">{c.hard ? `✗ ${c.hard}` : c.copy_ranks ? `🪞 ${c.copy_ranks} buying · ${c.why}` : c.why}</div>
               </li>
