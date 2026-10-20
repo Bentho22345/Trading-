@@ -7,11 +7,17 @@ export function wsUrl(): string {
 }
 
 export async function api<T = any>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(API + path, {
+  const go = () => fetch(API + path, {
     credentials: API ? 'include' : 'same-origin',
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
   });
+  let r = await go();
+  // a deploy / restart answers 502-504 for a few seconds: retry reads quietly instead of showing an error
+  for (let i = 0; i < 3 && [502, 503, 504].includes(r.status) && (!init?.method || init.method === 'GET'); i++) {
+    await new Promise((res) => setTimeout(res, 1500 * (i + 1)));
+    r = await go();
+  }
   if (r.status === 401 && typeof window !== 'undefined' && !path.startsWith('/api/login') && location.pathname !== '/login') {
     location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
   }

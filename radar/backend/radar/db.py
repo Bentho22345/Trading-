@@ -380,6 +380,8 @@ class DB:
     def __init__(self, path: Path):
         self.path = path
         self.conn: aiosqlite.Connection | None = None
+        self.readers: list[aiosqlite.Connection] = []     # read-only connections: pages never queue behind background writes
+        self._ri = 0
 
     async def open(self) -> None:
         if str(self.path) != ":memory:":
@@ -394,6 +396,23 @@ class DB:
         self._bulk = asyncio.Lock()
         await self.migrate()
         await self.conn.executescript(SCHEMA)
+        if str(self.path) != ":memory:":
+            import os
+            for _ in range(int(os.environ.get("RADAR_DB_READERS", "2"))):
+                r = await aiosqlite.connect(self.path, isolation_level=None)
+                r.row_factory = aiosqlite.Row
+                for pragma in ("query_only=1", "temp_store=MEMORY", "cache_size=-8192", "mmap_size=67108864", "busy_timeout=5000"):
+                    await r.execute(f"PRAGMA {pragma}")
+                self.readers.append(r)
+
+    def _reader(self) -> aiosqlite.Connection:
+        """A read connection, round-robin. While a bulk transaction is open on the writer, reads go to the writer so a
+        coroutine always sees rows it just wrote (they may sit in that open transaction)."""
+        assert self.conn
+        if not self.readers or self._bulk.locked():
+            return self.conn
+        self._ri = (self._ri + 1) % len(self.readers)
+        return self.readers[self._ri]
 
     async def migrate(self) -> None:
         """Add columns that newer versions introduced to tables created by older versions (SQLite can't do it in CREATE)."""
@@ -422,6 +441,9 @@ class DB:
                 await self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
     async def close(self) -> None:
+        for r in self.readers:
+            await r.close()
+        self.readers = []
         if self.conn:
             await self.conn.close()
 
@@ -444,13 +466,13 @@ class DB:
             await self.conn.execute("COMMIT")
 
     async def all(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
-        assert self.conn
-        async with self.conn.execute(sql, tuple(params)) as cur:
+        async with self._reader().execute(sql, tuple(params)) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
     async def one(self, sql: str, params: Iterable[Any] = ()) -> dict[str, Any] | None:
-        rows = await self.all(sql, params)
-        return rows[0] if rows else None
+        async with self._reader().execute(sql, tuple(params)) as cur:
+            r = await cur.fetchone()
+            return dict(r) if r else None
 
     async def upsert(self, table: str, row: dict[str, Any], key: str | tuple[str, ...]) -> None:
         """Insert or update only the provided (non-None) columns."""

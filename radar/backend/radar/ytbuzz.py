@@ -87,6 +87,7 @@ class YouTubeBuzz:
         self.by_tag: dict[str, list[dict[str, Any]]] = {}
         self.by_ca: dict[str, list[dict[str, Any]]] = {}
         self.titles: list[tuple[str, dict[str, Any]]] = []
+        self.words: dict[str, list[dict[str, Any]]] = {}
         self.last_run: float | None = None
         self.sniper: Any = None
         self.every = float(os.environ.get("YT_BUZZ_EVERY", "3600"))
@@ -107,7 +108,11 @@ class YouTubeBuzz:
             for c in json.loads(r["cas_json"] or "[]"):
                 by_ca.setdefault(c, []).append(v)
             titles.append(((r["title"] or "").lower(), v))
-        self.by_tag, self.by_ca, self.titles = by_tag, by_ca, titles
+        words: dict[str, list[dict[str, Any]]] = {}
+        for t, v in titles:
+            for w in set(re.findall(r"[a-z0-9]+", t)):
+                words.setdefault(w, []).append(v)
+        self.by_tag, self.by_ca, self.titles, self.words = by_tag, by_ca, titles, words
 
     def match(self, mint: str, symbol: str | None, name: str | None) -> dict[str, Any] | None:
         vids: dict[str, dict[str, Any]] = {}
@@ -119,10 +124,17 @@ class YouTubeBuzz:
                 vids[v["id"]] = v
         nm = (name or "").lower().strip()
         if len(nm) >= 6 and nm not in ("solana", "memecoin", "pump fun"):
-            rx = re.compile(rf"\b{re.escape(nm)}\b")
-            for t, v in self.titles:
-                if rx.search(t):
+            parts = re.findall(r"[a-z0-9]+", nm)
+            if len(parts) == 1:                                    # one word: a dict lookup instead of a scan
+                hits = self.words.get(parts[0], []) if self.words else \
+                    [v for t, v in self.titles if parts[0] in re.findall(r"[a-z0-9]+", t)]
+                for v in hits:
                     vids[v["id"]] = v
+            elif parts:
+                phrase = " ".join(parts)
+                for t, v in self.titles:
+                    if phrase in t:
+                        vids[v["id"]] = v
         if not vids:
             return None
         lst = sorted(vids.values(), key=lambda v: -v["views"])

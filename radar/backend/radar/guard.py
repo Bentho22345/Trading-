@@ -47,6 +47,15 @@ async def prune_extra(db: Any, hard: bool = False) -> None:
             await db.exec(sql, (now - age * day,))
         except Exception:  # noqa: BLE001 - a table from a newer feature may not exist yet
             pass
+    # the Helius 1-year backfill can store millions of wallet trades; keep the newest N (the leaderboard needs recent ones most)
+    try:
+        cap = int(os.environ.get("TRADER_TRADES_MAX", "1200000"))
+        row = await db.one("SELECT ts FROM trader_trades ORDER BY ts DESC LIMIT 1 OFFSET ?", (cap,))
+        if row:
+            await db.exec("DELETE FROM trader_trades WHERE ts <= ?", (row["ts"],))
+            STATE["trades_capped"] = STATE.get("trades_capped", 0) + 1
+    except Exception:  # noqa: BLE001
+        pass
     if hard:
         STATE["hard_prunes"] += 1
         for sql, age in (("DELETE FROM trader_trades WHERE ts < ?", 120), ("DELETE FROM pump_trades WHERE ts < ?", 1),
@@ -66,9 +75,12 @@ async def disk_loop(db: Any, path: str) -> None:
             du = shutil.disk_usage(d)
             free = du.free / 1e6
             STATE.update(disk_free_mb=round(free), disk_total_mb=round(du.total / 1e6), db_mb=_size(path), wal_mb=_size(path + "-wal"))
-            hard = free < max(250.0, du.total / 1e6 * 0.12)
+            hard = free < max(250.0, min(du.total / 1e6 * 0.12, 1000.0))   # 2 GB disk → 250 MB; big disks → ≤ 1 GB
             await prune_extra(db, hard=hard)
-            await db.exec("PRAGMA wal_checkpoint(TRUNCATE)")
+            try:   # PASSIVE never waits on readers; journal_size_limit then shrinks the WAL file
+                await db.exec("PRAGMA wal_checkpoint(PASSIVE)")
+            except Exception as e:  # noqa: BLE001
+                log.debug("checkpoint: %s", e)
             if hard:
                 log.warning("disk low (%.0f MB free): pruned hard", free)
             STATE["last_prune"] = time.time()

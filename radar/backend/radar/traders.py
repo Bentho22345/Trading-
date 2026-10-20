@@ -527,6 +527,42 @@ class Traders:
             await asyncio.sleep(0.4)
 
     # ---------------- stats / ranking ----------------
+    def _compute_sync(self, path: str, prices: dict[str, float], now: float) -> dict[str, list[tuple]]:
+        """Runs in a worker thread on its own read-only SQLite connection, streaming ONE wallet at a time (ordered by
+        wallet, ts), so memory stays flat however many trades the Helius backfill stored, and the web server never waits."""
+        import sqlite3
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+        conn.row_factory = sqlite3.Row
+        out: dict[str, list[tuple]] = {w: [] for w in WINDOWS}
+        oldest = now - max(WINDOWS.values())
+        cur = conn.execute("SELECT wallet, mint, ts, side, token_amount, usd FROM trader_trades WHERE ts > ? ORDER BY wallet, ts", (oldest,))
+
+        def flush(trs: list[dict[str, Any]]) -> None:
+            for win, span in WINDOWS.items():
+                since = now - span
+                sub = trs if since <= oldest else [t for t in trs if t["ts"] > since]
+                if not sub:
+                    continue
+                st = compute_wallet(sub, prices)
+                if not st:
+                    continue
+                sc, flags = score(st, sub[-1]["ts"], now)
+                out[win].append((sub[0]["wallet"], st, sc, flags, sub[0]["ts"], sub[-1]["ts"]))
+
+        cur_w, buf = None, []
+        try:
+            for r in cur:
+                if r["wallet"] != cur_w:
+                    if buf:
+                        flush(buf)
+                    cur_w, buf = r["wallet"], []
+                buf.append(dict(r))
+            if buf:
+                flush(buf)
+        finally:
+            conn.close()
+        return out
+
     async def compute(self) -> dict[str, int]:
         now = time.time()
         prices = {r["address"]: r["price_usd"] for r in await self.db.all(
@@ -534,23 +570,10 @@ class Traders:
             (now - 3600,))}
         labels = {r["address"]: r for r in await self.db.all("SELECT address, label, flags, followed FROM traders")}
         counts = {}
-        for win, span in WINDOWS.items():
-            since = now - span
-            rows = await self.db.all("SELECT wallet, mint, ts, side, token_amount, usd FROM trader_trades WHERE ts > ? ORDER BY wallet, ts",
-                                     (since,))
-            by: dict[str, list] = {}
-            for r in rows:
-                by.setdefault(r["wallet"], []).append(r)
-            results = []
-            for addr, trs in by.items():
-                s = compute_wallet(trs, prices)
-                if not s:
-                    continue
-                last = trs[-1]["ts"]
-                sc, flags = score(s, last, now)
-                results.append((addr, s, sc, flags, trs[0]["ts"], last))
+        by_win = await asyncio.to_thread(self._compute_sync, str(self.db.path), prices, now)
+        for win in WINDOWS:
+            results = by_win[win]
             results.sort(key=lambda x: -(x[2] if x[2] is not None else -1e9))
-            await self.db.exec("DELETE FROM trader_stats WHERE win=?", (win,))
             batch = []
             rank = 0
             for addr, s, sc, flags, first, last in results:
@@ -562,11 +585,13 @@ class Traders:
                               s["trades"], s["tokens"], s["wins"], s["losses"], s["win_rate"], s["roi"], s["median_roi"], s["best_roi"],
                               s["best_token"], s["best_pnl_usd"], s["avg_hold_s"], sc, rk, first, last, json.dumps(s["series"]),
                               json.dumps(flags), now))
+            await self.db.exec("DELETE FROM trader_stats WHERE win=?", (win,))
             await self.db.many("INSERT INTO trader_stats (address, win, realized_usd, unrealized_usd, pnl_usd, volume_usd, invested_usd, trades, "
                                "tokens, wins, losses, win_rate, roi, median_roi, best_roi, best_token, best_pnl_usd, avg_hold_s, score, rank, "
                                "coverage_from, last_trade, series_json, flags, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                batch)
             counts[win] = rank
+        del by_win
         self.ranked = {r["address"]: {"rank": r["rank"], "score": r["score"], "label": (labels.get(r["address"]) or {}).get("label")}
                        for r in await self.db.all("SELECT address, rank, score FROM trader_stats WHERE win='30d' AND rank IS NOT NULL")}
         self.followed = {a for a, r in labels.items() if r["followed"]}

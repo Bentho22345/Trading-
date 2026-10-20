@@ -148,31 +148,51 @@ class SmartMoney:
         return {"tracking": bool(self.tracked) or ranked["tracking"],
                 "smart_buyers": await self.smart_buyers(mint) + ranked["smart_buyers"], "kol_selling": bool(shill)}
 
+    def _discover_sync(self, path: str, now: float) -> dict[str, dict[str, Any]]:
+        """Worker thread, own read-only connection, ONE query per coin (was one per buyer — tens of thousands every
+        10 minutes on the shared connection, which made every page wait)."""
+        import sqlite3
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+        stats: dict[str, dict[str, Any]] = {}
+        try:
+            mints = conn.execute("SELECT mint, MIN(ts) t0 FROM pump_trades WHERE ts > ? GROUP BY mint HAVING COUNT(*) >= 20",
+                                 (now - 3 * 86400,)).fetchall()
+            for mint, t0 in mints:
+                if now - t0 < 3600:
+                    continue                                   # need at least an hour to judge the outcome
+                rows = conn.execute("SELECT ts, side, trader, mcap_sol FROM pump_trades WHERE mint=? ORDER BY ts", (mint,)).fetchall()
+                suffix_max, m = [0.0] * (len(rows) + 1), 0.0
+                for i in range(len(rows) - 1, -1, -1):
+                    m = max(m, rows[i][3] or 0.0)
+                    suffix_max[i] = m
+                first_buy: dict[str, tuple[int, float]] = {}
+                first_sell: dict[str, float] = {}
+                for i, (ts, side, trader, mc) in enumerate(rows):
+                    if not trader:
+                        continue
+                    if side == "buy" and ts <= t0 + 900 and mc and trader not in first_buy:
+                        first_buy[trader] = (i, ts)
+                    elif side == "sell" and trader not in first_sell:
+                        first_sell[trader] = ts
+                for trader, (i, ts) in first_buy.items():
+                    mc = rows[i][3]
+                    mult = (suffix_max[i + 1] or mc) / mc if i + 1 < len(rows) else 1.0
+                    st = stats.setdefault(trader, {"wins": 0, "losses": 0, "mults": [], "holds": [], "tokens": 0})
+                    st["tokens"] += 1
+                    st["mults"].append(min(max(mult, 0.0), 50))
+                    st["wins" if mult >= 3 else "losses"] += 1
+                    if first_sell.get(trader) and first_sell[trader] > ts:
+                        st["holds"].append(first_sell[trader] - ts)
+        finally:
+            conn.close()
+        return stats
+
     async def discover(self) -> int:
         """Score wallets that bought early (first 15 min of trading we observed) into tokens that later ran."""
         now = time.time()
-        since = now - 3 * 86400
-        firsts = {r["mint"]: r for r in await self.db.all(
-            "SELECT mint, MIN(ts) t0, MAX(mcap_sol) peak FROM pump_trades WHERE ts > ? GROUP BY mint HAVING COUNT(*) >= 20", (since,))}
-        stats: dict[str, dict[str, Any]] = {}
-        for mint, f in firsts.items():
-            if now - f["t0"] < 3600:
-                continue  # need at least an hour to judge the outcome
-            buys = await self.db.all("SELECT trader, MIN(ts) ts, MIN(mcap_sol) mc FROM pump_trades WHERE mint=? AND side='buy' "
-                                     "AND ts <= ? GROUP BY trader", (mint, f["t0"] + 900))
-            for b in buys:
-                if not b["trader"] or not b["mc"]:
-                    continue
-                peak_after = await self.db.one("SELECT MAX(mcap_sol) m FROM pump_trades WHERE mint=? AND ts > ?", (mint, b["ts"]))
-                mult = (peak_after["m"] or b["mc"]) / b["mc"]
-                sell = await self.db.one("SELECT MIN(ts) t FROM pump_trades WHERE mint=? AND trader=? AND side='sell'", (mint, b["trader"]))
-                s = stats.setdefault(b["trader"], {"wins": 0, "losses": 0, "mults": [], "holds": [], "tokens": 0})
-                s["tokens"] += 1
-                s["mults"].append(min(mult, 50))
-                s["wins" if mult >= 3 else "losses"] += 1
-                if sell["t"]:
-                    s["holds"].append(sell["t"] - b["ts"])
+        stats = await asyncio.to_thread(self._discover_sync, str(self.db.path), now)
         n = 0
+        rows = []
         for addr, s in stats.items():
             if s["tokens"] < 3:
                 continue
@@ -180,14 +200,14 @@ class SmartMoney:
             avg = sum(s["mults"]) / len(s["mults"])
             score = round(wr * 60 + min(avg, 10) * 4, 1)
             tracked = 1 if score >= self.cfg.scoring["smart_money"]["wallet_min_score"] and s["wins"] >= 2 else 0
-            await self.db.exec(
+            rows.append((addr, "smart", score, s["wins"], s["losses"], round(avg, 2),
+                         sum(s["holds"]) / len(s["holds"]) if s["holds"] else None, s["tokens"], tracked, now))
+            n += tracked
+        await self.db.many(
                 "INSERT INTO wallets (address, kind, score, wins, losses, avg_multiple, avg_hold_s, tokens, tracked, updated) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(address) DO UPDATE SET score=excluded.score, wins=excluded.wins, "
                 "losses=excluded.losses, avg_multiple=excluded.avg_multiple, avg_hold_s=excluded.avg_hold_s, tokens=excluded.tokens, "
-                "tracked=MAX(tracked, excluded.tracked), updated=excluded.updated",
-                (addr, "smart", score, s["wins"], s["losses"], round(avg, 2),
-                 sum(s["holds"]) / len(s["holds"]) if s["holds"] else None, s["tokens"], tracked, now))
-            n += tracked
+                "tracked=MAX(tracked, excluded.tracked), updated=excluded.updated", rows)
         await self.refresh_tracked()
         return n
 

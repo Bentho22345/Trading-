@@ -111,7 +111,8 @@ class Trends:
             prev = self.items.get(key)
             item = {"term": r["term"], "source": name, "url": r.get("url"), "rank": r.get("rank"), "score": r.get("score"),
                     "first_seen": prev["first_seen"] if prev else now, "ts": now,
-                    "sources": sorted(set((prev or {}).get("sources", [])) | {name})}
+                    "sources": sorted(set((prev or {}).get("sources", [])) | {name}),
+                    "words": [norm(w) for w in re.split(r"\W+", r["term"]) if len(w) >= 4]}
             self.items[key] = item
             if prev is None:
                 new += 1
@@ -131,7 +132,8 @@ class Trends:
     async def loop(self) -> None:
         for r in await self.db.all("SELECT * FROM trend_items WHERE ts > ?", (time.time() - 12 * 3600,)):
             self.items[r["key"]] = {"term": r["term"], "source": r["source"], "url": r["url"], "rank": r["rank"], "score": r["score"],
-                                    "first_seen": r["ts"], "ts": r["ts"], "sources": [r["source"]]}
+                                    "first_seen": r["ts"], "ts": r["ts"], "sources": [r["source"]],
+                                    "words": [norm(w) for w in re.split(r"\W+", r["term"] or "") if len(w) >= 4]}
         await asyncio.sleep(float(os.environ.get("TRENDS_DELAY", "20")))
         while True:
             now = time.time()
@@ -154,7 +156,7 @@ class Trends:
             return None
         best = None
         for key, it in self.items.items():
-            words = [norm(w) for w in re.split(r"\W+", it["term"]) if len(w) >= 4]
+            words = it.get("words") or []
             hit = key == nm or (len(key) >= 4 and key == sym) or (len(nm) >= 5 and nm in key and len(nm) >= len(key) * 0.5) \
                 or (len(words) == 1 and words[0] and (words[0] == nm or words[0] == sym))
             if hit and (best is None or (it.get("rank") or 99) < (best.get("rank") or 99)):
@@ -163,7 +165,7 @@ class Trends:
 
     def board(self, limit: int = 60) -> list[dict[str, Any]]:
         rows = sorted(self.items.values(), key=lambda r: (-len(r["sources"]), r["source"], r.get("rank") or 99))
-        return rows[:limit]
+        return [{k: v for k, v in r.items() if k != "words"} for r in rows[:limit]]
 
     async def announce_match(self, L: Any, m: dict[str, Any]) -> None:
         await feed.push("trends", "match", f"🌐 ${L.symbol or L.mint[:6]} is named after a live trend: {m['term']}",

@@ -252,29 +252,40 @@ class SocialEngine:
             await asyncio.sleep(5)
 
     async def update_metrics(self) -> None:
+        """All narratives in ONE aggregate query and ONE batched write (was a read + a write per narrative every 5s,
+        which kept the database busy most of the time once there were thousands of narratives)."""
         now = time.time()
         k = self.cfg.scoring["narrative"]
-        for n in await self.db.all("SELECT * FROM narratives WHERE last_seen > ?", (now - 24 * 3600,)):
-            rows = await self.db.all(
-                "SELECT e.ts, e.source, e.author_id, e.author_tier, e.followers, e.engagement, COALESCE(a.bot_score,0) bot "
-                "FROM social_events e LEFT JOIN authors a ON a.id=e.author_id WHERE e.narrative_id=? AND e.ts > ?",
-                (n["id"], now - 24 * 3600))
-            if not rows:
+        narrs = {n["id"]: n for n in await self.db.all("SELECT * FROM narratives WHERE last_seen > ?", (now - 24 * 3600,))}
+        if not narrs:
+            await hub.publish("narratives", await self.board(limit=40))
+            return
+        aggs = await self.db.all(
+            "SELECT e.narrative_id nid, COUNT(*) n, SUM(e.ts > ?) c1, SUM(e.ts > ?) c5, SUM(e.ts > ?) c60, "
+            "COUNT(DISTINCT e.author_id) authors, GROUP_CONCAT(DISTINCT e.source) sources, MAX(e.ts) last, "
+            "SUM(CASE e.author_tier WHEN 'vip' THEN 3.0 WHEN 'kol' THEN 2.0 WHEN 'news' THEN 2.0 WHEN 'verified' THEN 1.5 "
+            "    WHEN 'new' THEN 0.3 ELSE 1.0 END * CASE WHEN COALESCE(e.followers,0) >= 1000000 THEN 6.0 WHEN e.followers >= 100000 THEN 5.0 "
+            "    WHEN e.followers >= 10000 THEN 4.0 WHEN e.followers >= 1000 THEN 3.0 WHEN e.followers >= 100 THEN 2.04 ELSE 1.3 END) reach, "
+            "SUM(COALESCE(a.bot_score, 0) >= 0.5) bots "
+            "FROM social_events e LEFT JOIN authors a ON a.id=e.author_id "
+            "WHERE e.narrative_id IS NOT NULL AND e.ts > ? GROUP BY e.narrative_id",
+            (now - 60, now - 300, now - 3600, now - 24 * 3600))
+        rows = []
+        for a in aggs:
+            n = narrs.get(a["nid"])
+            if not n or not a["n"]:
                 continue
-            c1 = sum(r["ts"] > now - 60 for r in rows)
-            c5 = sum(r["ts"] > now - 300 for r in rows)
-            c60 = sum(r["ts"] > now - 3600 for r in rows)
+            total, c1, c5, c60 = a["n"], a["c1"] or 0, a["c5"] or 0, a["c60"] or 0
             age_min = max(1.0, (now - (n["first_seen"] or now)) / 60)
-            base = (len(rows) - c5) / max(5.0, min(age_min, 1440) - 5)          # per-minute baseline before the last 5m
+            base = (total - c5) / max(5.0, min(age_min, 1440) - 5)          # per-minute baseline before the last 5m
             v5 = c5 / 5
-            z = (v5 - base) / math.sqrt(max(base, 0.05) / 5)                    # Poisson z-score of the last 5 minutes
-            authors = {r["author_id"] for r in rows}
-            sources = sorted({r["source"] for r in rows})
-            reach = sum(TIER_W.get(r["author_tier"] or "normal", 1) * math.log10((r["followers"] or 10) + 10) for r in rows)
-            bot_share = sum(1 for r in rows if (r["bot"] or 0) >= 0.5) / len(rows)
-            if age_min < 15 or len(rows) < 5:
+            z = (v5 - base) / math.sqrt(max(base, 0.05) / 5)                # Poisson z-score of the last 5 minutes
+            sources = sorted(set((a["sources"] or "").split(",")) - {""})
+            reach = a["reach"] or 0.0
+            bot_share = (a["bots"] or 0) / total
+            if age_min < 15 or total < 5:
                 stage = "birth"
-            elif now - max(r["ts"] for r in rows) > 1800 or (c60 and v5 < 0.4 * (c60 / 60)):
+            elif now - (a["last"] or 0) > 1800 or (c60 and v5 < 0.4 * (c60 / 60)):
                 stage = "fading"
             elif c1 >= v5 and v5 >= max(base * 1.5, 0.2):
                 stage = "ignition"
@@ -285,11 +296,10 @@ class SocialEngine:
             if z >= k["breakout_sigma"] and c5 >= 5 and (not flash_until or flash_until < now) and stage != "fading":
                 flash_until = now + 1800
                 await self._velocity_flash(n, v5, z, sources)
-            await self.db.exec("UPDATE narratives SET stage=?, posts=?, authors=?, sources_json=?, vel_1m=?, vel_5m=?, vel_1h=?, "
-                               "accel=?, reach=?, bot_share=?, strength=?, flash_until=?, zscore=?, updated=? WHERE id=?",
-                               (stage, len(rows), len(authors), json.dumps(sources), c1, round(v5, 2), round(c60 / 60, 3),
-                                round(c1 - v5, 2), round(reach, 1), round(bot_share, 2), round(strength, 1), flash_until,
-                                round(z, 2), now, n["id"]))
+            rows.append((stage, total, a["authors"], json.dumps(sources), c1, round(v5, 2), round(c60 / 60, 3), round(c1 - v5, 2),
+                         round(reach, 1), round(bot_share, 2), round(strength, 1), flash_until, round(z, 2), now, n["id"]))
+        await self.db.many("UPDATE narratives SET stage=?, posts=?, authors=?, sources_json=?, vel_1m=?, vel_5m=?, vel_1h=?, "
+                           "accel=?, reach=?, bot_share=?, strength=?, flash_until=?, zscore=?, updated=? WHERE id=?", rows)
         await hub.publish("narratives", await self.board(limit=40))
 
     async def _velocity_flash(self, n: dict[str, Any], v5: float, z: float, sources: list[str]) -> None:
