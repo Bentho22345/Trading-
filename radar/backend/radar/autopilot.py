@@ -48,6 +48,7 @@ DEFAULT: dict[str, Any] = {
               "trailing_pct": 30, "trail_after_x": 1.5, "time_stop_min": 45, "rug_exit": True},
     "exec": {"slippage_pct": 15, "priority_fee_sol": 0.0005},
     "demo": {"start_sol": 10.0},
+    "real_engine": "rules",          # what drives REAL money: "rules" (the settings below) or "brain" (self-driving, under the same caps)
 }
 REAL_PHRASE = "I UNDERSTAND THIS USES REAL MONEY"
 
@@ -76,8 +77,10 @@ def validate(c: dict[str, Any]) -> dict[str, Any]:
     c["exec"]["slippage_pct"] = max(0.5, min(50.0, float(c["exec"]["slippage_pct"])))
     c["exec"]["priority_fee_sol"] = max(0.0, min(0.05, float(c["exec"]["priority_fee_sol"])))
     f["max_mcap_usd"] = max(1000.0, float(f["max_mcap_usd"]))
-    if c["mode"] not in ("off", "demo", "real"):
+    if c["mode"] not in ("off", "demo", "auto", "real"):
         c["mode"] = "off"
+    if c.get("real_engine") not in ("rules", "brain"):
+        c["real_engine"] = "rules"
     return c
 
 
@@ -101,10 +104,12 @@ class Autopilot:
     async def load(self) -> None:
         self.c = validate(merge(DEFAULT, await self.cfg.kv_get("autopilot:cfg") or {}))
         await self.brain.load()
+        await self.brain.refresh_stats()
         for p in await self.db.all("SELECT * FROM auto_positions WHERE status IN ('open','closing')"):
             p = dict(p)
             p["tp_done"] = json.loads(p.get("tp_done") or "[]")
             p["features"] = json.loads(p.get("features_json") or "null")
+            p["leaders"] = json.loads(p.get("leaders_json") or "[]")
             self.open[p["id"]] = p
             self.entered[p["mint"]] = p["opened"]
 
@@ -170,7 +175,11 @@ class Autopilot:
 
     # ---------------- external triggers ----------------
     async def on_trade(self, t: dict[str, Any]) -> None:
-        """Copy-trading input: top-ranked / followed / smart wallets buying."""
+        """Copy-trading input: top-ranked / followed / smart wallets buying (and selling — the brain mirrors exits)."""
+        try:
+            await self.brain.on_trade(t)
+        except Exception as e:  # noqa: BLE001
+            log.debug("brain on_trade: %s", e)
         cp = self.c["triggers"]["copy"]
         if not cp["on"] or self.c["mode"] in ("off", "auto") or t.get("side") != "buy" or not t.get("trader"):
             return
@@ -196,12 +205,15 @@ class Autopilot:
     async def run(self) -> None:
         await self.load()
         while True:
-            await asyncio.sleep(1.0)
+            fast = self.c["mode"] == "auto" or (self.c["mode"] == "real" and self.c.get("real_engine") == "brain")
+            await asyncio.sleep(0.5 if fast else 1.0)
             self.stats["ticks"] += 1
             try:
                 await self.manage()
                 if self.c["mode"] == "auto":
-                    await self.brain.tick()
+                    await self.brain.tick("auto")
+                elif self.c["mode"] == "real" and self.c.get("real_engine") == "brain":
+                    await self.brain.tick("real")
                 elif self.c["mode"] != "off":
                     await self.scan()
                 if self.c["mode"] == "auto" or any(p["mode"] == "auto" for p in self.open.values()):
@@ -378,7 +390,7 @@ class Autopilot:
             if closing:
                 p.update(status="closed", exit_reason=reason, closed=time.time(), pnl_sol=p["sol_out"] - p["sol_in"])
                 self.open.pop(p["id"], None)
-                if p["mode"] == "auto":
+                if p["mode"] == "auto" or p.get("trigger") in ("brain", "copy"):
                     try:
                         await self.brain.learn(p)
                     except Exception as e:  # noqa: BLE001
@@ -419,7 +431,7 @@ class Autopilot:
             p["peak_price_sol"] = max(p["peak_price_sol"], px)
             x = px / p["entry_price_sol"]
             peak_x = p["peak_price_sol"] / p["entry_price_sol"]
-            if p["mode"] == "auto":                                     # the brain runs its own exits
+            if p["mode"] == "auto" or p.get("trigger") in ("brain", "copy"):   # the brain runs its own exits
                 ex = self.brain.exit_for(p, L.result if L is not None else None, x, peak_x)
                 if ex:
                     await self.sell(p, ex[0], ex[1])

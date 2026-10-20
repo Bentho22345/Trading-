@@ -27,6 +27,7 @@ class SmartMoney:
         self.top_seen: dict[str, None] = {}
         self.push_times: list[float] = []
         self.helius: Any = None
+        self.trade_hooks: list[Any] = []                # Autopilot brain: copy-trading also sees swaps beyond pump.fun
 
     async def load(self) -> None:
         for w in self.cfg.watch.get("kol_wallets") or []:
@@ -51,6 +52,12 @@ class SmartMoney:
 
     async def on_trade(self, t: dict[str, Any]) -> None:
         trader = t.get("trader") or ""
+        if t.get("source_helius"):
+            for fn in self.trade_hooks:
+                try:
+                    await fn(t)
+                except Exception as e:  # noqa: BLE001
+                    log.debug("smart trade hook: %s", e)
         if trader in self.also_follow:
             await self.on_top_trade(t, self.also_follow[trader])
         w = self.tracked.get(trader)
@@ -252,7 +259,7 @@ class SmartMoney:
                             legs = wallet_swaps(tx, addr)
                             for lg in legs:
                                 await self.on_trade({"mint": lg["mint"], "ts": float(tx.get("blockTime") or time.time()), "side": lg["side"],
-                                                     "sol": lg["sol"], "tokens": lg["tokens"], "trader": addr, "mcap_sol": None,
+                                                     "sol": lg["sol"], "tokens": lg["tokens"], "trader": addr, "mcap_sol": None, "source_helius": True,
                                                      "signature": sg["signature"] if len(legs) == 1 else f"{sg['signature']}:{lg['mint']}"})
             except asyncio.CancelledError:
                 raise

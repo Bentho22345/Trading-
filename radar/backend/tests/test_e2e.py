@@ -580,7 +580,17 @@ def test_self_driving_mode_watches_values_and_streams(stack):
             break
         time.sleep(0.5)
     assert b["mode"] == "auto" and b["candidates"] and all(0 <= c["value"] <= 100 for c in b["candidates"])
-    assert any(e["kind"] == "mode" for e in b["log"]) and len(b["weights"]) >= 10 and b["balance"] <= 10
+    assert any(e["kind"] == "mode" for e in b["log"]) and len(b["weights"]) >= 20 and b["balance"] <= 10
+    bought = False
+    for _ in range(60):                                                   # it must actually trade on its own now
+        b = httpx.get(f"{base}/brain").json()
+        if b["open"] or any(e["kind"] == "buy" for e in b["log"]):
+            bought = True
+            break
+        time.sleep(0.5)
+    assert bought, b["log"][:5]
+    assert b["threshold"] < 100 and b["diag"]["scored"] > 0
+    assert httpx.post(f"{base}/brain/aggression", json={"level": "degen"}).json()["aggression"] == "degen"
     q = httpx.post(f"{base}/buy", json={"mint": b["candidates"][0]["mint"], "sol": 0.05})
     if q.status_code == 200:
         assert q.json()["position"]["mode"] == "demo"                    # your quick-buys never land in the brain's pot

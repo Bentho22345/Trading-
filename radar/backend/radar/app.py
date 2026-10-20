@@ -171,6 +171,7 @@ async def lifespan(app: FastAPI):
     S.wallet = TradingWallet(S.cfg, S.chain)
     S.autopilot = Autopilot(S.db, S.cfg, S.sniper, S.tracker, S.traders, S.smart, S.alerts, S.wallet)
     S.tracker.hooks["trade"].append(S.autopilot.on_trade)
+    S.smart.trade_hooks.append(S.autopilot.brain.on_trade)      # copy-trading sees the best wallets' Raydium / Jupiter swaps too
     S.xradar.call_hooks.append(S.autopilot.on_x_call)
     S.tgbot.autopilot = S.autopilot
     from .trends import Trends

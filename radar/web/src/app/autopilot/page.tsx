@@ -299,6 +299,7 @@ function Settings({ d, onSaved }: { d: any; onSaved: () => void }) {
 function RealModal({ d, onClose, onDone }: { d: any; onClose: () => void; onDone: () => void }) {
   const [pw, setPw] = useState('');
   const [phrase, setPhrase] = useState('');
+  const [engine, setEngine] = useState<string>(d?.config?.real_engine || 'rules');
   const [err, setErr] = useState<string | null>(null);
   const s = d?.config?.size || {};
   return (
@@ -311,6 +312,14 @@ function RealModal({ d, onClose, onDone }: { d: any; onClose: () => void; onDone
           <li>• Memecoins usually go to zero. Slippage, failed transactions and rugs happen. Only deposit what you can lose.</li>
           <li>• Panic sell (here or <b>/panic</b> in Telegram) sells everything and stops.</li>
         </ul>
+        <div className="mt-4 text-[12px] text-white/60">Real money is driven by:</div>
+        <div className="mt-1 flex rounded-full bg-white/[0.06] p-1">
+          {[['rules', 'My rules'], ['brain', 'Self-driving brain']].map(([k, label]) => (
+            <button key={k} onClick={() => api('/api/autopilot/real-engine', { method: 'POST', body: JSON.stringify({ engine: k }) }).then(() => setEngine(k))}
+              className={`flex-1 rounded-full px-3 py-1.5 text-[12px] font-bold ${engine === k ? 'bg-white text-black' : 'text-white/60'}`}>{label}</button>
+          ))}
+        </div>
+        {engine === 'brain' && <p className="mt-1 text-[11px] text-white/45">The brain picks and sizes trades itself, but never above your ◎{s.buy_sol} per buy (hard cap ◎{s.max_buy_sol_hard}), {s.max_open} open positions, ◎{s.max_daily_sol}/day or the daily loss limit.</p>}
         <input value={pw} onChange={(e) => setPw(e.target.value)} type="password" placeholder="Radar password" className="mt-4 w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-[13px]" />
         <input value={phrase} onChange={(e) => setPhrase(e.target.value)} placeholder={`Type: ${d?.real_phrase}`} className="mt-2 w-full rounded-xl border border-white/10 bg-transparent px-3 py-2 text-[13px]" />
         {err && <p className="mt-2 text-[12px] text-down">{err}</p>}
@@ -325,9 +334,13 @@ function RealModal({ d, onClose, onDone }: { d: any; onClose: () => void; onDone
 }
 
 type Brain = {
-  threshold: number; trained: number; balance: number; summary: any; mode: string;
+  threshold: number; trained: number; balance: number; summary: any; mode: string; aggression: string; levels: Record<string, any>;
+  shadow: { trained: number; hit_rate: number | null; pending: number; brier: number | null };
+  diag: { launches?: number; scored?: number; copy_watch?: number; shadow_pending?: number };
+  copies: { mint: string; symbol?: string | null; wallets: number; best_rank: number; last: number; age_s: number }[];
+  sizing: { n: number; wr: number; avg_win: number; avg_loss: number } | null;
   weights: { key: string; label: string; w: number; prior: number }[];
-  candidates: { mint: string; symbol?: string; value: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string }[];
+  candidates: { mint: string; symbol?: string; value: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
   log: { ts: number; kind: string; text: string; mint?: string }[]; equity: { ts: number; equity: number }[]; open: Pos[];
 };
 const LOG_TONE: Record<string, string> = { buy: 'text-up', sell: 'text-warn', learn: 'text-accent', skip: 'text-white/55', error: 'text-down', mode: 'text-flash', reset: 'text-flash' };
@@ -363,6 +376,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
       if (data.event) n.log = [data.event, ...x.log].slice(0, 150);
       if (data.candidates) n.candidates = data.candidates;
       if (data.threshold != null) n.threshold = data.threshold;
+      if (data.diag) n.diag = data.diag;
       return n;
     });
     if (data.event && ['buy', 'sell', 'learn'].includes(data.event.kind)) load();
@@ -382,12 +396,26 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <span>Trades <b>{sm?.closed ?? 0}</b>{sm?.win_rate != null ? <> · <b>{sm.win_rate}%</b> wins</> : null}</span>
           <span>Learned from <b>{b?.trained ?? 0}</b></span>
           <span>Entry bar <b className="text-flash">{b?.threshold?.toFixed(0) ?? '—'}</b></span>
+          <span className="flex rounded-full bg-white/[0.06] p-0.5">
+            {['careful', 'aggressive', 'degen'].map((lv) => (
+              <button key={lv} onClick={() => api('/api/autopilot/brain/aggression', { method: 'POST', body: JSON.stringify({ level: lv }) }).then(load)}
+                className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold capitalize ${b?.aggression === lv ? 'bg-flash text-white' : 'text-white/55 hover:text-white'}`}>{lv}</button>
+            ))}
+          </span>
           {!on && <button onClick={() => onMode('auto')} className="rounded-full bg-flash px-3 py-1 text-[12px] font-bold text-white">Start</button>}
           <button onClick={() => confirm("Sell the brain's positions and reset what it learned (and its demo money)?") && api('/api/autopilot/brain/reset', { method: 'POST' }).then(load)}
             className="rounded-full border border-white/15 px-3 py-1 text-[12px] text-white/60 hover:text-white">Reset brain</button>
         </div>
       </header>
-      <div className="px-6 pt-4"><Equity pts={b?.equity || []} start={start} /></div>
+      <div className="num flex flex-wrap gap-x-5 gap-y-1 px-6 pt-3 text-[11.5px] text-white/55">
+        <span>watching <b className="text-white">{b?.diag?.scored ?? 0}</b> of {b?.diag?.launches ?? 0} live launches</span>
+        <span>copy signals <b className="text-white">{b?.diag?.copy_watch ?? 0}</b></span>
+        <span>learned from <b className="text-white">{(b?.shadow?.trained ?? 0).toLocaleString()}</b> watched coins{b?.shadow?.hit_rate != null ? ` (${b.shadow.hit_rate}% ran ≥1.8×)` : ''}</span>
+        {b?.shadow?.brier != null && <span>forecast error <b className="text-white">{b.shadow.brier}</b></span>}
+        <span>sizing: <b className="text-white">{b?.sizing && b.sizing.n >= 10 ? `half-Kelly (${Math.round(b.sizing.wr * 100)}% wins)` : 'base % until 10 trades'}</b></span>
+        {(b?.diag?.launches ?? 1) === 0 && <span className="text-warn">No live launches are reaching Radar — check PumpPortal on the Health page.</span>}
+      </div>
+      <div className="px-6 pt-2"><Equity pts={b?.equity || []} start={start} /></div>
       <div className="grid gap-px bg-white/[0.06] lg:grid-cols-3">
         <div className="bg-[var(--color-bg)]/60 p-5">
           <div className="eyebrow mb-3 flex items-center gap-2"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-flash" />What it&apos;s thinking</div>
@@ -416,10 +444,21 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
                   </div>
                   <b className="num w-8 text-right">{c.value.toFixed(0)}</b>
                 </div>
-                <div className="truncate pl-[104px] text-[10.5px] text-white/40">{c.hard ? `✗ ${c.hard}` : c.why}</div>
+                <div className="truncate pl-[104px] text-[10.5px] text-white/40">{c.hard ? `✗ ${c.hard}` : c.copy_ranks ? `🪞 ${c.copy_ranks} buying · ${c.why}` : c.why}</div>
               </li>
             ))}
             {!b?.candidates?.length && <li className="text-[12px] text-white/40">Waiting for live launches…</li>}
+          </ul>
+          <div className="eyebrow mb-2 mt-5">Copy-trading · best wallets buying now</div>
+          <ul className="space-y-1">
+            {(b?.copies || []).map((c) => (
+              <li key={c.mint} className="num flex items-center gap-2 text-[11.5px]">
+                <Link href={`/token?a=${c.mint}`} className="w-24 truncate font-semibold hover:underline">{c.symbol ? `$${c.symbol}` : c.mint.slice(0, 6)}</Link>
+                <span className="text-white/55">{c.wallets} wallet{c.wallets > 1 ? 's' : ''} · best #{c.best_rank}</span>
+                <span className="ml-auto text-white/35">{ago(c.last, now)}</span>
+              </li>
+            ))}
+            {!b?.copies?.length && <li className="text-[11.5px] text-white/40">When a top-20 wallet (or two top-100s) buys, it copies — and mirrors their sells.</li>}
           </ul>
         </div>
         <div className="bg-[var(--color-bg)]/60 p-5">

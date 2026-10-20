@@ -46,6 +46,30 @@ async def brain() -> dict[str, Any]:
             "open": [p for p in (await S.autopilot.snapshot())["open"] if p["mode"] == "auto"]}
 
 
+class AggBody(BaseModel):
+    level: str
+
+
+@router.post("/brain/aggression")
+async def brain_aggression(b: AggBody) -> dict[str, Any]:
+    await S.autopilot.brain.set_aggression(b.level)
+    return await S.autopilot.brain.snapshot()
+
+
+class EngineBody(BaseModel):
+    engine: str
+
+
+@router.post("/real-engine")
+async def real_engine(b: EngineBody) -> dict[str, Any]:
+    """What drives real money: your rules, or the self-driving brain (still capped by your size & daily limits)."""
+    if b.engine not in ("rules", "brain"):
+        raise HTTPException(400, "engine must be rules or brain")
+    S.autopilot.c["real_engine"] = b.engine
+    await S.cfg.kv_set("autopilot:cfg", S.autopilot.c)
+    return S.autopilot.c
+
+
 @router.post("/brain/reset")
 async def brain_reset() -> dict[str, Any]:
     for p in [p for p in S.autopilot.open.values() if p["mode"] == "auto"]:
