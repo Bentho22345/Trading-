@@ -9,7 +9,7 @@ import { api } from '@/lib/api';
 import { ago, short } from '@/lib/format';
 import { useLive, useNow, usePoll } from '@/lib/live';
 
-type Pos = { id: number; mode: string; mint: string; symbol: string; trigger: string; detail: string; opened: number; sol_in: number; sol_out: number;
+type Pos = { id: number; mode: string; mint: string; symbol: string; trigger: string; detail: string; opened: number; sol_in: number; sol_out: number; style?: string | null; ride?: boolean;
   tokens: number; tokens_left: number; x: number | null; peak_x: number; value_sol: number; pnl_sol: number; tp_done: number[] };
 const sol = (v?: number | null, d = 3) => (v == null ? '—' : `${v >= 0 ? '' : '−'}◎${Math.abs(v).toFixed(d)}`);
 const TRIG: Record<string, string> = { snipe: 'Snipe score', strategies: 'Strategies', tweet_race: 'Tweet races (X)', copy: 'Copy top wallets', dev: 'Proven devs', x_call: 'X contract calls' };
@@ -93,6 +93,8 @@ function Positions({ rows, now, onChange }: { rows: Pos[]; now: number; onChange
               <div className="flex flex-wrap items-center gap-3">
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase ${p.mode === 'real' ? 'bg-down text-white' : 'bg-up/15 text-up'}`}>{p.mode}</span>
                 <Link href={`/token?a=${p.mint}`} className="text-[16px] font-bold hover:underline">${p.symbol}</Link>
+                {p.ride ? <span className="rounded-full bg-up/20 px-2 py-0.5 text-[10px] font-extrabold uppercase text-up">riding a surge</span>
+                  : p.style === 'scalp' ? <span className="rounded-full bg-flash/20 px-2 py-0.5 text-[10px] font-extrabold uppercase text-flash">⚡ scalp</span> : null}
                 <span className="text-[11.5px] text-white/45">{p.trigger} · {p.detail} · {ago(p.opened, now)} ago</span>
                 <span className={`num ml-auto text-[22px] font-bold ${(p.x ?? 0) >= 1 ? 'text-up' : 'text-down'}`}>{p.x ? `${p.x.toFixed(2)}×` : '—'}</span>
               </div>
@@ -350,9 +352,11 @@ type Brain = {
   copies: { mint: string; symbol?: string | null; wallets: number; best_rank: number; last: number; age_s: number }[];
   sizing: { n: number; wr: number; avg_win: number; avg_loss: number } | null;
   weights: { key: string; label: string; w: number; prior: number }[];
+  scalper?: { on: boolean; n: number; wins: number; pnl_sol: number; bar?: number; tp?: number; stop?: number; max_s?: number; open: number; riding: number; streak: number; recent_pct: number | null };
+  skips?: Record<string, number>;
   timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_exit: number;
     grad_frac: number; active: boolean; up_top: { label: string; w: number }[]; dn_top: { label: string; w: number }[] };
-  candidates: { mint: string; symbol?: string; value: number; p_rug?: number; p_up?: number; p_dn?: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
+  candidates: { mint: string; symbol?: string; value: number; p_rug?: number; p_up?: number; p_dn?: number; scalp?: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
   log: { ts: number; kind: string; text: string; mint?: string }[]; equity: { ts: number; equity: number }[]; open: Pos[];
 };
 type Pat = { tag: string; text: string; n: number; win_pct: number; avg_pnl_pct: number };
@@ -462,6 +466,22 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <div className="num text-[11px] text-white/50">{(b?.learning?.replay ?? 0).toLocaleString()} remembered · {(b?.learning?.rehearsed ?? 0).toLocaleString()} rehearsals · {b?.learning?.signals ?? 0} signals</div>
         </div>
       </div>
+      {b?.scalper?.on && (
+        <div className="num mx-6 mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 rounded-2xl border border-flash/25 bg-flash/[0.05] px-4 py-2.5 text-[12px]">
+          <span className="font-extrabold text-flash">⚡ Scalper</span>
+          <span><b>{b.scalper.n.toLocaleString()}</b> scalps · <b>{b.scalper.n ? Math.round((b.scalper.wins / b.scalper.n) * 100) : 0}%</b> won</span>
+          <span>stacked <b className={b.scalper.pnl_sol >= 0 ? 'text-up' : 'text-down'}>◎{b.scalper.pnl_sol >= 0 ? '+' : ''}{b.scalper.pnl_sol.toFixed(3)}</b></span>
+          {b.scalper.recent_pct != null && <span>last 40 avg <b className={b.scalper.recent_pct >= 0 ? 'text-up' : 'text-down'}>{b.scalper.recent_pct > 0 ? '+' : ''}{b.scalper.recent_pct}%</b></span>}
+          <span>open <b>{b.scalper.open}</b> · riding <b className="text-up">{b.scalper.riding}</b></span>
+          <span className="text-white/50">bar {Math.round((b.scalper.bar ?? 0) * 100)} · take +{Math.round(((b.scalper.tp ?? 1) - 1) * 100)}% · stop −{Math.round((b.scalper.stop ?? 0) * 100)}% · max {b.scalper.max_s}s</span>
+        </div>
+      )}
+      {!!b?.skips && Object.keys(b.skips).length > 0 && (
+        <div className="num mx-6 mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/45">
+          <span className="text-white/60">Why it passed on trades (last ~minute):</span>
+          {Object.entries(b.skips).map(([k, v]) => <span key={k}>{k} <b className="text-white/70">{v}</b></span>)}
+        </div>
+      )}
       <div className="px-6 pt-2"><Equity pts={b?.equity || []} start={start} /></div>
       <div className="grid gap-px bg-white/[0.06] lg:grid-cols-3">
         <div className="bg-[var(--color-bg)]/60 p-5">
@@ -491,6 +511,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
                   </div>
                   <b className="num w-8 text-right">{c.value.toFixed(0)}</b>
                   {c.p_rug != null && <span className={`num w-12 text-right text-[10.5px] ${c.p_rug >= 50 ? 'text-down' : c.p_rug >= 30 ? 'text-warn' : 'text-white/40'}`} title="Rug model: odds it collapses −60% within 20 min">rug {c.p_rug}%</span>}
+                  {!!c.scalp && <span className={`num w-10 text-right text-[10.5px] ${c.scalp >= (b?.scalper?.bar ?? 1) ? 'text-flash' : 'text-white/35'}`} title="Scalp score: how good the next minute looks">⚡{Math.round(c.scalp * 100)}</span>}
                   {c.p_up != null && <span className="num hidden w-16 text-right text-[10.5px] text-white/45 sm:inline" title="Timing model: odds of +12% (▲) or −15% (▼) first in the next 3 minutes"><span className="text-up">▲{c.p_up}</span> <span className="text-down">▼{c.p_dn}</span></span>}
                 </div>
                 <div className="truncate pl-[104px] text-[10.5px] text-white/40">{c.hard ? `✗ ${c.hard}` : c.copy_ranks ? `🪞 ${c.copy_ranks} buying · ${c.why}` : c.why}</div>

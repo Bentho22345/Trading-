@@ -307,6 +307,7 @@ def test_brain_sells_fast_as_coins_move_and_never_gets_stuck(tmp_path):
         # a flat position gets recycled quickly
         await b.tick("auto")
         ap.entered.clear()
+        b.last_exit.clear()
         b.last_buy_ts = 0
         await b.tick("auto")
         q = next((q for q in ap.open.values() if q["mode"] == "auto"), None)
@@ -317,6 +318,7 @@ def test_brain_sells_fast_as_coins_move_and_never_gets_stuck(tmp_path):
             assert q["status"] == "closed" and ("stalled" in q["exit_reason"] or "time stop" in q["exit_reason"])
         # the coin drops out of the live feed and nothing prices it: closed after 3 minutes instead of sitting there forever
         ap.entered.clear()
+        b.last_exit.clear()
         b.last_buy_ts = 0
         await b.tick("auto")
         z = next(z for z in ap.open.values() if z["mode"] == "auto")
@@ -540,5 +542,77 @@ def test_brain_v6_sells_into_graduation_and_caps_size_by_liquidity(tmp_path):
         g0 = b.grad_frac
         b.post_mortem(time.time())
         assert b.grad_frac < g0
+        await db.close()
+    asyncio.run(run())
+
+
+def _live_coin(mint, now, n=30):
+    """A coin with a live tape: apes arriving in the last seconds, price ticking up, buyers in control."""
+    trades = [(now - 60 + i * (58 / n), "buy", 0.4, 1e6, f"{mint[:3]}{i}", 33 + i * 0.15) for i in range(n)]
+    L = _tape_launch(mint, trades, vsol=33 + n * 0.15, upside=40, risk=15, buyers=n)
+    L.created = now - 120
+    return L
+
+
+def test_hyper_keeps_trading_when_the_models_calibrate_low_and_scalps_in_and_out(tmp_path):
+    async def run():
+        now = time.time()
+        coin = _live_coin("SCALmint" + "1" * 32, now)
+        dull = launch("DULLmint" + "2" * 32, upside=5, risk=50, buyers=8)
+        ap, db = await make(tmp_path, [coin, dull])
+        b = ap.brain
+        b.win.b = -7.0                                                   # calibrated to a ~1% base rate: every value is tiny
+        await ap.set_mode("auto")
+        await b.tick("auto")
+        auto = [p for p in ap.open.values() if p["mode"] == "auto"]
+        assert auto, b.skips                                             # no absolute floor in hyper: it still trades the top slice
+        sc = next((p for p in auto if p.get("style") == "scalp"), None)
+        if sc is None:                                                   # the swing pick took the coin first: make room and scalp it
+            for p in auto:
+                await ap.sell(p, 1.0, "test")
+            b.last_exit.clear()
+            b.last_buy_ts = 0
+            await b.tick("auto")
+            sc = next(p for p in ap.open.values() if p.get("style") == "scalp")
+        assert sc["sol_in"] < 0.2 and "scalp" in sc["detail"]           # tiny size
+        b.cache[coin.mint]["f"] = {"mom_30s": 0.5}                       # moving up, but not a surge (that would be ridden)
+        coin.mcap_sol *= 1.15                                            # +15% on the chart ≈ +12% after fees and impact
+        await ap.manage()
+        assert sc["status"] == "closed" and "scalp take-profit" in sc["exit_reason"] and sc["sol_out"] > sc["sol_in"]
+        assert b.scalps["n"] == 1 and b.scalps["wins"] == 1
+        assert b.can_enter(coin.mint, "auto", "scalp") == "just exited"
+        b.last_exit[coin.mint] = (time.time() - 25, 0)
+        assert b.can_enter(coin.mint, "auto", "scalp") is None          # …and 20 s later it can scalp the same coin again
+        snap = await b.snapshot()
+        assert snap["scalper"]["on"] and snap["scalper"]["n"] == 1 and "skips" in snap
+        await db.close()
+    asyncio.run(run())
+
+
+def test_scalps_cut_fast_and_surges_get_ridden_until_they_die_down(tmp_path):
+    async def run():
+        now = time.time()
+        coin = _live_coin("RIDEmint" + "3" * 32, now)
+        ap, db = await make(tmp_path, [coin])
+        b = ap.brain
+        await ap.set_mode("auto")
+        await b._buy(coin.mint, 0.06, "auto", "scalp", "scalp test", coin.result, {"upside": 0.4}, 10.0, [])
+        p = next(p for p in ap.open.values() if p["mode"] == "auto")
+        assert p["style"] == "scalp"
+        coin.mcap_sol *= 0.92                                            # −8%: past the scalp stop → out at once
+        await ap.manage()
+        assert p["status"] == "closed" and "scalp stop" in p["exit_reason"], (p, ap.stats, list(b.log)[:3])
+        # a surging coin: holders, volume and liquidity pouring in → ride it instead of banking +10%
+        b.last_exit.clear()
+        await b._buy(coin.mint, 0.06, "auto", "scalp", "scalp test", coin.result, {"upside": 0.4}, 10.0, [])
+        q = next(q for q in ap.open.values() if q["mode"] == "auto")
+        surge = {"holder_growth": 0.8, "vol_accel": 0.6, "liq_influx": 0.5, "ape_accel": 0.5}
+        b.cache[coin.mint] = {"rid": 0, "cn": 0, "ts": time.time(), "f": surge, "v": 30, "rug": 0.1, "up": 0.6, "dn": 0.1}
+        ex = b.exit_for(q, coin.result, 1.15, 1.15)
+        assert q.get("ride") and ex[0] == 0.25 and "riding" in ex[1]
+        assert b.exit_for(q, coin.result, 1.6, 1.6) is None              # still surging: hold, no take-profit
+        b.cache[coin.mint]["f"] = {"holder_growth": 0.1, "vol_accel": -0.4, "ape_accel": -0.7}   # it dies down
+        ex = b.exit_for(q, coin.result, 1.5, 1.6)
+        assert ex[0] == 1.0 and "died down" in ex[1]
         await db.close()
     asyncio.run(run())

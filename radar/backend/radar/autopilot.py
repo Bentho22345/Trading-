@@ -109,7 +109,12 @@ class Autopilot:
         for p in await self.db.all("SELECT * FROM auto_positions WHERE status IN ('open','closing')"):
             p = dict(p)
             p["tp_done"] = json.loads(p.get("tp_done") or "[]")
-            p["features"] = json.loads(p.get("features_json") or "null")
+            meta = json.loads(p.get("features_json") or "null")
+            if isinstance(meta, dict) and "f" in meta:                  # the brain's record: features + why it bought
+                p["features"], p["leaders0"], p["brain_trig"], p["entry_value"] = meta["f"], meta.get("leaders0"), meta.get("trig"), meta.get("v")
+                p["style"] = meta.get("style") or ("scalp" if meta.get("trig") == "scalp" else "copy" if meta.get("trig") == "copy" else "swing")
+            else:
+                p["features"] = meta
             p["leaders"] = json.loads(p.get("leaders_json") or "[]")
             self.open[p["id"]] = p
             self.entered[p["mint"]] = p["opened"]
@@ -363,8 +368,9 @@ class Autopilot:
                 L.until = max(L.until, time.time() + 6 * 3600)          # the sniper keeps scoring (and pricing) what we hold
             tag = "🤖" if mode == "real" else "🧪"
             await feed.push("autopilot", "buy", f"{tag} {mode.upper()} bought ${sym} · {sol_in:.3f} SOL", f"{trigger}: {detail}", mint)
-            await self.alerts.send("buy" if mode == "real" else "info", f"{tag} Autopilot {mode} BUY ${sym}",
-                                   f"{sol_in:.3f} SOL · {trigger}: {detail}", token=mint, dedupe=f"ap:buy:{pid}", ttl=86400)
+            if mode == "real":                                          # demo trades pop up on the site; only real money pings your phone
+                await self.alerts.send("buy", f"{tag} Autopilot {mode} BUY ${sym}",
+                                       f"{sol_in:.3f} SOL · {trigger}: {detail}", token=mint, dedupe=f"ap:buy:{pid}", ttl=86400)
             await hub.publish("autopilot", await self.snapshot())
             return p
         except Exception as e:
@@ -413,8 +419,9 @@ class Autopilot:
             tag = "🤖" if p["mode"] == "real" else "🧪"
             msg = f"{frac * 100:.0f}% at {x:.2f}× · +{got:.3f} SOL" + (f" · PnL {p['pnl_sol']:+.3f} SOL" if closing else "")
             await feed.push("autopilot", "sell", f"{tag} {p['mode'].upper()} sold ${p['symbol']} ({reason})", msg, p["mint"])
-            await self.alerts.send("exit" if p["mode"] == "real" else "info", f"{tag} Autopilot {p['mode']} SELL ${p['symbol']} — {reason}", msg,
-                                   token=p["mint"], dedupe=f"ap:sell:{p['id']}:{len(p['tp_done'])}:{reason}", ttl=86400)
+            if p["mode"] == "real":
+                await self.alerts.send("exit", f"{tag} Autopilot {p['mode']} SELL ${p['symbol']} — {reason}", msg,
+                                       token=p["mint"], dedupe=f"ap:sell:{p['id']}:{len(p['tp_done'])}:{reason}", ttl=86400)
             await hub.publish("autopilot", await self.snapshot())
         except Exception as e:  # noqa: BLE001
             self.stats["errors"] += 1
@@ -493,6 +500,7 @@ class Autopilot:
             value = p["tokens_left"] * p["last_price_sol"]
             out.append({**{k: p[k] for k in ("id", "mode", "mint", "symbol", "trigger", "detail", "opened", "sol_in", "sol_out",
                                              "tokens", "tokens_left", "tp_done", "status", "buy_sig")},
+                        "style": p.get("style"), "ride": bool(p.get("ride")),
                         "x": round(x, 3) if x else None, "peak_x": round(p["peak_price_sol"] / p["entry_price_sol"], 3),
                         "value_sol": round(value, 6), "pnl_sol": round(p["sol_out"] + value - p["sol_in"], 6)})
         return {"mode": self.c["mode"], "open": sorted(out, key=lambda r: -r["opened"]), "paused_reason": self.paused_reason,

@@ -86,7 +86,17 @@ def chart(L: Any, now: float) -> dict[str, float]:
     # holders: in, joining, leaving
     bal = getattr(L, "balances", None) or {}
     holders = sum(1 for b in bal.values() if b > 1)
-    joined = sum(1 for ts in (getattr(L, "buyers", None) or {}).values() if ts >= now - 60)
+    bmap = getattr(L, "buyers", None) or {}
+    joined = r10 = prev = 0
+    for ts in bmap.values():                                    # one pass: new holders this minute, apes in the last 10 s / before
+        if ts >= now - 70:
+            if ts >= now - 60:
+                joined += 1
+            if ts >= now - 10:
+                r10 += 1
+            else:
+                prev += 1
+    prev10 = prev / 6
     left = len({t[4] for t in s3 if bal.get(t[4], 0) <= 1})
     # wash trading: the same wallet buying and selling inside a minute
     seen: dict[str, list[tuple[float, str]]] = defaultdict(list)
@@ -114,9 +124,6 @@ def chart(L: Any, now: float) -> dict[str, float]:
                 pass
     coord_hold = sum(bal.get(w, 0.0) for w in coord_wallets) / SUPPLY * 100
     # the apes: new buyers per 10 s now vs the minute before, the first 20 buyers cashing out, pros among the holders
-    bmap = getattr(L, "buyers", None) or {}
-    r10 = sum(1 for ts in bmap.values() if ts >= now - 10)
-    prev10 = sum(1 for ts in bmap.values() if now - 70 <= ts < now - 10) / 6
     first = getattr(L, "_first20", None)
     if first is None:
         first = [w for w, _ in sorted(bmap.items(), key=lambda kv: kv[1])[:20]]

@@ -141,7 +141,7 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - Execution: PumpPortal Local Transaction API (pump.fun, PumpSwap, Raydium) signed locally and sent through your RPC (Helius
   when connected); Jupiter as fallback. Fills are read back from the chain. Telegram: `/autopilot`, `/autopilot demo|off`, `/panic`.
 
-### Self-driving brain (v6)
+### Self-driving brain (v7)
 
 Its own algorithm on its own 10 SOL of demo money (and real money only if you pick it under your hard caps).
 
@@ -174,6 +174,15 @@ Its own algorithm on its own 10 SOL of demo money (and real money only if you pi
   not), with the threshold learned from what coins did after it sold.
 - **Liquidity-aware**: buys are capped at ~4% price impact on the curve; positions too big for the pool get trimmed into
   strength; a learned share is sold into graduation (less if migrations keep running, more if they dump).
+- **Scalper (hyper / degen)**: many tiny in-and-out trades (~1% of the pot each) on whatever has the best next minute —
+  apes arriving, price ticking up, buyers in control, liquidity behind it, and the timing model's UP odds. Take-profit
+  ~+12%, stop ~−8%, out on a momentum flip, dump odds, a quiet tape or after ~2.5 min. It re-enters the same coin
+  (20 s cooldown, never after two losses in a row on it) and tunes its own bar / take-profit / stop from results.
+- **Rides real surges**: when holders, volume and liquidity are all pouring in, it banks 25% and holds the rest — no
+  take-profit, no time stop — until the surge dies down (buyers fading, volume slowing, exhaustion, liquidity draining).
+- **No silent stalls**: degen / hyper have no absolute value floor (calibrated models shrink every value); scalps barely
+  move the mood; the Autopilot page lists why it passed on trades in the last minute. Demo trades pop up on the site
+  but only real-money trades send Telegram / Discord alerts.
 - **Blacklists**: copied wallets that keep losing get benched for 12h; devs whose coins rugged it are blocked.
 - **Adaptive exits**: after every stop / trailing exit it keeps watching the coin — shaken out → stops get more room,
   kept dumping → stops tighten. Instant exits on rug patterns (liquidity drained, one sell dumping the curve, whales
