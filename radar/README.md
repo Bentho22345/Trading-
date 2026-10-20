@@ -125,3 +125,31 @@ Set `RADAR_PASSWORD` and the whole API, live socket and UI data sit behind a log
 ## Status
 
 All six phases are built: the data spine, safety + scoring + alerts, the social engine with FLASH, smart money, paper trading/scorecard/backtest/tuning, and the trader tools (risk manager, rotation, brief, Ask Radar).
+
+## Autopilot (demo & real money)
+
+`/autopilot` — Radar trades its own signals.
+
+- **Demo**: simulated fills (price impact + pump.fun / PumpPortal fees) on virtual SOL. Reset any time.
+- **Real**: trades from a **separate trading wallet** Radar creates (key encrypted at rest with `RADAR_SECRET`). Fund it with
+  only what you can lose; withdraw to your own wallet or export the key into Phantom (password required). Radar never asks
+  for your main wallet's seed phrase. Switching to real needs `RADAR_PASSWORD` set, the password re-entered and a typed confirmation.
+- Buys on: snipe score at your appetite, chosen strategies, tweet races (first coins off a tracked tweet), copy-trading
+  (2+ top-ranked / followed wallets), proven devs, contract calls by S/A-tier X accounts, or a quick-buy from any Snipe card.
+- Limits: SOL per buy, hard cap, max open positions, max SOL per day, daily loss limit, cooldown.
+- Exits: take-profit ladder, stop loss, trailing stop, time stop, rug exit (dev dumps / insiders / TRAP), panic sell.
+- Execution: PumpPortal Local Transaction API (pump.fun, PumpSwap, Raydium) signed locally and sent through your RPC (Helius
+  when connected); Jupiter as fallback. Fills are read back from the chain. Telegram: `/autopilot`, `/autopilot demo|off`, `/panic`.
+
+Not financial advice. Most memecoins go to zero.
+
+## Free trend sources
+
+Bluesky trending topics, Mastodon trending tags, Wikipedia most-read and Hacker News (official keyless APIs). A launch named
+after a live trend gets a "trending off-crypto" read in Snipe (`web_trend` filter). Board on `/engines`.
+
+## Running on a small server
+
+`/api/healthz` shows memory, disk, DB and WAL size. Radar checkpoints the WAL, prunes old data and trims caches near the
+RAM limit (`RADAR_RSS_LIMIT_MB`, default 430). Download a full backup from Engines → Budgets (`/api/admin/backup`).
+The app is installable on phones (Add to Home Screen).

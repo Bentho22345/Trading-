@@ -68,6 +68,8 @@ export default function EnginesPage() {
   const [d, setD] = useState<any>(null);
   const [feed, setFeed] = useState<Ev[]>([]);
   const [buzz, setBuzz] = useState<any>(null);
+  const [trends, setTrends] = useState<any>(null);
+  usePoll(() => api('/api/trends?limit=40').then(setTrends).catch(() => {}), 60000);
   const now = useNow(5000);
   const load = useCallback(() => apiCached('/api/engines').then(setD).catch(() => {}), []);
   usePoll(load, 5000);
@@ -171,7 +173,8 @@ export default function EnginesPage() {
         </Card>
 
         <Card id="telegram" title="Telegram" on={!!tg.configured} configured={!!tg.configured} what={[
-          '/top · /coin $TICKER · /calls · /wallets · /intel · /status',
+          '/top · /coin $TICKER · /calls · /wallets · /intel · /status · /x · /callers',
+          '/autopilot · /autopilot demo|off · /panic (sell everything, stop)',
           '/push degen|balanced|safe|off — auto-push coins that clear your appetite',
           '/mute 60 · /unmute (rug and flash warnings always come through)',
           'Every alert has tap-to-open pump.fun · DexScreener · Axiom buttons',
@@ -185,6 +188,24 @@ export default function EnginesPage() {
 
         <Budgets d={d} onSaved={setD} />
       </div>
+
+      <section className="glass mt-6 rounded-[28px] p-6">
+        <div className="mb-3 flex flex-wrap items-center gap-2"><span className="text-accent">🌐</span><span className="display text-[26px]">Trending off-crypto</span>
+          <span className="text-[11px] text-white/45">free: Bluesky · Mastodon · Wikipedia most-read · Hacker News — memes start here; launches named after these get flagged in Snipe</span></div>
+        {!!trends?.matches?.length && (
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {trends.matches.map((m: any) => <Link key={m.mint} href={`/token?a=${m.mint}`} className="rounded-full bg-up/15 px-2.5 py-0.5 text-[12px] font-bold text-up">${m.symbol} ← {m.term}</Link>)}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-1.5">
+          {(trends?.items || []).map((t: any) => (
+            <a key={`${t.source}${t.term}`} href={t.url || '#'} target="_blank" rel="noreferrer" title={t.sources.join(', ')}
+              className="rounded-full border border-white/10 px-2.5 py-0.5 text-[12px] text-white/75 hover:border-white/40">
+              <span className="mr-1 text-[9.5px] font-bold uppercase text-white/40">{t.source.slice(0, 4)}</span>{t.term}</a>
+          ))}
+          {!trends?.items?.length && <span className="text-[12px] text-white/40">Loading trends…</span>}
+        </div>
+      </section>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1fr_1fr]">
         <section className="glass overflow-hidden rounded-[28px]">
@@ -313,7 +334,10 @@ function Budgets({ d, onSaved }: { d: any; onSaved: (d: any) => void }) {
       <input value={ai} onChange={(e) => setAi(e.target.value)} className="num mt-1 w-full rounded-xl border border-white/10 bg-transparent px-3 py-1.5 text-[13px]" />
       <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wider text-white/50">YouTube units / day (max 10,000)</label>
       <input value={yt} onChange={(e) => setYt(e.target.value.replace(/\D/g, ''))} className="num mt-1 w-full rounded-xl border border-white/10 bg-transparent px-3 py-1.5 text-[13px]" />
-      <button onClick={save} className="btn-primary mt-4">{ok ? 'Saved ✓' : 'Save budgets'}</button>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button onClick={save} className="btn-primary">{ok ? 'Saved ✓' : 'Save budgets'}</button>
+        <a href="/api/admin/backup" className="text-[12px] font-semibold text-white/60 underline decoration-white/30 underline-offset-4 hover:text-white">Download a backup</a>
+      </div>
     </section>
   );
 }

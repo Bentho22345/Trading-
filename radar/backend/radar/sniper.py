@@ -84,6 +84,7 @@ class Launch:
     ai: dict[str, Any] | None = None                                   # Claude's batch read: narrative, meme score, red flags
     yt: dict[str, Any] | None = None                                   # YouTube videos mentioning the coin (last 48h)
     x: dict[str, Any] | None = None                                    # the tweet this launch was spawned from (X Radar coin race)
+    trend: dict[str, Any] | None = None                                # a live off-crypto trend it's named after (Bluesky, Wikipedia…)
 
 
 def _slope(pts: list[tuple[float, float]]) -> float:
@@ -272,6 +273,10 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
         ms = float(ai["meme_score"])
         bpts += max(-4.0, min(10.0, (ms - 5) * 2.5))
         bparts.append(f"AI meme score {ms:.0f}/10" + (f" · {ai['narrative']}" if ai.get("narrative") else "") + (" · derivative" if ai.get("derivative") else ""))
+    tr = L.trend or {}
+    if tr:
+        bpts += min(9.0, 4 + 2.5 * len(tr.get("sources") or []))
+        bparts.append(f"named after “{tr['term']}”, trending on {', '.join(tr.get('sources') or [])}")
     if bparts:
         det.append({"key": "buzz", "label": "Buzz & narrative", "points": round(bpts, 1), "good": bpts > 0, "detail": " · ".join(bparts)})
 
@@ -305,7 +310,7 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
     }
     # trader-terminal metrics + the two-axis read (upside vs risk) + every strategy this launch matches right now
     mx = sm.compute(L, now, sol_usd, {"social": {"authors": soc["authors"], "engagement": soc.get("engagement", 0)} if soc else {},
-                                      "yt": yt, "x": xr})
+                                      "yt": yt, "x": xr, "trend": tr})
     mx["net_sol_1m"] = res["net_sol_1m"]
     up, risk, why_up, why_risk = sm.upside_risk(res, mx)
     res.update(metrics=mx, upside=up, risk=risk, why_up=why_up, why_risk=why_risk,
@@ -317,7 +322,8 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
                       | {"insiders": len(it.get("insiders") or []), "fresh": len(it.get("fresh") or [])}) if it else None,
                ai={k: ai.get(k) for k in ("narrative", "category", "meme_score", "derivative", "red_flags", "take")} if ai else None,
                yt=({"videos": yt.get("videos"), "views": yt.get("views"), "top": yt.get("top")}) if yt.get("videos") else None,
-               x={k: xr.get(k) for k in ("handle", "tier", "score", "rank", "delay_s", "url", "text", "narrative")} if xr else None)
+               x={k: xr.get(k) for k in ("handle", "tier", "score", "rank", "delay_s", "url", "text", "narrative")} if xr else None,
+               trend=tr or None)
     row = flat(res)
     res["strategies"] = [st["id"] for st in ctx.get("strategies", []) if sm.matches(st["rules"], row, st.get("mode", "all"))]
     return res
@@ -354,6 +360,7 @@ class Sniper:
         self.stats = {"evals": 0, "eval_ms": 0.0, "batches": 0, "last_tick_ms": 0.0, "backlog": 0}
         self.onchain: Any = None                             # Helius intel: queues launches worth scanning
         self.ytbuzz: Any = None                              # YouTube buzz index (tickers / contracts / names in video titles)
+        self.trends: Any = None                              # free off-crypto trend index (Bluesky, Mastodon, Wikipedia, HN)
 
     # ---------------- stream hooks (hot path: memory only) ----------------
     async def on_launch(self, row: dict[str, Any]) -> None:
@@ -743,6 +750,15 @@ class Sniper:
                             L.yt = y
                             L.dirty = True
                             self.dirty.add(L.mint)
+                if self.trends is not None and self.trends.items:
+                    for L in list(self.launches.values()):
+                        if L.trend is None and now - L.created < 900:
+                            m = self.trends.match(L.name, L.symbol)
+                            if m:
+                                L.trend = m
+                                L.dirty = True
+                                self.dirty.add(L.mint)
+                                asyncio.get_running_loop().create_task(self.trends.announce_match(L, m))
                 for L in list(self.launches.values()):
                     if now - L.last_eval > 5:
                         self.dirty.add(L.mint)

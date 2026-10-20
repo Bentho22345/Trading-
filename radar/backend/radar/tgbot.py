@@ -40,6 +40,7 @@ HELP = ("<b>Memecoin Radar</b> 🛰\n"
         "/top [safe|balanced|degen] — best live launches\n/calls — today's snipe calls &amp; results\n"
         "/coin &lt;CA or $TICKER&gt; — full read of one coin\n/x — hottest tweet narratives\n/callers — best X callers\n"
         "/wallets — top-wallet trades\n/intel — engine finds\n"
+        "/autopilot — positions &amp; PnL · /autopilot demo|off · /panic — sell all &amp; stop\n"
         "/push degen|balanced|safe|off — auto-push coins at your appetite\n/mute 60 · /unmute\n/status — engines &amp; credits\n"
         "<i>Not financial advice. Radar never trades.</i>")
 
@@ -114,6 +115,7 @@ class TelegramBot:
         self.last_cmd: dict[str, Any] | None = None
         self.max_per_hour = int(os.environ.get("TG_PUSH_MAX_PER_HOUR", "8"))
         self.xradar: Any = None
+        self.autopilot: Any = None
 
     @property
     def base(self) -> str:
@@ -250,6 +252,34 @@ class TelegramBot:
             await send("📣 <b>Best X callers (7d)</b>\n" + "\n".join(
                 f"{i}. @{esc(r['handle'])} · {r['calls']} calls · {r['hit_2x_pct']}% hit 2× · avg peak {r['avg_peak_x']}×"
                 for i, r in enumerate(rows[:10], 1)))
+        elif cmd == "/autopilot":
+            ap = self.autopilot
+            if ap is None:
+                await send("Autopilot isn't running.")
+                return
+            if arg.lower() in ("demo", "off"):
+                await ap.set_mode(arg.lower())
+                await send(f"🤖 Autopilot: <b>{arg.upper()}</b>" + ("" if arg.lower() == "off" else " (simulated money). Real mode is switched on from the website only."))
+                return
+            if arg.lower() == "real":
+                await send("Real-money mode can only be switched on from the Autopilot page (password + typed confirmation).")
+                return
+            snap = await ap.snapshot()
+            lines = [f"🤖 <b>Autopilot: {snap['mode'].upper()}</b>" + (f" · paused: {esc(snap['paused_reason'])}" if snap.get("paused_reason") else "")]
+            for m in ("demo", "real"):
+                sm = await ap.summary(m)
+                if sm["closed"] or sm["today"]["spent"]:
+                    lines.append(f"{m}: {sm['closed']} closed · PnL {sm['pnl_sol']:+.3f} SOL · win {sm['win_rate'] or 0}% · today {sm['today']['pnl']:+.3f}")
+            for p in snap["open"][:8]:
+                lines.append(f"• <b>${esc(p['symbol'])}</b> ({p['mode']}) {p['x'] or 0:.2f}× · PnL {p['pnl_sol']:+.3f} SOL · {esc(p['trigger'])}")
+            if not snap["open"]:
+                lines.append("No open positions.")
+            await send("\n".join(lines))
+        elif cmd == "/panic":
+            if self.autopilot is None:
+                return
+            n = await self.autopilot.panic()
+            await send(f"🛑 Sold {n} open position{'s' if n != 1 else ''}. Autopilot is OFF.")
         elif cmd == "/push":
             mode = arg.lower()
             if mode not in (*PUSH_BAR, "off"):

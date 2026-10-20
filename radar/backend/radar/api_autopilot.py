@@ -1,0 +1,202 @@
+"""Autopilot endpoints: settings, mode (demo / real with confirmation), trading wallet, positions, manual trades, panic."""
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from . import auth
+from .app import S
+from .autopilot import DEFAULT, REAL_PHRASE
+from .solwallet import TradeError
+
+router = APIRouter(prefix="/api/autopilot")
+
+
+def _pw(request: Request, given: str | None) -> bool:
+    """Sensitive actions re-check the Radar password (no password set = local single-user install)."""
+    if not auth.password():
+        return True
+    return bool(given) and auth.check_password(given, request.client.host if request.client else "?")
+
+
+@router.get("")
+async def overview() -> dict[str, Any]:
+    ap = S.autopilot
+    pub = await S.wallet.pubkey()
+    bal = None
+    bal_err = None
+    if pub:
+        try:
+            bal = await S.chain.sol_balance(pub)
+        except Exception as e:  # noqa: BLE001
+            bal_err = str(e)[:120]
+    return {"config": ap.c, "defaults": DEFAULT, "real_phrase": REAL_PHRASE, "password_set": bool(auth.password()),
+            "wallet": {"pubkey": pub, "sol": bal, "error": bal_err, "payout": (await S.cfg.kv_get("autopilot:payout"))},
+            "demo_balance": await ap.demo_balance(), **(await ap.snapshot()),
+            "summary": {"demo": await ap.summary("demo"), "real": await ap.summary("real")}}
+
+
+@router.post("/config")
+async def config(patch: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await S.autopilot.save(patch)
+    except (TypeError, ValueError, KeyError) as e:
+        raise HTTPException(400, f"Invalid setting: {e}") from e
+
+
+class ModeBody(BaseModel):
+    mode: str
+    confirm: str = ""
+    password: str | None = None
+
+
+@router.post("/mode")
+async def mode(b: ModeBody, request: Request) -> dict[str, Any]:
+    try:
+        return await S.autopilot.set_mode(b.mode, b.confirm, _pw(request, b.password) if b.mode == "real" else True)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/panic")
+async def panic() -> dict[str, Any]:
+    return {"sold": await S.autopilot.panic()}
+
+
+class BuyBody(BaseModel):
+    mint: str
+    sol: float | None = None
+    mode: str | None = None
+
+
+@router.post("/buy")
+async def manual_buy(b: BuyBody) -> dict[str, Any]:
+    """Quick-buy from a card: uses the current mode (demo when Autopilot is off). Real needs real mode switched on."""
+    mode = b.mode or (S.autopilot.c["mode"] if S.autopilot.c["mode"] != "off" else "demo")
+    if mode == "real" and S.autopilot.c["mode"] != "real":
+        raise HTTPException(400, "Switch Autopilot to REAL first (that's where the safety confirmation lives)")
+    if b.mint in S.autopilot.busy:
+        raise HTTPException(409, "An order for this coin is already in flight")
+    try:
+        p = await S.autopilot.buy(b.mint.strip(), "manual", "quick buy", S.sniper.one(b.mint.strip()), sol=b.sol, mode=mode)
+    except TradeError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"position": {k: p[k] for k in ("id", "mode", "mint", "symbol", "sol_in", "tokens")}}
+
+
+class SellBody(BaseModel):
+    fraction: float = 1.0
+
+
+@router.post("/positions/{pid}/sell")
+async def manual_sell(pid: int, b: SellBody) -> dict[str, Any]:
+    p = S.autopilot.open.get(pid)
+    if not p:
+        raise HTTPException(404, "No open position with that id")
+    await S.autopilot.sell(p, max(0.01, min(1.0, b.fraction)), "manual")
+    return await S.autopilot.snapshot()
+
+
+@router.get("/history")
+async def history(mode: str = "", limit: int = 200) -> dict[str, Any]:
+    q, args = "SELECT * FROM auto_positions WHERE status='closed'", []
+    if mode:
+        q += " AND mode=?"
+        args.append(mode)
+    pos = await S.db.all(q + " ORDER BY closed DESC LIMIT ?", [*args, min(limit, 1000)])
+    oq, oargs = "SELECT * FROM auto_orders", []
+    if mode:
+        oq += " WHERE mode=?"
+        oargs.append(mode)
+    orders = await S.db.all(oq + " ORDER BY ts DESC LIMIT ?", [*oargs, min(limit, 1000)])
+    return {"positions": pos, "orders": orders}
+
+
+@router.post("/demo/reset")
+async def demo_reset() -> dict[str, Any]:
+    await S.autopilot.reset_demo()
+    return {"balance": await S.autopilot.demo_balance()}
+
+
+# ---------------- trading wallet ----------------
+@router.post("/wallet")
+async def wallet_create() -> dict[str, Any]:
+    try:
+        return await S.wallet.create()
+    except TradeError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+class PayoutBody(BaseModel):
+    address: str
+
+
+@router.post("/wallet/payout")
+async def wallet_payout(b: PayoutBody) -> dict[str, Any]:
+    """Your own wallet (watch-only): where withdrawals go. Radar never needs its private key."""
+    import re
+    a = b.address.strip()
+    if not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", a):
+        raise HTTPException(400, "That isn't a Solana address")
+    await S.cfg.kv_set("autopilot:payout", a)
+    return {"payout": a}
+
+
+class WithdrawBody(BaseModel):
+    sol: float | None = None
+    to: str | None = None
+    password: str | None = None
+
+
+@router.post("/wallet/withdraw")
+async def wallet_withdraw(b: WithdrawBody, request: Request) -> dict[str, Any]:
+    if not _pw(request, b.password):
+        raise HTTPException(403, "Wrong password")
+    to = b.to or await S.cfg.kv_get("autopilot:payout")
+    if not to:
+        raise HTTPException(400, "Set your payout wallet first")
+    try:
+        sig = await S.wallet.withdraw(to, b.sol)
+    except TradeError as e:
+        raise HTTPException(400, str(e)) from e
+    await S.db.exec("INSERT INTO auto_orders (ts, mode, side, sol, sig, status, reason) VALUES (?,?,?,?,?,?,?)",
+                    (time.time(), "real", "withdraw", b.sol, sig, "filled", f"to {to}"))
+    return {"signature": sig, "to": to}
+
+
+class PwBody(BaseModel):
+    password: str | None = None
+
+
+@router.post("/wallet/export")
+async def wallet_export(b: PwBody, request: Request) -> dict[str, Any]:
+    if not auth.password():
+        raise HTTPException(400, "Set RADAR_PASSWORD before exporting a key")
+    if not _pw(request, b.password):
+        raise HTTPException(403, "Wrong password")
+    try:
+        return {"private_key": await S.wallet.export_key(), "note": "Import into Phantom: Add wallet → Import private key. Never share it."}
+    except TradeError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/wallet/forget")
+async def wallet_forget(b: PwBody, request: Request) -> dict[str, Any]:
+    if not _pw(request, b.password):
+        raise HTTPException(403, "Wrong password")
+    pub = await S.wallet.pubkey()
+    if pub:
+        try:
+            if await S.chain.sol_balance(pub) > 0.001:
+                raise HTTPException(400, "Withdraw the SOL first (or export the key) — forgetting a funded wallet would lose it")
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Couldn't check the balance ({e}); export the key before forgetting the wallet") from e
+    if S.autopilot.c["mode"] == "real":
+        await S.autopilot.set_mode("off")
+    await S.wallet.forget()
+    return {"ok": True}

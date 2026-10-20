@@ -63,6 +63,10 @@ class State:
     narrator: Any
     tgbot: Any
     xradar: Any
+    chain: Any
+    wallet: Any
+    autopilot: Any
+    trends: Any
 
 
 S = State()
@@ -161,6 +165,18 @@ async def lifespan(app: FastAPI):
     S.xradar = XRadar(S.db, S.cfg, S.connectors, S.social, S.sniper, S.alerts, S.ai, S.tracker)
     S.tracker.hooks["launch"].append(S.xradar.on_launch)
     S.tgbot.xradar = S.xradar
+    from .autopilot import Autopilot
+    from .solwallet import Chain, TradingWallet
+    S.chain = Chain(S.helius)
+    S.wallet = TradingWallet(S.cfg, S.chain)
+    S.autopilot = Autopilot(S.db, S.cfg, S.sniper, S.tracker, S.traders, S.smart, S.alerts, S.wallet)
+    S.tracker.hooks["trade"].append(S.autopilot.on_trade)
+    S.xradar.call_hooks.append(S.autopilot.on_x_call)
+    S.tgbot.autopilot = S.autopilot
+    from .trends import Trends
+    S.trends = Trends(S.db, S.social)
+    S.trends.sniper = S.sniper
+    S.sniper.trends = S.trends
     from .api_engines import engines_status, load_budgets
     S.tgbot.status_fn = engines_status
     await load_budgets()
@@ -199,7 +215,7 @@ async def lifespan(app: FastAPI):
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
                 S.onchain.run(), S.ytbuzz.loop(), S.narrator.loop(), S.tgbot.run(), S.tgbot.push_loop(), S.traders.dune_loop(),
-                S.xradar.run(), S.xradar.grade_loop(),       # X Radar replaces the old VIP poller (same budget, far more accounts)
+                S.xradar.run(), S.xradar.grade_loop(), S.autopilot.run(), S.trends.loop(),       # X Radar replaces the old VIP poller (same budget, far more accounts)
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
                 soc.YouTubeSource(S.social.ingest, lambda: vals("youtube")).run(),
@@ -620,11 +636,13 @@ from .api2 import router as _router2  # noqa: E402
 from .api_news import router as _router_news  # noqa: E402
 from .api_engines import router as _router_engines  # noqa: E402
 from .api_x import router as _router_x  # noqa: E402
+from .api_autopilot import router as _router_ap  # noqa: E402
 
 app.include_router(_router2)
 app.include_router(_router_news)
 app.include_router(_router_engines)
 app.include_router(_router_x)
+app.include_router(_router_ap)
 
 
 # ---------------- live socket ----------------

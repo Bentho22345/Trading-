@@ -12,13 +12,14 @@ export const LINKS = [
   { href: '/', label: 'Home', key: 'd', icon: 'dashboard', primary: true },
   { href: '/snipe', label: 'Snipe', key: 'x', icon: 'target', primary: true },
   { href: '/x', label: 'X Radar', key: 'z', icon: 'x', primary: true },
+  { href: '/autopilot', label: 'Autopilot', key: 'i', icon: 'rocket', primary: true },
   { href: '/engines', label: 'Engines', key: 'o', icon: 'bolt', primary: true },
   { href: '/traders', label: 'Top Traders', key: 'w', icon: 'trophy', primary: true },
-  { href: '/pulse', label: 'Pulse', key: 'u', icon: 'pulse', primary: true },
+  { href: '/pulse', label: 'Pulse', key: 'u', icon: 'pulse' },
   { href: '/trending', label: 'Trending', key: 't', icon: 'trending', primary: true },
-  { href: '/launching', label: 'Launching', key: 'l', icon: 'rocket', primary: true },
+  { href: '/launching', label: 'Launching', key: 'l', icon: 'rocket' },
   { href: '/narratives', label: 'Narratives', key: 'n', icon: 'narrative', primary: true },
-  { href: '/signals', label: 'Signals', key: 's', icon: 'signal', primary: true },
+  { href: '/signals', label: 'Signals', key: 's', icon: 'signal' },
   { href: '/proof', label: 'Proof', key: 'v', icon: 'check' },
   { href: '/playbook', label: 'Playbook', key: 'y', icon: 'narrative' },
   { href: '/news', label: 'News', key: 'e', icon: 'news' },
@@ -77,7 +78,7 @@ export function Nav() {
           </Link>
           <nav className="hidden items-center gap-0.5 xl:flex">
             {LINKS.filter((l) => l.primary).map((l) => (
-              <Link key={l.href} href={l.href} className={`relative px-3 py-2 text-[12px] font-semibold uppercase tracking-[0.14em] transition-colors ${active(l.href) ? 'text-white' : 'text-white/50 hover:text-white'}`}>
+              <Link key={l.href} href={l.href} className={`relative whitespace-nowrap px-3 py-2 text-[12px] font-semibold uppercase tracking-[0.14em] transition-colors ${active(l.href) ? 'text-white' : 'text-white/50 hover:text-white'}`}>
                 {l.label}
                 {active(l.href) && <motion.span layoutId="nav-underline" className="absolute inset-x-3 -bottom-[3px] h-[2px] rounded-full bg-white" transition={{ type: 'spring', stiffness: 500, damping: 40 }} />}
               </Link>

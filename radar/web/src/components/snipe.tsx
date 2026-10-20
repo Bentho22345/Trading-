@@ -30,6 +30,7 @@ export type SnipeRow = {
   strategies?: string[]; links?: { twitter?: string; telegram?: string; website?: string }; description?: string | null; image?: string | null;
   alpha: { wallet: string; rank?: number | null; label?: string | null; ts: number; sol: number }[]; called?: boolean;
   intel?: Intel | null; ai?: AiRead | null; yt?: { videos: number; views: number; top?: string } | null;
+  trend?: { term: string; sources: string[]; url?: string | null } | null;
   x?: { handle: string; tier: string; score: number; rank: number; delay_s: number; url: string; text: string; narrative?: string | null } | null;
 };
 export type SnipeFilters = {
@@ -223,8 +224,8 @@ function MetricStrip({ m }: { m: Metrics }) {
 
 /** What the engines behind your keys found: on-chain insiders (Helius), YouTube buzz, Claude's read. */
 export function IntelStrip({ r, full = false }: { r: SnipeRow; full?: boolean }) {
-  const m = r.metrics, it = r.intel, ai = r.ai, yt = r.yt, xr = r.x;
-  if (!it && !ai && !yt && !xr) return null;
+  const m = r.metrics, it = r.intel, ai = r.ai, yt = r.yt, xr = r.x, tr = r.trend;
+  if (!it && !ai && !yt && !xr && !tr) return null;
   const chip = (k: string, body: ReactNode, tone: 'up' | 'down' | 'warn' | 'accent' | 'mute', title: string) => (
     <span key={k} title={title} className={`flex items-center gap-1 rounded-md px-1.5 py-[1px] text-[10px] font-semibold ${
       { up: 'bg-up/10 text-up', down: 'bg-down/10 text-down', warn: 'bg-warn/10 text-warn', accent: 'bg-accent/15 text-accent', mute: 'bg-white/[0.05] text-white/60' }[tone]}`}>{body}</span>
@@ -235,6 +236,7 @@ export function IntelStrip({ r, full = false }: { r: SnipeRow; full?: boolean })
       className="flex items-center gap-1 rounded-md bg-flash/15 px-1.5 py-[1px] text-[10px] font-bold text-flash hover:bg-flash/25">
       🐦 #{xr.rank} off @{xr.handle} · +{xr.delay_s < 60 ? `${xr.delay_s}s` : `${Math.round(xr.delay_s / 60)}m`}
     </a>);
+  if (tr) chips.push(chip('trend', <>🌐 {tr.term} · {tr.sources.join(', ')}</>, 'accent', `Named after something trending off-crypto right now (${tr.sources.join(', ')})`));
   if (it) {
     if (it.insiders) chips.push(chip('ins', <>🧬 {it.insiders} insiders · {(m?.insider_hold_pct ?? 0).toFixed(0)}%</>, (m?.insider_hold_pct ?? 0) >= 10 ? 'down' : 'warn',
       `On-chain: ${it.insiders} early buyers share a funding wallet${(it.clusters || []).some((c) => c.link !== 'shared funder') ? ' tied to the dev' : ''}; they hold ${(m?.insider_hold_pct ?? 0).toFixed(1)}% now`));
@@ -271,6 +273,23 @@ export const TRADE_LINKS = (mint: string) => [
   { label: 'GMGN', href: `https://gmgn.ai/sol/token/${mint}` },
   { label: 'pump', href: `https://pump.fun/coin/${mint}` },
 ];
+
+/** One-tap buy through Autopilot (its current mode; demo when Autopilot is off) — the Axiom / Photon quick-buy. */
+export function QuickBuy({ mint }: { mint: string }) {
+  const [st, setSt] = useState<'idle' | 'busy' | 'ok' | 'err'>('idle');
+  const [msg, setMsg] = useState('');
+  return (
+    <button onClick={(e) => {
+      e.preventDefault(); e.stopPropagation(); setSt('busy');
+      api<any>('/api/autopilot/buy', { method: 'POST', body: JSON.stringify({ mint }) })
+        .then((r) => { setSt('ok'); setMsg(`${r.position.mode} ◎${r.position.sol_in.toFixed(3)}`); })
+        .catch((er) => { setSt('err'); setMsg(er.message); }).finally(() => setTimeout(() => setSt('idle'), 2500));
+    }} title={st === 'err' ? msg : 'Buy with Autopilot (uses its mode and size; demo when it is off)'}
+      className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-bold transition active:scale-95 ${st === 'ok' ? 'bg-up text-black' : st === 'err' ? 'bg-down/20 text-down' : 'bg-white text-black hover:bg-up'}`}>
+      <Icon name="bolt" size={11} />{st === 'busy' ? '…' : st === 'ok' ? msg : st === 'err' ? 'failed' : 'Buy'}
+    </button>
+  );
+}
 
 function CopyCA({ mint }: { mint: string }) {
   const [ok, setOk] = useState(false);
@@ -309,13 +328,13 @@ export const SnipeCard = memo(function SnipeCard({ r, now, dense = false, select
         </Link>
         <UpRisk r={r} />
         <div className="flex flex-col items-end gap-1">
-          <CopyCA mint={r.mint} />
+          <span className="flex gap-1"><QuickBuy mint={r.mint} /><CopyCA mint={r.mint} /></span>
           <Socials r={r} />
         </div>
       </div>
       <div className="mt-2"><CurveBar r={r} /></div>
       {r.metrics && <div className="mt-2"><MetricStrip m={r.metrics} /></div>}
-      {(r.intel || r.ai || r.yt || r.x) && <div className="mt-1.5"><IntelStrip r={r} full={!dense} /></div>}
+      {(r.intel || r.ai || r.yt || r.x || r.trend) && <div className="mt-1.5"><IntelStrip r={r} full={!dense} /></div>}
       {!dense && r.description && !r.ai?.take && <p className="mt-1.5 line-clamp-1 text-[11px] italic text-white/45" title={r.description}>“{r.description}”</p>}
       {(fired.length > 0 || (!!r.strategies?.length && !!names)) && (
         <div className="mt-2 flex flex-wrap gap-1">

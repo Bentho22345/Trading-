@@ -152,3 +152,31 @@ async def claude_run() -> dict[str, Any]:
     if not S.ai.enabled:
         raise HTTPException(400, "Connect Anthropic on Connectors first")
     return {"labeled": await S.narrator.run_once(), "stats": S.narrator.stats}
+
+
+@router.get("/trends")
+async def trends(limit: int = 60) -> dict[str, Any]:
+    live = []
+    for L in S.sniper.launches.values():
+        if L.trend:
+            live.append({"mint": L.mint, "symbol": L.symbol, "name": L.name, "term": L.trend["term"], "sources": L.trend["sources"],
+                         "tier": (L.result or {}).get("tier"), "mcap_usd": (L.result or {}).get("mcap_usd")})
+    return {"items": S.trends.board(min(limit, 300)), "matches": live[:50]}
+
+
+@router.get("/admin/backup")
+async def backup():
+    """Download a consistent copy of the whole database (settings, strategies, trader pool, X roster, Autopilot history).
+    The trading wallet's key inside it stays encrypted with RADAR_SECRET."""
+    import os
+    import tempfile
+
+    import aiosqlite
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+    fd, path = tempfile.mkstemp(suffix=".db", dir=str(S.db.path.parent))
+    os.close(fd)
+    async with aiosqlite.connect(path) as dst:
+        await S.db.conn.backup(dst)
+    return FileResponse(path, filename=f"radar-backup-{time.strftime('%Y%m%d-%H%M')}.db", media_type="application/octet-stream",
+                        background=BackgroundTask(os.unlink, path))

@@ -10,12 +10,13 @@ import { Nav } from '@/components/Nav';
 import { FlashOverlay } from '@/components/FlashOverlay';
 import { ScrollProgress } from '@/components/ScrollProgress';
 import { THEME_BOOT } from '@/lib/theme';
+import { SW } from '@/components/SW';
 
 export const metadata: Metadata = {
   title: 'Memecoin Radar',
   description: 'Real-time narrative, social and on-chain signal terminal',
   manifest: '/manifest.webmanifest',
-  icons: { icon: '/icon.svg', apple: '/icon.svg' },
+  icons: { icon: '/icon.svg', apple: '/icon-192.png' },
   appleWebApp: { capable: true, title: 'Radar', statusBarStyle: 'black-translucent' },
 };
 export const viewport: Viewport = { themeColor: '#000000', width: 'device-width', initialScale: 1 };
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Nav />
         <main className="mx-auto max-w-[1920px] px-3 pb-16 pt-4 md:px-6">{children}</main>
         <FlashOverlay />
+        <SW />
       </body>
     </html>
   );

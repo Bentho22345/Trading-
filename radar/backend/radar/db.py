@@ -317,6 +317,22 @@ CREATE TABLE IF NOT EXISTS x_calls (
 CREATE INDEX IF NOT EXISTS x_calls_ts ON x_calls(ts DESC);
 CREATE TABLE IF NOT EXISTS x_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, handle TEXT, kind TEXT, detail TEXT);
 
+-- free trend sources (Bluesky / Mastodon / Wikipedia / Hacker News)
+CREATE TABLE IF NOT EXISTS trend_items (key TEXT PRIMARY KEY, term TEXT, source TEXT, url TEXT, rank INTEGER, score REAL, ts REAL);
+
+-- Autopilot: positions and every order (demo and real), with the reason it was placed
+CREATE TABLE IF NOT EXISTS auto_positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, mode TEXT NOT NULL, mint TEXT NOT NULL, symbol TEXT, trigger TEXT, detail TEXT, opened REAL,
+  entry_price_sol REAL, entry_mcap_sol REAL, sol_in REAL, tokens REAL, tokens_left REAL, sol_out REAL DEFAULT 0, peak_price_sol REAL,
+  last_price_sol REAL, tp_done TEXT, status TEXT, exit_reason TEXT, closed REAL, pnl_sol REAL, buy_sig TEXT
+);
+CREATE INDEX IF NOT EXISTS auto_positions_mode ON auto_positions(mode, status, opened DESC);
+CREATE TABLE IF NOT EXISTS auto_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, mode TEXT, position_id INTEGER, side TEXT, mint TEXT, symbol TEXT, sol REAL,
+  tokens REAL, price_sol REAL, sig TEXT, status TEXT, error TEXT, reason TEXT
+);
+CREATE INDEX IF NOT EXISTS auto_orders_ts ON auto_orders(ts DESC);
+
 CREATE TABLE IF NOT EXISTS token_stories (
   token_address TEXT PRIMARY KEY, ts REAL NOT NULL, story_json TEXT, method TEXT
 );

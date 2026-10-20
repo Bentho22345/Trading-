@@ -57,7 +57,10 @@ def stack(tmp_path_factory):
            "TRADER_COMPUTE_EVERY": "2", "TRADER_HARVEST_EVERY": "0.3", "TRADER_GECKO_RPM": "600",
            "HELIUS_RPC_URL": f"http://127.0.0.1:{up_http}/helius", "YOUTUBE_API_URL": f"http://127.0.0.1:{up_http}/yt",
            "DUNE_API_URL": f"http://127.0.0.1:{up_http}/dune", "YT_BUZZ_DELAY": "1", "YT_BUZZ_EVERY": "4",
-           "X_API_URL": f"http://127.0.0.1:{up_http}/x/2", "X_PROFILE_EVERY": "4", "X_FOLLOW_EVERY": "4"}
+           "X_API_URL": f"http://127.0.0.1:{up_http}/x/2", "SOLANA_RPC_URL": f"http://127.0.0.1:{up_http}/helius",
+           "TRENDS_BLUESKY_URL": f"http://127.0.0.1:{up_http}/bsky", "TRENDS_MASTODON_URL": f"http://127.0.0.1:{up_http}/masto",
+           "TRENDS_WIKIPEDIA_URL": f"http://127.0.0.1:{up_http}/wiki", "TRENDS_HACKERNEWS_URL": f"http://127.0.0.1:{up_http}/hn",
+           "TRENDS_DELAY": "1", "TRENDS_EVERY": "3", "X_PROFILE_EVERY": "4", "X_FOLLOW_EVERY": "4"}
     app = subprocess.Popen([sys.executable, "-m", "radar"], cwd=ROOT, env=env)
     wait_http(f"http://127.0.0.1:{up_http}/dex/token-profiles/latest/v1")
     _UPSTREAM.append(f"127.0.0.1:{up_http}")
@@ -503,3 +506,65 @@ def test_x_radar_tweets_races_callers_watchers(stack):
             break
         time.sleep(0.3)
     assert any("Tweet radar" in x["text"] and "Zorblax" in x["text"] for x in httpx.get(f"http://{fake}/tg/log").json()[n0:])
+
+
+def test_autopilot_demo_api_and_real_mode_guard(stack):
+    """Demo trading through the API (quick buy, live position, manual sell); real mode refuses without a password."""
+    from .fixtures import MINT as M
+    base = f"http://{stack}/api/autopilot"
+    assert httpx.post(f"{base}/demo/reset").json()["balance"] == 10
+    r = httpx.post(f"{base}/mode", json={"mode": "demo"}).json()
+    assert r["mode"] == "demo"
+    httpx.post(f"{base}/config", json={"triggers": {"snipe": {"on": False}, "tweet_race": {"on": False}, "copy": {"on": False},
+                                                    "x_call": {"on": False}}})
+    pos = None
+    for _ in range(40):
+        q = httpx.post(f"{base}/buy", json={"mint": M, "sol": 0.2})
+        if q.status_code == 200:
+            pos = q.json()["position"]
+            break
+        time.sleep(0.5)
+    assert pos and pos["mode"] == "demo" and pos["tokens"] > 0
+    ov = httpx.get(base).json()
+    assert any(p["mint"] == M for p in ov["open"]) and ov["demo_balance"] < 10
+    out = httpx.post(f"{base}/positions/{pos['id']}/sell", json={"fraction": 1}).json()
+    assert not any(p["id"] == pos["id"] for p in out["open"])
+    hist = httpx.get(f"{base}/history", params={"mode": "demo"}).json()
+    assert hist["positions"][0]["exit_reason"] == "manual" and {o["side"] for o in hist["orders"]} >= {"buy", "sell"}
+    # trading wallet: created, payout set, real mode still refused (no site password on this test server)
+    w = httpx.post(f"{base}/wallet").json()
+    assert len(w["pubkey"]) >= 32
+    assert httpx.post(f"{base}/wallet").status_code == 400
+    assert httpx.post(f"{base}/wallet/payout", json={"address": "nope"}).status_code == 400
+    assert httpx.post(f"{base}/wallet/payout", json={"address": w["pubkey"]}).status_code == 200
+    bad = httpx.post(f"{base}/mode", json={"mode": "real", "confirm": "I UNDERSTAND THIS USES REAL MONEY"})
+    assert bad.status_code == 400 and "password" in bad.json()["detail"]
+    assert httpx.post(f"{base}/wallet/export", json={}).status_code == 400
+    assert httpx.post(f"{base}/buy", json={"mint": M, "mode": "real"}).status_code == 400
+    assert httpx.post(f"{base}/mode", json={"mode": "off"}).json()["mode"] == "off"
+
+
+def test_free_trends_reach_launches(stack):
+    """Bluesky / Mastodon / Wikipedia / HN trends are indexed, and a launch named after one gets the trend read."""
+    hit = None
+    for _ in range(60):
+        t = httpx.get(f"http://{stack}/api/trends").json()
+        hit = next((m for m in t["matches"] if m["term"] in ("Zorblax", "Zorblax (dog)")), None)
+        if hit and {"bluesky", "mastodon", "wikipedia", "hackernews"} <= {i["source"] for i in t["items"]}:
+            break
+        time.sleep(0.5)
+    assert hit, t
+    assert not any(i["term"] == "Main Page" for i in t["items"])
+    one = httpx.get(f"http://{stack}/api/snipe/{hit['mint']}").json()
+    assert one["metrics"]["web_trend"] is True and one["trend"]["term"] == hit["term"]
+    assert any(d["key"] == "buzz" and "trending on" in d["detail"] for d in one["detectors"])
+
+
+def test_backup_download_is_a_valid_database(stack, tmp_path):
+    import sqlite3
+    r = httpx.get(f"http://{stack}/api/admin/backup", timeout=30)
+    assert r.status_code == 200 and r.content[:15] == b"SQLite format 3"
+    p = tmp_path / "b.db"
+    p.write_bytes(r.content)
+    with sqlite3.connect(p) as c:
+        assert c.execute("SELECT COUNT(*) FROM x_accounts").fetchone()[0] >= 70

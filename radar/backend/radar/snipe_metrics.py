@@ -36,6 +36,7 @@ METRICS: dict[str, tuple[str, str, str]] = {
     # X Radar (coin launched off a tracked tweet)
     "x_tweet_score": ("Source tweet score", "", "num"), "x_spawn_rank": ("Coin # off the tweet", "", "num"),
     "x_delay_s": ("Seconds after the tweet", "s", "num"), "x_top_account": ("Tweet from an S-tier account", "", "bool"),
+    "web_trend": ("Named after an off-crypto trend", "", "bool"),
 }
 OPS = {"<=": lambda a, b: a <= b, ">=": lambda a, b: a >= b, "<": lambda a, b: a < b, ">": lambda a, b: a > b,
        "==": lambda a, b: a == b, "!=": lambda a, b: a != b}
@@ -75,6 +76,7 @@ def compute(L: Any, now: float, sol_usd: float | None, ctx: dict[str, Any]) -> d
     ai = getattr(L, "ai", None) or {}
     yt = ctx.get("yt") or {}
     xr = ctx.get("x") or {}
+    trend = ctx.get("trend") or {}
     ins, fresh = it.get("insiders") or [], it.get("fresh") or []
     intel = {
         "insiders": len(ins) if it else None,
@@ -87,6 +89,7 @@ def compute(L: Any, now: float, sol_usd: float | None, ctx: dict[str, Any]) -> d
         "ai_narrative": ai.get("narrative"),
         "x_tweet_score": xr.get("score"), "x_spawn_rank": xr.get("rank"), "x_delay_s": xr.get("delay_s"),
         "x_top_account": (xr.get("tier") == "S") if xr else None,
+        "web_trend": bool(trend), "web_trend_term": trend.get("term"),
     }
     return {**intel,
         "holders": len(bal), "top10_pct": round(sum(top[:10]) / PUMP_SUPPLY * 100, 1),
@@ -143,6 +146,8 @@ def upside_risk(r: dict[str, Any], mx: dict[str, Any]) -> tuple[float, float, li
         add(min(12.0, mx["yt_videos"] * 4 + (mx.get("yt_views") or 0) / 2500), f"{mx['yt_videos']} YouTube video{'s' if mx['yt_videos'] > 1 else ''}")
     if mx.get("ai_meme_score") is not None and mx["ai_meme_score"] >= 6:
         add(min(12.0, (mx["ai_meme_score"] - 5) * 2.5), f"AI meme score {mx['ai_meme_score']:.0f}/10")
+    if mx.get("web_trend"):
+        add(8, f"named after a live trend ({mx.get('web_trend_term')})")
     if mx.get("x_tweet_score") is not None:
         add(min(18.0, mx["x_tweet_score"] / 5 + (5 if mx.get("x_spawn_rank") == 1 else 0)),
             f"coin #{mx.get('x_spawn_rank')} off a tracked tweet" + (" (S-tier)" if mx.get("x_top_account") else ""))

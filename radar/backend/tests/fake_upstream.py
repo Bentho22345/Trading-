@@ -264,6 +264,34 @@ def x_tweets(ids: str = ""):
                      for i in ids.split(",") if i]}
 
 
+@api.get("/bsky/xrpc/app.bsky.unspecced.getTrendingTopics")
+def bsky_trends(limit: int = 25):
+    return {"topics": [{"topic": "zorblax", "displayName": "Zorblax", "link": "/profile/trending.bsky.app/feed/zorblax"},
+                       {"topic": "rain", "displayName": "Rain"}]}
+
+
+@api.get("/masto/api/v1/trends/tags")
+def masto_trends(limit: int = 20):
+    return [{"name": "Zorblax", "url": "https://mastodon.social/tags/Zorblax", "history": [{"day": "1", "uses": "812", "accounts": "300"}]}]
+
+
+@api.get("/wiki/feed/v1/wikipedia/en/featured/{y}/{m}/{d}")
+def wiki_feed(y: str, m: str, d: str):
+    return {"mostread": {"articles": [{"titles": {"normalized": "Main Page"}, "views": 1e6, "rank": 1},
+                                      {"titles": {"normalized": "Zorblax (dog)"}, "views": 90000, "rank": 2,
+                                       "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Zorblax"}}}]}}
+
+
+@api.get("/hn/v0/topstories.json")
+def hn_top():
+    return [1, 2]
+
+
+@api.get("/hn/v0/item/{i}.json")
+def hn_item(i: int):
+    return {"id": i, "title": f"Show HN: thing {i}", "score": 100 + i}
+
+
 @api.get("/dune/api/v1/query/{qid}/results")
 def dune_results(qid: int):
     if qid == 404:

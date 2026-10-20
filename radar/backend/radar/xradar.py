@@ -167,6 +167,7 @@ class XRadar:
         self.alert_times: list[float] = []
         self.stats = {"posts": 0, "requests": 0, "empty": 0, "ai_read": 0, "spawns": 0, "races": 0, "calls": 0, "alerts": 0,
                       "last_poll": {}, "errors": 0, "last_error": None, "budget_paused": None}
+        self.call_hooks: list[Any] = []                 # Autopilot listens for contract calls from top accounts
         self.cost_post = float(os.environ.get("X_COST_PER_POST", "0.005"))
         self.cost_user = float(os.environ.get("X_COST_PER_USER", "0.010"))
 
@@ -616,6 +617,11 @@ class XRadar:
             await self.db.exec("INSERT OR IGNORE INTO x_calls (tweet_id, handle, mint, symbol, ts, mcap_at_call, peak_mcap, last_mcap, updated) "
                                "VALUES (?,?,?,?,?,?,?,?,?)", (t["id"], t["handle"], mint, tag, t["ts"], mc, mc, mc, time.time()))
             self.stats["calls"] += 1
+            for fn in self.call_hooks:
+                try:
+                    await fn(mint, t["handle"], t["tier"])
+                except Exception as e:  # noqa: BLE001
+                    log.debug("call hook: %s", e)
             if t["tier"] in ("S", "A"):
                 await self.tracker._ensure_token(mint, "solana", None, tag, None, "x_call")
             await feed.push("x", "call", f"📣 @{t['handle']} called {('$' + tag) if tag else mint[:6] + '…'}",
