@@ -84,7 +84,7 @@ export default function EnginesPage() {
     <div className="pt-4">
       <Reveal className="mb-8">
         <div className="eyebrow mb-3">Engines · everything your keys power</div>
-        <h1 className="display text-[60px] md:text-[104px]">{firing}/6 <span className="text-up">firing.</span></h1>
+        <h1 className="display text-[60px] md:text-[104px]">{firing}/6 <span className="text-accent">firing.</span></h1>
         <p className="mt-4 max-w-3xl text-[16px] text-white/60">
           Helius checks a launch&apos;s early buyers on chain for <b className="text-white">insider clusters and fresh wallets</b>. YouTube finds which
           coins new videos are talking about. Claude reads every promising launch&apos;s meme in batches for fractions of a cent. Dune keeps

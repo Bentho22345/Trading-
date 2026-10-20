@@ -60,7 +60,7 @@ def stack(tmp_path_factory):
            "X_API_URL": f"http://127.0.0.1:{up_http}/x/2", "SOLANA_RPC_URL": f"http://127.0.0.1:{up_http}/helius",
            "TRENDS_BLUESKY_URL": f"http://127.0.0.1:{up_http}/bsky", "TRENDS_MASTODON_URL": f"http://127.0.0.1:{up_http}/masto",
            "TRENDS_WIKIPEDIA_URL": f"http://127.0.0.1:{up_http}/wiki", "TRENDS_HACKERNEWS_URL": f"http://127.0.0.1:{up_http}/hn",
-           "TRENDS_DELAY": "1", "TRENDS_EVERY": "3", "X_PROFILE_EVERY": "4", "X_FOLLOW_EVERY": "4"}
+           "TRENDS_DELAY": "1", "TRENDS_EVERY": "3", "RESEND_API_URL": f"http://127.0.0.1:{up_http}/resend", "X_PROFILE_EVERY": "4", "X_FOLLOW_EVERY": "4"}
     app = subprocess.Popen([sys.executable, "-m", "radar"], cwd=ROOT, env=env)
     wait_http(f"http://127.0.0.1:{up_http}/dex/token-profiles/latest/v1")
     _UPSTREAM.append(f"127.0.0.1:{up_http}")
@@ -208,7 +208,8 @@ def test_password_gate(tmp_path):
         base = f"http://127.0.0.1:{port}"
         assert httpx.get(f"{base}/api/healthz").status_code == 200
         assert httpx.get(f"{base}/api/connectors").status_code == 401
-        assert httpx.get(f"{base}/api/session").json() == {"auth_required": True, "authed": False}
+        se = httpx.get(f"{base}/api/session").json()
+        assert se["auth_required"] is True and se["authed"] is False and se["legacy_password"] is True
         assert httpx.post(f"{base}/api/login", json={"password": "nope"}).status_code == 401
         with httpx.Client(base_url=base) as c:
             assert c.post("/api/login", json={"password": "hunter2-correct-horse"}).status_code == 200
@@ -443,6 +444,10 @@ def test_engines_helius_youtube_dune_telegram(stack):
     httpx.post(f"http://{fake}/tg/push_update", json={"text": "/top", "chat": 999})
     time.sleep(2.5)
     assert not any(x.get("chat_id") == "999" for x in httpx.get(f"http://{fake}/tg/log").json())
+    for _ in range(20):                                                  # /api/engines is cached for 2 s
+        if httpx.get(f"http://{stack}/api/engines").json()["telegram"]["push_mode"] == "balanced":
+            break
+        time.sleep(0.3)
     assert httpx.get(f"http://{stack}/api/engines").json()["telegram"]["push_mode"] == "balanced"
 
 
@@ -538,7 +543,7 @@ def test_autopilot_demo_api_and_real_mode_guard(stack):
     assert httpx.post(f"{base}/wallet/payout", json={"address": "nope"}).status_code == 400
     assert httpx.post(f"{base}/wallet/payout", json={"address": w["pubkey"]}).status_code == 200
     bad = httpx.post(f"{base}/mode", json={"mode": "real", "confirm": "I UNDERSTAND THIS USES REAL MONEY"})
-    assert bad.status_code == 400 and "password" in bad.json()["detail"]
+    assert bad.status_code == 400 and "locked" in bad.json()["detail"]
     assert httpx.post(f"{base}/wallet/export", json={}).status_code == 400
     assert httpx.post(f"{base}/buy", json={"mint": M, "mode": "real"}).status_code == 400
     assert httpx.post(f"{base}/mode", json={"mode": "off"}).json()["mode"] == "off"
@@ -597,3 +602,44 @@ def test_self_driving_mode_watches_values_and_streams(stack):
     r = httpx.post(f"{base}/brain/reset").json()
     assert r["trained"] == 0 and r["balance"] == 10
     assert httpx.post(f"{base}/mode", json={"mode": "off"}).json()["mode"] == "off"
+
+
+def test_zz_accounts_signup_verify_login_lock(stack):
+    """Runs last: once an account exists the whole API is locked behind log-in."""
+    import re as _re
+    fake = stack_upstream()
+    base = f"http://{stack}/api/auth"
+    httpx.post(f"http://{stack}/api/connectors/email", json={"values": {"from_address": "Radar <radar@test.dev>", "resend_api_key": "re_test"}})
+    me = httpx.get(f"{base}/me").json()
+    assert me["user"] is None and me["signup_open"] and me["email_configured"]
+    assert httpx.post(f"{base}/signup", json={"email": "bad", "password": "Whatever123"}).status_code == 400
+    r = httpx.post(f"{base}/signup", json={"email": "owner@test.dev", "password": "Ownerpass123", "name": "Ben"}).json()
+    assert r["role"] == "owner" and r["sent"] and r["via"] == "resend"
+    mail = httpx.get(f"http://{fake}/resend/log").json()[-1]
+    assert mail["to"] == ["owner@test.dev"] and "Verify" in mail["subject"]
+    token = _re.search(r"token=([\w-]+)", mail["text"]).group(1)
+    assert httpx.get(f"http://{stack}/api/engines").status_code == 401             # locked now
+    assert httpx.post(f"{base}/login", json={"email": "owner@test.dev", "password": "Ownerpass123"}).status_code == 401  # unverified
+    assert httpx.post(f"{base}/verify", json={"token": token}).json()["ok"]
+    c = httpx.Client()
+    lr = c.post(f"{base}/login", json={"email": "owner@test.dev", "password": "Ownerpass123", "remember": True})
+    assert lr.status_code == 200 and "radar_sid" in lr.cookies and "Max-Age=2592000" in lr.headers["set-cookie"]
+    assert c.get(f"http://{stack}/api/engines").status_code == 200
+    assert c.get(f"http://{stack}/api/session").json()["user"]["email"] == "owner@test.dev"
+    assert len(c.get(f"{base}/sessions").json()) == 1
+    assert httpx.post(f"{base}/signup", json={"email": "x@test.dev", "password": "Anotherpass1"}).status_code == 403   # closed
+    assert c.post(f"{base}/signup-setting", json={"open": True}).json()["signup_open"]
+    assert httpx.post(f"{base}/signup", json={"email": "member@test.dev", "password": "Memberpass1"}).json()["role"] == "member"
+    mtoken = _re.search(r"token=([\w-]+)", httpx.get(f"http://{fake}/resend/log").json()[-1]["text"]).group(1)
+    httpx.post(f"{base}/verify", json={"token": mtoken})
+    m = httpx.Client()
+    m.post(f"{base}/login", json={"email": "member@test.dev", "password": "Memberpass1"})
+    assert m.get(f"http://{stack}/api/autopilot").status_code == 200                # members can look
+    assert m.post(f"http://{stack}/api/autopilot/mode", json={"mode": "demo"}).status_code == 403   # …not touch
+    async def ws_ok(cookie):
+        async with websockets.connect(f"ws://{stack}/ws", additional_headers={"Cookie": cookie}) as ws:
+            await ws.send(json.dumps({"view": []}))
+            return json.loads(await asyncio.wait_for(ws.recv(), 10))
+    assert asyncio.run(ws_ok(f"radar_sid={c.cookies['radar_sid']}"))
+    c.post(f"{base}/logout")
+    assert c.get(f"http://{stack}/api/engines").status_code == 401

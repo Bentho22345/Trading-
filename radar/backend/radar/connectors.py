@@ -122,6 +122,22 @@ async def t_discord(v: dict[str, str]) -> str:
     return _need(r, "Test message posted to Discord")
 
 
+async def t_email(v: dict[str, str]) -> str:
+    if not (v.get("resend_api_key") or v.get("smtp_host")):
+        raise ValueError("Add a Resend API key, or SMTP host / user / password")
+    from .mailer import Mailer
+
+    class _One:
+        async def values(self, cid: str) -> dict[str, str]:
+            return v
+    r = await Mailer(_One()).send(v["from_address"], "✅ Memecoin Radar email works",
+                                  "<p>Account verification and password-reset emails will be sent from this address.</p>",
+                                  "Account verification and password-reset emails will be sent from this address.")
+    if not r.get("sent"):
+        raise ValueError(r.get("error") or "send failed")
+    return f"Test email sent to {v['from_address']} via {r['via']}"
+
+
 async def t_ntfy(v: dict[str, str]) -> str:
     server = (v.get("server") or "https://ntfy.sh").rstrip("/")
     r = await _post(f"{server}/{v['topic']}", content="Memecoin Radar connected", headers={"Title": "Radar ✅"})
@@ -249,6 +265,16 @@ CATALOG: list[Connector] = [
     Connector("ntfy", "ntfy.sh phone push", "Alerts", "key", "Free phone push notifications, no account needed.",
               "Alerts", 2, "https://ntfy.sh", "Install the ntfy app, subscribe to a long random topic name, paste the same name here.",
               "free", [Field("topic", "Topic name", env="NTFY_TOPIC"), Field("server", "Server", secret=False, optional=True, placeholder="https://ntfy.sh")], t_ntfy),
+    Connector("email", "Email (accounts)", "Alerts", "key", "Sends account verification and password-reset emails.",
+              "Sign-up verification, password resets", 1, "https://resend.com/api-keys",
+              "Easiest: resend.com → API Keys → create (free 3,000/month); use an address on a domain you verified there "
+              "(or onboarding@resend.dev to test). Or SMTP, e.g. Gmail: smtp.gmail.com, port 587, your address, an App Password.",
+              "free", [Field("from_address", "From address", secret=False, env="EMAIL_FROM", placeholder="Radar <radar@yourdomain.com>"),
+                       Field("resend_api_key", "Resend API key", env="RESEND_API_KEY", optional=True),
+                       Field("smtp_host", "SMTP host", secret=False, env="SMTP_HOST", optional=True, placeholder="smtp.gmail.com"),
+                       Field("smtp_port", "SMTP port", secret=False, env="SMTP_PORT", optional=True, placeholder="587"),
+                       Field("smtp_user", "SMTP username", secret=False, env="SMTP_USER", optional=True),
+                       Field("smtp_password", "SMTP password / app password", env="SMTP_PASSWORD", optional=True)], t_email, "email"),
     Connector("discord", "Discord webhook", "Alerts", "key", "Posts alerts into a Discord channel.",
               "Alerts", 2, "https://support.discord.com/hc/en-us/articles/228383668", "Channel settings → Integrations → Webhooks → New → Copy URL.",
               "free", [Field("webhook_url", "Webhook URL", env="DISCORD_WEBHOOK_URL")], t_discord),

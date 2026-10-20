@@ -87,7 +87,7 @@ export default function SnipePage() {
       <Reveal className="mb-6 grid items-end gap-8 lg:grid-cols-[1fr_auto]">
         <div>
           <div className="eyebrow mb-3 flex items-center gap-2"><span className="live-dot h-1.5 w-1.5 rounded-full bg-up" />Sniper · pump.fun · scored per trade · Mayhem coins hidden</div>
-          <h1 className="display text-[60px] md:text-[104px]">Snipe <span className="text-up">smarter.</span></h1>
+          <h1 className="display text-[60px] md:text-[104px]">Snipe <span className="text-accent">smarter.</span></h1>
           <p className="mt-3 max-w-2xl text-[15px] text-white/60">Every launch gets two numbers, from its first trade: <b className="text-up">upside</b> (top wallets in, curve speed, people talking,
             hot meta, socials) and <b className="text-down">risk</b> (bundlers, snipers, top-10 and dev bags, no socials). Pick how much risk you’ll take — a coin doesn’t need to be perfect to be worth a shot.</p>
         </div>

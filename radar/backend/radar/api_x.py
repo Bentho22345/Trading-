@@ -13,7 +13,9 @@ router = APIRouter(prefix="/api/x")
 
 @router.get("/tweets")
 async def tweets(hours: float = 12, limit: int = 60, min_score: float = 0, category: str = "", kind: str = "") -> list[dict[str, Any]]:
-    return await S.xradar.board(min(hours, 72), min(limit, 300), min_score, category, kind)
+    from .api2 import _cached        # every client polls this: one computation per 2 s, shared (live updates come over the socket)
+    return await _cached(f"x:tweets:{hours}:{limit}:{min_score}:{category}:{kind}", 2,
+                         lambda: S.xradar.board(min(hours, 72), min(limit, 300), min_score, category, kind))
 
 
 @router.get("/races")
@@ -28,7 +30,8 @@ async def callers(days: float = 7, min_calls: int = 1) -> list[dict[str, Any]]:
 
 @router.get("/status")
 async def status() -> dict[str, Any]:
-    return await S.xradar.status()
+    from .api2 import _cached
+    return await _cached("x:status", 2, S.xradar.status)
 
 
 @router.get("/events")

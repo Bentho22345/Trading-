@@ -30,7 +30,7 @@ export default function AutopilotPage() {
     <div className="pt-4">
       <Reveal className="mb-8">
         <div className="eyebrow mb-3">Autopilot · Radar trades its own signals</div>
-        <h1 className="display text-[60px] md:text-[104px]">Auto<span className={mode === 'real' ? 'text-down' : 'text-up'}>pilot.</span></h1>
+        <h1 className="display text-[60px] md:text-[104px]">Auto<span className={mode === 'real' ? 'text-down' : 'text-accent'}>pilot.</span></h1>
         <p className="mt-4 max-w-3xl text-[16px] text-white/60">
           Pick what makes Radar buy (snipe score, your strategies, tweet races, copy-trading top wallets, proven devs, contract calls
           from top X accounts), how much, and how it gets out (take-profit ladder, stop loss, trailing stop, time stop, rug exits).
@@ -55,6 +55,8 @@ export default function AutopilotPage() {
           <span>Balance <b>{mode === 'real' ? sol(d?.wallet?.sol) : mode === 'auto' ? sol(d?.auto_balance) : sol(d?.demo_balance)}</b></span>
           <span>Today <b className={(sum?.today?.pnl ?? 0) >= 0 ? 'text-up' : 'text-down'}>{sol(sum?.today?.pnl)}</b></span>
           <span>All-time <b className={(sum?.pnl_sol ?? 0) >= 0 ? 'text-up' : 'text-down'}>{sol(sum?.pnl_sol)}</b>{sum?.win_rate != null ? ` · ${sum.win_rate}% wins` : ''}</span>
+          <button onClick={() => { try { const off = localStorage.getItem('radar:toasts') === 'off'; localStorage.setItem('radar:toasts', off ? 'on' : 'off'); alert(off ? 'Trade pop-ups on (reload to apply).' : 'Trade pop-ups off.'); } catch { /* private mode */ } }}
+            className="rounded-full border border-white/15 px-3 py-2 text-[11px] font-semibold text-white/60 hover:text-white" title="Show or hide the trade pop-ups">🔔 Pop-ups</button>
           <button onClick={() => confirm('Sell every open position and switch Autopilot off?') && api('/api/autopilot/panic', { method: 'POST' }).then(load)}
             className="rounded-full bg-down px-4 py-2 text-[12px] font-extrabold uppercase tracking-wider text-white">🛑 Panic sell</button>
         </div>
@@ -397,7 +399,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <span>Learned from <b>{b?.trained ?? 0}</b></span>
           <span>Entry bar <b className="text-flash">{b?.threshold?.toFixed(0) ?? '—'}</b></span>
           <span className="flex rounded-full bg-white/[0.06] p-0.5">
-            {['careful', 'aggressive', 'degen'].map((lv) => (
+            {['careful', 'aggressive', 'degen', 'hyper'].map((lv) => (
               <button key={lv} onClick={() => api('/api/autopilot/brain/aggression', { method: 'POST', body: JSON.stringify({ level: lv }) }).then(load)}
                 className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold capitalize ${b?.aggression === lv ? 'bg-flash text-white' : 'text-white/55 hover:text-white'}`}>{lv}</button>
             ))}

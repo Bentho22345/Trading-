@@ -67,6 +67,8 @@ class State:
     wallet: Any
     autopilot: Any
     trends: Any
+    mailer: Any
+    accounts: Any
 
 
 S = State()
@@ -171,6 +173,7 @@ async def lifespan(app: FastAPI):
     S.wallet = TradingWallet(S.cfg, S.chain)
     S.autopilot = Autopilot(S.db, S.cfg, S.sniper, S.tracker, S.traders, S.smart, S.alerts, S.wallet)
     S.tracker.hooks["trade"].append(S.autopilot.on_trade)
+    S.sniper.on_batch = S.autopilot.kick.set
     S.smart.trade_hooks.append(S.autopilot.brain.on_trade)      # copy-trading sees the best wallets' Raydium / Jupiter swaps too
     S.xradar.call_hooks.append(S.autopilot.on_x_call)
     S.tgbot.autopilot = S.autopilot
@@ -178,6 +181,13 @@ async def lifespan(app: FastAPI):
     S.trends = Trends(S.db, S.social)
     S.trends.sniper = S.sniper
     S.sniper.trends = S.trends
+    from . import auth as _auth
+    from .accounts import Accounts
+    from .mailer import Mailer
+    S.mailer = Mailer(S.connectors)
+    S.accounts = Accounts(S.db, S.cfg, S.mailer)
+    _auth.ACCOUNTS = S.accounts
+    _auth.HAS_USERS[0] = await S.accounts.any_users()
     from .api_engines import engines_status, load_budgets
     S.tgbot.status_fn = engines_status
     await load_budgets()
@@ -212,7 +222,7 @@ async def lifespan(app: FastAPI):
         S.social.start()
         await S.smart.load()
         from . import guard
-        jobs = [guard.disk_loop(S.db, str(settings.db_path)), guard.memory_loop(S), S.sniper.eval_loop(), loop_lag_monitor(), S.metadata.run(), S.playbook.loop(), periodic(300, load_pool), S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
+        jobs = [guard.disk_loop(S.db, str(settings.db_path)), guard.memory_loop(S), S.sniper.eval_loop(), loop_lag_monitor(), S.metadata.run(), S.playbook.loop(), periodic(300, load_pool), periodic(3600, S.accounts.prune), S.sniper.outcome_loop(), S.sniper.flush_peaks_loop(), S.sniper.context_loop(), S.traders.compute_loop(), S.traders.harvest_gecko_loop(), S.traders.harvest_birdeye_loop(), S.traders.backfill_loop(),
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
                 S.onchain.run(), S.ytbuzz.loop(), S.narrator.loop(), S.tgbot.run(), S.tgbot.push_loop(), S.traders.dune_loop(),
@@ -290,8 +300,14 @@ app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), al
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
     from . import auth
-    if auth.needs_auth(request) and not auth.is_authed(dict(request.cookies)):
-        return JSONResponse({"detail": "login required"}, status_code=401)
+    p = request.url.path
+    if p.startswith("/api/") and p not in auth.OPEN_PATHS and not p.startswith("/api/auth/") and auth.protected():
+        user = await auth.current_user(dict(request.cookies))
+        if user is None:
+            return JSONResponse({"detail": "login required"}, status_code=401)
+        if user["role"] != "owner" and request.method not in ("GET", "HEAD", "OPTIONS"):
+            return JSONResponse({"detail": "Your account is read-only — ask the owner to make you an owner"}, status_code=403)
+        request.state.user = user
     resp = await call_next(request)
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -324,9 +340,11 @@ async def logout(response: Response) -> dict[str, bool]:
 
 
 @app.get("/api/session")
-async def session(request: Request) -> dict[str, bool]:
+async def session(request: Request) -> dict[str, Any]:
     from . import auth
-    return {"auth_required": bool(auth.password()), "authed": auth.is_authed(dict(request.cookies))}
+    user = await auth.current_user(dict(request.cookies))
+    return {"auth_required": auth.protected(), "authed": (user is not None) or not auth.protected(), "user": user,
+            "legacy_password": bool(auth.password()), "has_users": auth.HAS_USERS[0]}
 
 
 @app.get("/api/healthz")
@@ -638,19 +656,21 @@ from .api_news import router as _router_news  # noqa: E402
 from .api_engines import router as _router_engines  # noqa: E402
 from .api_x import router as _router_x  # noqa: E402
 from .api_autopilot import router as _router_ap  # noqa: E402
+from .api_accounts import router as _router_acc  # noqa: E402
 
 app.include_router(_router2)
 app.include_router(_router_news)
 app.include_router(_router_engines)
 app.include_router(_router_x)
 app.include_router(_router_ap)
+app.include_router(_router_acc)
 
 
 # ---------------- live socket ----------------
 @app.websocket("/ws")
 async def ws(socket: WebSocket) -> None:
     from . import auth
-    if not auth.is_authed(dict(socket.cookies)):
+    if auth.protected() and await auth.current_user(dict(socket.cookies)) is None:
         await socket.close(code=4401)
         return
     await hub.connect(socket)

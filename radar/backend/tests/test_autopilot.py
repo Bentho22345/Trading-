@@ -129,7 +129,7 @@ def test_real_mode_needs_password_confirmation_and_wallet(tmp_path, monkeypatch)
         ap, db = await make(tmp_path, [])
         ap.wallet = TradingWallet(KV(), None)
         monkeypatch.delenv("RADAR_PASSWORD", raising=False)
-        with pytest.raises(ValueError, match="site password"):
+        with pytest.raises(ValueError, match="locked"):
             await ap.set_mode("real", REAL_PHRASE, True)
         monkeypatch.setenv("RADAR_PASSWORD", "pw")
         with pytest.raises(ValueError, match="password"):
@@ -286,5 +286,21 @@ def test_brain_shadow_learning_and_kelly_sizing(tmp_path):
         assert b.size(10, 1.0, "real") == 0.05                          # real money never exceeds your hard cap
         await b.set_aggression("degen")
         assert b.aggression == "degen"
+        await db.close()
+    asyncio.run(run())
+
+
+def test_brain_v3_hyper_default_and_narrative_signals(tmp_path):
+    from radar.brain import AGGRESSION, features
+
+    async def run():
+        coin = launch("NARRmint" + "6" * 32, upside=30, risk=30, buyers=20)
+        ap, db = await make(tmp_path, [coin])
+        b = ap.brain
+        assert b.aggression == "hyper" and AGGRESSION["hyper"]["max_open"] >= 20
+        plain = b.value(features(coin.result))
+        hot = b.value(features(coin.result, 0, {"narr": {"strength": 90, "stage": "ignition", "z": 6, "bot_share": 0}, "x_calls": 2}))
+        botted = b.value(features(coin.result, 0, {"narr": {"strength": 90, "stage": "ignition", "z": 6, "bot_share": 0.8}, "x_calls": 0}))
+        assert hot > botted > plain - 10 and hot - plain > 15          # a live, igniting narrative + X calls move it a lot
         await db.close()
     asyncio.run(run())

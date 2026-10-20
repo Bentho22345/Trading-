@@ -41,11 +41,12 @@ export function Nav() {
   const [more, setMore] = useState(false);
   const [mobile, setMobile] = useState(false);
   const [authed, setAuthed] = useState(false);
+  const [user, setUser] = useState<any>(null);
   const [scrolled, setScrolled] = useState(false);
   const [theme, setTheme] = useTheme();
 
   useEffect(() => {
-    fetch('/api/session').then((r) => r.json()).then((s) => setAuthed(s.auth_required && s.authed)).catch(() => {});
+    fetch('/api/session').then((r) => r.json()).then((s) => { setAuthed(s.auth_required && s.authed); setUser(s.user || null); }).catch(() => {});
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette((p) => !p); return; }
@@ -61,7 +62,7 @@ export function Nav() {
   }, [router]);
   useEffect(() => { setMore(false); setMobile(false); }, [path]);
 
-  if (path === '/login') return null;
+  if (['/login', '/signup', '/verify', '/reset'].includes(path)) return null;
   const active = (href: string) => (href === '/' ? path === '/' : path.startsWith(href));
   const secondary = LINKS.filter((l) => !l.primary);
 
@@ -72,7 +73,7 @@ export function Nav() {
           <Link href="/" className="flex items-center gap-2">
             <span className="relative flex h-7 w-7 items-center justify-center">
               <span className="absolute inset-0 rounded-full border-2 border-white/90" />
-              <span className="absolute inset-[5px] rounded-full bg-up shadow-[0_0_14px_var(--color-up)]" />
+              <span className="absolute inset-[5px] rounded-full bg-accent shadow-[0_0_14px_var(--color-accent)]" />
             </span>
             <span className="display text-[22px] tracking-wide">Radar</span>
           </Link>
@@ -80,7 +81,7 @@ export function Nav() {
             {LINKS.filter((l) => l.primary).map((l) => (
               <Link key={l.href} href={l.href} className={`relative whitespace-nowrap px-3 py-2 text-[12px] font-semibold uppercase tracking-[0.14em] transition-colors ${active(l.href) ? 'text-white' : 'text-white/50 hover:text-white'}`}>
                 {l.label}
-                {active(l.href) && <motion.span layoutId="nav-underline" className="absolute inset-x-3 -bottom-[3px] h-[2px] rounded-full bg-white" transition={{ type: 'spring', stiffness: 500, damping: 40 }} />}
+                {active(l.href) && <motion.span layoutId="nav-underline" className="absolute inset-x-3 -bottom-[3px] h-[2px] rounded-full bg-accent shadow-[0_0_10px_var(--color-accent)]" transition={{ type: 'spring', stiffness: 500, damping: 40 }} />}
               </Link>
             ))}
             <div className="relative" onMouseLeave={() => setMore(false)}>
@@ -115,7 +116,13 @@ export function Nav() {
             <span className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] sm:flex ${live ? 'text-up' : 'text-down'}`} title="Live socket">
               <span className={`h-1.5 w-1.5 rounded-full ${live ? 'live-dot bg-up' : 'bg-down'}`} />{live ? 'Live' : 'Offline'}
             </span>
-            {authed && <button onClick={() => fetch('/api/logout', { method: 'POST' }).then(() => { location.href = '/login'; })} className="hidden text-[11px] uppercase tracking-[0.14em] text-white/40 hover:text-white md:block">Log out</button>}
+            {authed ? (
+              <Link href="/account" title={user?.email || 'Account'} className="hidden h-8 w-8 items-center justify-center rounded-full bg-accent text-[13px] font-extrabold uppercase text-white shadow-[0_0_14px_-2px_var(--color-accent)] md:flex">
+                {(user?.name || user?.email || 'R')[0]}
+              </Link>
+            ) : (
+              <Link href="/signup" className="hidden text-[11px] font-semibold uppercase tracking-[0.14em] text-white/55 hover:text-white md:block">Create account</Link>
+            )}
             <button onClick={() => setMobile(true)} className="rounded-full p-2 text-white xl:hidden" aria-label="Menu"><Icon name="menu" size={20} /></button>
           </div>
         </div>

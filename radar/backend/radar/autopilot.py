@@ -95,6 +95,7 @@ class Autopilot:
         self.copy_buys: dict[str, deque] = defaultdict(lambda: deque(maxlen=50))
         self.signals: deque[dict[str, Any]] = deque(maxlen=200)       # external triggers (copy / X calls) waiting for the loop
         self.last_buy = 0.0
+        self.kick = asyncio.Event()                                      # set on every scoring batch / copy signal: react at once
         self.paused_reason: str | None = None
         self.stats = {"ticks": 0, "buys": 0, "sells": 0, "errors": 0, "last_error": None}
         from .brain import Brain
@@ -122,8 +123,8 @@ class Autopilot:
     async def set_mode(self, mode: str, confirm: str = "", password_ok: bool = False) -> dict[str, Any]:
         from . import auth
         if mode == "real":
-            if not auth.password():
-                raise ValueError("Real trading needs a site password (set RADAR_PASSWORD on Render) so nobody else can trade your wallet")
+            if not auth.protected():
+                raise ValueError("Real trading needs the site locked first: create an account (or set RADAR_PASSWORD) so nobody else can trade your wallet")
             if not password_ok:
                 raise ValueError("Re-enter your Radar password to switch on real trading")
             if confirm.strip().upper() != REAL_PHRASE:
@@ -206,7 +207,11 @@ class Autopilot:
         await self.load()
         while True:
             fast = self.c["mode"] == "auto" or (self.c["mode"] == "real" and self.c.get("real_engine") == "brain")
-            await asyncio.sleep(0.5 if fast else 1.0)
+            self.kick.clear()
+            try:   # event-driven: wake the moment the sniper re-scores coins (or a top wallet buys), else poll
+                await asyncio.wait_for(self.kick.wait(), timeout=0.5 if fast else 1.0)
+            except asyncio.TimeoutError:
+                pass
             self.stats["ticks"] += 1
             try:
                 await self.manage()

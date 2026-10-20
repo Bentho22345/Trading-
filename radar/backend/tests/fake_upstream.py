@@ -292,6 +292,20 @@ def hn_item(i: int):
     return {"id": i, "title": f"Show HN: thing {i}", "score": 100 + i}
 
 
+MAILS: list[dict] = []
+
+
+@api.post("/resend/emails")
+async def resend_send(body: dict):
+    MAILS.append(body)
+    return {"id": f"m{len(MAILS)}"}
+
+
+@api.get("/resend/log")
+def resend_log():
+    return MAILS
+
+
 @api.get("/dune/api/v1/query/{qid}/results")
 def dune_results(qid: int):
     if qid == 404:

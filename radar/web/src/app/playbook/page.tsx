@@ -27,7 +27,7 @@ export default function PlaybookPage() {
     <div className="pt-4">
       <Reveal className="mb-10">
         <div className="eyebrow mb-3">Playbook · how traders pick coins, digested</div>
-        <h1 className="display text-[60px] md:text-[104px]">The <span className="text-up">playbook.</span></h1>
+        <h1 className="display text-[60px] md:text-[104px]">The <span className="text-accent">playbook.</span></h1>
         <p className="mt-4 max-w-3xl text-[16px] text-white/60">Radar reads memecoin strategy videos, guides and posts, pulls out the concrete filters they recommend
           (top-10 %, dev bag, bundlers, snipers, holders, socials, dev sold…) and keeps a live <b className="text-white">crowd consensus</b> strategy from what most of them agree on.
           Every strategy is then run on every new launch and graded on <Link href="/proof" className="underline decoration-white/30 underline-offset-4">Proof</Link> — so you learn which advice actually works.</p>

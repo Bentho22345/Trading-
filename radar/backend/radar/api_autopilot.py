@@ -13,13 +13,12 @@ from .autopilot import DEFAULT, REAL_PHRASE
 from .solwallet import TradeError
 
 router = APIRouter(prefix="/api/autopilot")
+_BAL: dict[str, tuple[float, float | None, str | None]] = {}
 
 
-def _pw(request: Request, given: str | None) -> bool:
-    """Sensitive actions re-check the Radar password (no password set = local single-user install)."""
-    if not auth.password():
-        return True
-    return bool(given) and auth.check_password(given, request.client.host if request.client else "?")
+async def _pw(request: Request, given: str | None) -> bool:
+    """Sensitive actions re-check your password (your account's, or RADAR_PASSWORD). Unlocked local installs pass."""
+    return await auth.reauth(getattr(request.state, "user", None), given, request.client.host if request.client else "?")
 
 
 @router.get("")
@@ -28,12 +27,17 @@ async def overview() -> dict[str, Any]:
     pub = await S.wallet.pubkey()
     bal = None
     bal_err = None
-    if pub:
-        try:
-            bal = await S.chain.sol_balance(pub)
-        except Exception as e:  # noqa: BLE001
-            bal_err = str(e)[:120]
-    return {"config": ap.c, "defaults": DEFAULT, "real_phrase": REAL_PHRASE, "password_set": bool(auth.password()),
+    if pub:   # one RPC read per 15 s, not one per page poll
+        hit = _BAL.get(pub)
+        if hit and time.time() - hit[0] < 15:
+            bal, bal_err = hit[1], hit[2]
+        else:
+            try:
+                bal = await S.chain.sol_balance(pub)
+            except Exception as e:  # noqa: BLE001
+                bal_err = str(e)[:120]
+            _BAL[pub] = (time.time(), bal, bal_err)
+    return {"config": ap.c, "defaults": DEFAULT, "real_phrase": REAL_PHRASE, "password_set": auth.protected(),
             "wallet": {"pubkey": pub, "sol": bal, "error": bal_err, "payout": (await S.cfg.kv_get("autopilot:payout"))},
             "demo_balance": await ap.demo_balance(), **(await ap.snapshot()),
             "summary": {"demo": await ap.summary("demo"), "auto": await ap.summary("auto"), "real": await ap.summary("real")}}
@@ -95,7 +99,7 @@ class ModeBody(BaseModel):
 @router.post("/mode")
 async def mode(b: ModeBody, request: Request) -> dict[str, Any]:
     try:
-        return await S.autopilot.set_mode(b.mode, b.confirm, _pw(request, b.password) if b.mode == "real" else True)
+        return await S.autopilot.set_mode(b.mode, b.confirm, (await _pw(request, b.password)) if b.mode == "real" else True)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -194,7 +198,7 @@ class WithdrawBody(BaseModel):
 
 @router.post("/wallet/withdraw")
 async def wallet_withdraw(b: WithdrawBody, request: Request) -> dict[str, Any]:
-    if not _pw(request, b.password):
+    if not await _pw(request, b.password):
         raise HTTPException(403, "Wrong password")
     to = b.to or await S.cfg.kv_get("autopilot:payout")
     if not to:
@@ -214,9 +218,9 @@ class PwBody(BaseModel):
 
 @router.post("/wallet/export")
 async def wallet_export(b: PwBody, request: Request) -> dict[str, Any]:
-    if not auth.password():
-        raise HTTPException(400, "Set RADAR_PASSWORD before exporting a key")
-    if not _pw(request, b.password):
+    if not auth.protected():
+        raise HTTPException(400, "Create an account (or set RADAR_PASSWORD) before exporting a key")
+    if not await _pw(request, b.password):
         raise HTTPException(403, "Wrong password")
     try:
         return {"private_key": await S.wallet.export_key(), "note": "Import into Phantom: Add wallet → Import private key. Never share it."}
@@ -226,7 +230,7 @@ async def wallet_export(b: PwBody, request: Request) -> dict[str, Any]:
 
 @router.post("/wallet/forget")
 async def wallet_forget(b: PwBody, request: Request) -> dict[str, Any]:
-    if not _pw(request, b.password):
+    if not await _pw(request, b.password):
         raise HTTPException(403, "Wrong password")
     pub = await S.wallet.pubkey()
     if pub:

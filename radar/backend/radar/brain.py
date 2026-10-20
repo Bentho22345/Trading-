@@ -38,6 +38,8 @@ PRIORS: dict[str, float] = {
     "buy_pressure": 0.7, "buyers": 0.8, "organic": 0.7, "meme": 0.9, "tweet": 1.4, "youtube": 0.6, "trend": 0.5,
     "social": 0.8, "socials": 0.4, "x_comm": 0.3, "dev": 0.6, "dev_sold": 0.3, "insiders": -1.8, "fresh": -0.5,
     "snipers": -0.8, "bundle": -1.0, "top10": -0.8, "bots": -0.4, "young": 0.4, "small": 0.4,
+    # v3 — narrative first: memecoins trade on stories, so what the rest of Radar is finding gets real weight
+    "narrative": 1.6, "ignition": 1.0, "mention_speed": 1.0, "x_calls": 1.5, "hype_bots": -1.0,
 }
 LABELS = {"upside": "Upside score", "risk": "Risk score", "alpha": "Top wallets in", "copy": "Best wallets buying now",
           "velocity": "Graduation pace", "progress": "Bonding-curve progress", "flow": "Net SOL flowing in", "sol_rate": "Curve SOL / min",
@@ -45,12 +47,16 @@ LABELS = {"upside": "Upside score", "risk": "Risk score", "alpha": "Top wallets 
           "tweet": "Spawned by a tracked tweet", "youtube": "YouTube buzz", "trend": "Off-crypto trend", "social": "People posting it",
           "socials": "Social links", "x_comm": "X community", "dev": "Dev's graduations", "dev_sold": "Dev already sold",
           "insiders": "Insiders holding", "fresh": "Fresh wallets", "snipers": "Snipers holding", "bundle": "Bundlers holding",
-          "top10": "Top-10 concentration", "bots": "Bot wallets", "young": "Earliness", "small": "Small market cap"}
+          "top10": "Top-10 concentration", "bots": "Bot wallets", "young": "Earliness", "small": "Small market cap",
+          "narrative": "Live narrative strength", "ignition": "Narrative igniting", "mention_speed": "Mention speed (σ)",
+          "x_calls": "Called by tracked X accounts", "hype_bots": "Bot-driven hype"}
 BIAS0 = -3.0
 AGGRESSION = {   # top-share of what it sees that it will buy, max positions, stop loss, base size of balance
-    "careful": {"top": 0.03, "max_open": 3, "stop": 0.25, "base": 0.02, "floor": 35},
-    "aggressive": {"top": 0.08, "max_open": 6, "stop": 0.30, "base": 0.03, "floor": 25},
-    "degen": {"top": 0.15, "max_open": 10, "stop": 0.40, "base": 0.04, "floor": 18},
+    "careful": {"top": 0.03, "max_open": 3, "stop": 0.25, "base": 0.02, "floor": 35, "cooldown": 6, "copy_rank": 10},
+    "aggressive": {"top": 0.08, "max_open": 6, "stop": 0.30, "base": 0.03, "floor": 25, "cooldown": 3, "copy_rank": 25},
+    "degen": {"top": 0.15, "max_open": 10, "stop": 0.40, "base": 0.03, "floor": 18, "cooldown": 2, "copy_rank": 50},
+    # demo default: lots of small bets — volume is how it learns and how it finds the runners
+    "hyper": {"top": 0.25, "max_open": 20, "stop": 0.40, "base": 0.015, "floor": 12, "cooldown": 1, "copy_rank": 50},
 }
 LR_TRADE, LR_SHADOW = 0.12, 0.03
 
@@ -59,8 +65,10 @@ def _sig(z: float) -> float:
     return 1 / (1 + math.exp(-max(-30.0, min(30.0, z))))
 
 
-def features(r: dict[str, Any], copy_n: float = 0.0) -> dict[str, float]:
+def features(r: dict[str, Any], copy_n: float = 0.0, ctx: dict[str, Any] | None = None) -> dict[str, float]:
     mx = r.get("metrics") or {}
+    n = (ctx or {}).get("narr") or {}
+    xc = (ctx or {}).get("x_calls") or 0
     eta = r.get("eta_min")
     mc = r.get("mcap_usd") or 0
     return {
@@ -93,6 +101,11 @@ def features(r: dict[str, Any], copy_n: float = 0.0) -> dict[str, float]:
         "bots": min(1.0, (mx.get("bot_wallets") or 0) / 5),
         "young": 1 - min(1.0, (r.get("age_s") or 0) / 1200),
         "small": 1 - min(1.0, mc / 100_000) if mc else 0.5,
+        "narrative": min(1.0, (n.get("strength") or 0) / 100),
+        "ignition": 1.0 if n.get("stage") == "ignition" else 0.5 if n.get("stage") == "peak" else 0.0,
+        "mention_speed": max(0.0, min(1.0, (n.get("z") or 0) / 5)),
+        "x_calls": min(1.0, xc / 2),
+        "hype_bots": min(1.0, (n.get("bot_share") or 0) * 1.5),
     }
 
 
@@ -108,7 +121,10 @@ class Brain:
         self.ap = ap
         self.w: dict[str, float] = dict(PRIORS)
         self.b = BIAS0
-        self.aggression = "aggressive"
+        self.aggression = "hyper"
+        self.narr: dict[str, dict[str, Any]] = {}        # mint -> strongest live narrative it's matched to (social engine)
+        self.x_calls: dict[str, int] = {}                # mint -> calls by tracked X accounts (last 2h)
+        self.last_ctx = 0.0
         self.trained = 0
         self.shadow_trained = 0
         self.shadow_hits = 0
@@ -134,11 +150,14 @@ class Brain:
         self.trained = int(s.get("trained", 0))
         self.shadow_trained = int(s.get("shadow_trained", 0))
         self.shadow_hits = int(s.get("shadow_hits", 0))
-        self.aggression = s.get("aggression") if s.get("aggression") in AGGRESSION else "aggressive"
+        self.aggression = s.get("aggression") if s.get("aggression") in AGGRESSION else "hyper"
+        if int(s.get("version", 0)) < 3:
+            self.aggression = "hyper"                   # v3: high risk appetite on demo money by default
+            self.w.update({k: v for k, v in PRIORS.items() if k not in (s.get("w") or {})})
 
     async def save(self) -> None:
         await self.ap.cfg.kv_set("brain:state", {"w": self.w, "b": self.b, "trained": self.trained, "shadow_trained": self.shadow_trained,
-                                                 "shadow_hits": self.shadow_hits, "aggression": self.aggression, "version": 2})
+                                                 "shadow_hits": self.shadow_hits, "aggression": self.aggression, "version": 3})
 
     async def set_aggression(self, level: str) -> None:
         if level in AGGRESSION:
@@ -197,6 +216,7 @@ class Brain:
         if side == "buy":
             e = self.copy_buys.setdefault(mint, {"wallets": {}, "first": now})
             e["wallets"][w] = (rank, now)
+            self.ap.kick.set()
             if len(self.copy_buys) > 3000:
                 cut = now - 3600
                 self.copy_buys = {m: v for m, v in self.copy_buys.items() if v["first"] > cut}
@@ -220,10 +240,32 @@ class Brain:
         ranks = sorted(live.values())
         return n, list(live), ", ".join(f"#{r}" for r in ranks[:4])
 
+    # ---------------- narrative context (refreshed every 15 s, off the per-coin path) ----------------
+    async def refresh_context(self, now: float) -> None:
+        if now - self.last_ctx < 15:
+            return
+        self.last_ctx = now
+        db = self.ap.db
+        try:
+            rows = await db.all("SELECT nt.token_address mint, n.strength, n.stage, n.zscore z, n.bot_share FROM narrative_tokens nt "
+                                "JOIN narratives n ON n.id=nt.narrative_id WHERE n.last_seen > ? AND COALESCE(nt.is_likely_fake,0)=0 "
+                                "AND nt.match_score >= 0.6", (now - 6 * 3600,))
+            narr: dict[str, dict[str, Any]] = {}
+            for r in rows:
+                if r["mint"] not in narr or (r["strength"] or 0) > (narr[r["mint"]].get("strength") or 0):
+                    narr[r["mint"]] = r
+            self.narr = narr
+            self.x_calls = {r["mint"]: r["n"] for r in await db.all("SELECT mint, COUNT(DISTINCT handle) n FROM x_calls WHERE ts > ? GROUP BY mint",
+                                                                   (now - 7200,))}
+            self.cache.clear()
+        except Exception:  # noqa: BLE001 - tables from optional engines may be empty / missing on a fresh install
+            pass
+
     # ---------------- main step ----------------
     async def tick(self, mode: str = "auto") -> None:
         ap = self.ap
         now = time.time()
+        await self.refresh_context(now)
         agg = AGGRESSION[self.aggression]
         launches = ap.sniper.launches
         scored = []
@@ -236,7 +278,7 @@ class Brain:
             if hit and hit[0] == id(r) and hit[1] == cn:          # unchanged since the last tick: reuse (0.5 s ticks stay cheap)
                 f, v = hit[2], hit[3]
             else:
-                f = features({**r, "age_s": now - L.created}, cn)
+                f = features({**r, "age_s": now - L.created}, cn, {"narr": self.narr.get(L.mint), "x_calls": self.x_calls.get(L.mint, 0)})
                 v = self.value(f)
                 self.cache[L.mint] = (id(r), cn, f, v)
             self.vals[L.mint] = (now, v)
@@ -259,7 +301,7 @@ class Brain:
             self.last_publish = now
             from .hub import hub
             await hub.publish("brain", {"candidates": self.public_candidates(), "threshold": self.threshold, "diag": self.diag})
-        if now - self.last_buy_ts < 3:
+        if now - self.last_buy_ts < agg["cooldown"]:
             return
         mine = [p for p in ap.open.values() if p["mode"] == mode]
         max_open = agg["max_open"] if mode == "auto" else min(agg["max_open"], ap.c["size"]["max_open"])
@@ -285,7 +327,7 @@ class Brain:
                 continue
             n, leaders, ranks = self.copy_signal(mint)
             best = min((r for r, _ in e["wallets"].values()), default=999)
-            if not (best <= 20 or n >= 2):
+            if not (best <= agg["copy_rank"] or n >= 2):
                 continue
             L = launches.get(mint)
             if L is not None and L.result and self.hard_no(L.result):

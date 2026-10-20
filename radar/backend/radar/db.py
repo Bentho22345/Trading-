@@ -317,6 +317,19 @@ CREATE TABLE IF NOT EXISTS x_calls (
 CREATE INDEX IF NOT EXISTS x_calls_ts ON x_calls(ts DESC);
 CREATE TABLE IF NOT EXISTS x_events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, handle TEXT, kind TEXT, detail TEXT);
 
+-- accounts: users, remembered sessions (only token hashes stored), single-use email links
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, pw_hash TEXT NOT NULL, role TEXT DEFAULT 'member',
+  verified INTEGER DEFAULT 0, created REAL, last_login REAL, name TEXT
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created REAL, expires REAL, last_seen REAL, ua TEXT, ip TEXT, remember INTEGER
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS email_tokens (
+  token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, kind TEXT, created REAL, expires REAL, used INTEGER DEFAULT 0
+);
+
 -- free trend sources (Bluesky / Mastodon / Wikipedia / Hacker News)
 CREATE TABLE IF NOT EXISTS trend_items (key TEXT PRIMARY KEY, term TEXT, source TEXT, url TEXT, rank INTEGER, score REAL, ts REAL);
 

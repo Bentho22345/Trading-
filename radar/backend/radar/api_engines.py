@@ -50,7 +50,8 @@ async def engines_status() -> dict[str, Any]:
 
 @router.get("/engines")
 async def engines() -> dict[str, Any]:
-    return await engines_status()
+    from .api2 import _cached
+    return await _cached("engines", 2, engines_status)
 
 
 class BudgetBody(BaseModel):

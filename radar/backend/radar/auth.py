@@ -46,3 +46,38 @@ def check_password(given: str, ip: str) -> bool:
 def needs_auth(request: Request) -> bool:
     p = request.url.path
     return bool(password()) and p.startswith("/api/") and p not in OPEN_PATHS
+
+
+# ---------------- accounts (email + password) on top of the legacy single password ----------------
+ACCOUNTS = None          # set by the app: radar.accounts.Accounts
+HAS_USERS = [False]      # cached: any account exists (then the gate is on even without RADAR_PASSWORD)
+OWNER_LEGACY = {"id": 0, "email": "owner (RADAR_PASSWORD)", "role": "owner", "name": "Owner"}
+
+
+def protected() -> bool:
+    """Is this Radar locked at all? (a RADAR_PASSWORD or at least one account)"""
+    return bool(password()) or HAS_USERS[0]
+
+
+async def current_user(cookies: dict[str, str]) -> dict | None:
+    if password() and hmac.compare_digest(cookies.get(COOKIE, ""), session_token()):
+        return OWNER_LEGACY
+    if ACCOUNTS is not None:
+        from .accounts import COOKIE as SID
+        return await ACCOUNTS.user_for(cookies.get(SID))
+    return None
+
+
+async def reauth(user: dict | None, given: str | None, ip: str) -> bool:
+    """Re-check the password for sensitive actions (real money, withdrawals, key export)."""
+    if not protected():
+        return True
+    if not given:
+        return False
+    if user and user.get("id") and ACCOUNTS is not None:
+        row = await ACCOUNTS.db.one("SELECT pw_hash FROM users WHERE id=?", (user["id"],))
+        from .accounts import check_password as chk
+        import asyncio
+        if row and await asyncio.to_thread(chk, given, row["pw_hash"]):
+            return True
+    return bool(password()) and check_password(given, ip)

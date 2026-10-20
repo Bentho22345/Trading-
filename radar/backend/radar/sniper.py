@@ -361,6 +361,7 @@ class Sniper:
         self.onchain: Any = None                             # Helius intel: queues launches worth scanning
         self.ytbuzz: Any = None                              # YouTube buzz index (tickers / contracts / names in video titles)
         self.trends: Any = None                              # free off-crypto trend index (Bluesky, Mastodon, Wikipedia, HN)
+        self.on_batch: Any = None                            # Autopilot wakes on every scoring batch (no polling lag)
 
     # ---------------- stream hooks (hot path: memory only) ----------------
     async def on_launch(self, row: dict[str, Any]) -> None:
@@ -538,8 +539,9 @@ class Sniper:
     async def eval_loop(self) -> None:
         """Re-score dirty launches a few times a second within a CPU budget, and push all changes in ONE message."""
         budget = float(__import__("os").environ.get("SNIPE_EVAL_BUDGET_MS", "60")) / 1000
+        tick = float(__import__("os").environ.get("SNIPE_TICK_S", "0.15"))     # trade → re-score → screen in ≤ ~150 ms
         while True:
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(tick)
             try:
                 if not self.dirty:
                     continue
@@ -565,6 +567,8 @@ class Sniper:
                 if out:
                     self.stats["batches"] += 1
                     await hub.publish("snipe_batch", out)
+                    if self.on_batch is not None:
+                        self.on_batch()
                 self.stats["last_tick_ms"] = round((time.perf_counter() - t0) * 1000, 1)
             except asyncio.CancelledError:
                 raise

@@ -52,7 +52,7 @@ function Hero({ s, feed }: { s: any; feed: any[] }) {
         <h1 className="display text-[64px] sm:text-[96px] xl:text-[132px]">
           {['Track the', 'top 1,000', 'traders.'].map((line, i) => (
             <span key={line} className="block overflow-hidden">
-              <motion.span className={`block ${i === 1 ? 'text-up' : ''}`} initial={{ y: '105%' }} animate={{ y: 0 }}
+              <motion.span className={`block ${i === 1 ? 'text-accent' : ''}`} initial={{ y: '105%' }} animate={{ y: 0 }}
                 transition={{ duration: 0.9, delay: 0.1 + i * 0.12, ease: [0.2, 0.8, 0.2, 1] }}>{line}</motion.span>
             </span>
           ))}
@@ -127,7 +127,7 @@ function Buying({ s }: { s: any }) {
   const maxBuy = Math.max(1, ...rows.map((r: any) => r.bought || 0));
   return (
     <section className="mt-16">
-      <SectionHead eyebrow="Smart money flow" title={<>What they’re <span className="text-up">buying</span></>}
+      <SectionHead eyebrow="Smart money flow" title={<>What they’re <span className="text-accent">buying</span></>}
         sub="Coins with the most distinct top-1,000 wallets buying, and their net dollar flow (buys minus sells)."
         right={<Chips id="flow" value={win} onChange={setWin} options={[{ value: '1h', label: 'Last hour' }, { value: '24h', label: '24 hours' }]} />} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

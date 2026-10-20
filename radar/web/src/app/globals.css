@@ -1,22 +1,22 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #000000;
-  --color-panel: #0c0c0d;
-  --color-panel2: #151517;
-  --color-line: #232326;
-  --color-mute: #8d8d95;
+  --color-bg: #030106;
+  --color-panel: #0d0914;
+  --color-panel2: #150f20;
+  --color-line: #261c38;
+  --color-mute: #9a8fb8;
   --color-fg: #ffffff;
   --color-up: #22e57a;
   --color-down: #ff2d55;
   --color-warn: #ffd60a;
-  --color-accent: #4d7cfe;
-  --color-accent2: #00d1ff;
-  --color-flash: #a07bff;
-  --color-surface: #101012;
-  --color-surface2: #0b0b0c;
-  --color-edge: #1f1f22;
-  --color-edge-hi: #3a3a40;
+  --color-accent: #8b5cf6;
+  --color-accent2: #c084fc;
+  --color-flash: #a855f7;
+  --color-surface: #0f0a18;
+  --color-surface2: #08050e;
+  --color-edge: #20172e;
+  --color-edge-hi: #3d2c5c;
   --color-div-lo: #fb923c;
   --color-div-hi: #3b82f6;
   --font-sans: "Inter Variable", var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
@@ -30,28 +30,28 @@
 /* ---------- themes ----------
    Dark is the default. Light flips the palette *and* Tailwind's white/black, so every `text-white/60`,
    `border-white/10`, `bg-black/80` in the UI inverts with it instead of needing a light variant. */
-:root { color-scheme: dark; --glow: 77, 124, 254; --hair: rgba(255,255,255,.06); --spot: rgba(255,255,255,.07); }
+:root { color-scheme: dark; --glow: 139, 92, 246; --hair: rgba(196,170,255,.07); --spot: rgba(167,139,250,.09); }
 :root[data-theme="light"] {
   color-scheme: light;
-  --color-bg: #f3f3f0;
+  --color-bg: #f5f2fb;
   --color-panel: #ffffff;
-  --color-panel2: #f1f1ee;
-  --color-line: #e2e2dd;
-  --color-mute: #6a6a72;
+  --color-panel2: #efe9f8;
+  --color-line: #e2d9f1;
+  --color-mute: #6d6283;
   --color-fg: #0b0b0d;
   --color-up: #0a9a55;
   --color-down: #e1193f;
   --color-warn: #b07d00;
-  --color-accent: #2f5cf0;
-  --color-accent2: #0087b8;
-  --color-flash: #7445ff;
+  --color-accent: #7c3aed;
+  --color-accent2: #9333ea;
+  --color-flash: #7e22ce;
   --color-white: #0b0b0d;
   --color-black: #ffffff;
   --color-surface: #ffffff;
-  --color-surface2: #fbfbf9;
-  --color-edge: #e3e3de;
-  --color-edge-hi: #bdbdb6;
-  --glow: 47, 92, 240; --hair: rgba(0,0,0,.07); --spot: rgba(47,92,240,.07);
+  --color-surface2: #faf8fd;
+  --color-edge: #e5dcf3;
+  --color-edge-hi: #c4b2e3;
+  --glow: 124, 58, 237; --hair: rgba(60,20,120,.08); --spot: rgba(124,58,237,.07);
 }
 /* smooth cross-fade when the theme is switched (only during the switch, never on load) */
 :root.theme-anim, :root.theme-anim * { transition: background-color .35s ease, border-color .35s ease, color .35s ease, fill .35s ease, stroke .35s ease !important; }
@@ -77,7 +77,7 @@ body {
 /* ambient background: near-black with a faint top spotlight (Whoop-like) */
 .aurora { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; background: var(--color-bg); }
 .aurora::before { content: ""; position: absolute; left: 50%; top: -40vh; width: 120vw; height: 80vh; transform: translateX(-50%);
-  background: radial-gradient(ellipse at center, rgba(var(--glow),.10), transparent 60%); animation: drift 30s ease-in-out infinite alternate; }
+  background: radial-gradient(ellipse at center, rgba(var(--glow),.22), transparent 62%); animation: drift 30s ease-in-out infinite alternate; }
 :root[data-theme="light"] .aurora::after { opacity: .02; }
 .aurora::after { content: ""; position: absolute; inset: 0; opacity: .035;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E"); }
@@ -100,9 +100,9 @@ body {
 .stat { font-family: var(--font-display); font-weight: 700; letter-spacing: .01em; font-variant-numeric: tabular-nums; }
 
 /* buttons */
-.btn-primary { display: inline-flex; align-items: center; gap: .5rem; border-radius: 999px; background: var(--color-white); color: var(--color-black); padding: .8rem 1.4rem;
+.btn-primary { display: inline-flex; align-items: center; gap: .5rem; border-radius: 999px; background: linear-gradient(135deg, var(--color-accent), var(--color-flash)); color: #fff; padding: .8rem 1.4rem;
   font-weight: 700; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; transition: transform .2s, box-shadow .2s; }
-.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 30px -10px color-mix(in oklab, var(--color-white) 45%, transparent); }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 34px -8px rgba(var(--glow),.7); }
 .btn-ghost { display: inline-flex; align-items: center; gap: .5rem; border-radius: 999px; border: 1px solid var(--color-edge-hi); color: var(--color-fg); padding: .78rem 1.35rem;
   font-weight: 700; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; transition: border-color .2s, background .2s; }
 .btn-ghost:hover { border-color: var(--color-fg); background: color-mix(in oklab, var(--color-white) 4%, transparent); }
@@ -177,7 +177,7 @@ select option { background: var(--color-panel); color: var(--color-fg); }
 
 /* home hero: slow orbiting glow + a perspective grid that fades into the page */
 .hero-orb { position: absolute; z-index: -1; pointer-events: none; width: 900px; height: 900px; left: -260px; top: -280px; border-radius: 50%;
-  background: conic-gradient(from 0deg, rgba(var(--glow),.0), rgba(var(--glow),.16), color-mix(in oklab, var(--color-up) 14%, transparent), rgba(var(--glow),.0));
+  background: conic-gradient(from 0deg, rgba(var(--glow),.0), rgba(var(--glow),.26), rgba(192,132,252,.14), rgba(var(--glow),.0));
   filter: blur(90px); animation: orbit 26s linear infinite; opacity: .9; }
 @keyframes orbit { to { transform: rotate(360deg); } }
 .hero-grid { position: absolute; z-index: -1; inset: -40px -24px auto -24px; height: 70%; pointer-events: none;

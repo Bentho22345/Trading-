@@ -11,6 +11,7 @@ import { FlashOverlay } from '@/components/FlashOverlay';
 import { ScrollProgress } from '@/components/ScrollProgress';
 import { THEME_BOOT } from '@/lib/theme';
 import { SW } from '@/components/SW';
+import { TradeToasts } from '@/components/TradeToasts';
 
 export const metadata: Metadata = {
   title: 'Memecoin Radar',
@@ -19,7 +20,7 @@ export const metadata: Metadata = {
   icons: { icon: '/icon.svg', apple: '/icon-192.png' },
   appleWebApp: { capable: true, title: 'Radar', statusBarStyle: 'black-translucent' },
 };
-export const viewport: Viewport = { themeColor: '#000000', width: 'device-width', initialScale: 1 };
+export const viewport: Viewport = { themeColor: '#030106', width: 'device-width', initialScale: 1 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -32,6 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="mx-auto max-w-[1920px] px-3 pb-16 pt-4 md:px-6">{children}</main>
         <FlashOverlay />
         <SW />
+        <TradeToasts />
       </body>
     </html>
   );

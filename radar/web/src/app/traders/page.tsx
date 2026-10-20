@@ -43,7 +43,7 @@ export default function TradersPage() {
       <Reveal className="mb-10 grid items-end gap-8 lg:grid-cols-[1fr_auto]">
         <div>
           <div className="eyebrow mb-3">Top traders · Solana</div>
-          <h1 className="display text-[64px] md:text-[110px]">The top <span className="text-up">1,000</span></h1>
+          <h1 className="display text-[64px] md:text-[110px]">The top <span className="text-accent">1,000</span></h1>
           <p className="mt-4 max-w-2xl text-[16px] text-white/60">Ranked from a pool of up to 5,000 wallets on real on-chain trades: profit (realized + open), smoothed win rate,
             median ROI and consistency. Coins bought before Radar’s data starts are left out instead of guessed. Bots and MEV are filtered.</p>
         </div>
