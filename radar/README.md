@@ -120,7 +120,7 @@ Tests: `cd backend && .venv/bin/python -m pytest`
 
 ## Security note
 
-Set `RADAR_PASSWORD` and the whole API, live socket and UI data sit behind a login (HttpOnly session cookie, 30 days; 10 attempts per minute per IP). Without it, the app is open, so docker-compose binds to `127.0.0.1` only. The only unauthenticated endpoint is `/api/healthz` (liveness, no data). Saved keys are encrypted with AES-256-GCM using `RADAR_SECRET` or an auto-generated `data/secret.key`.
+Create an account at `/signup` (email + password, signed in straight away — no verification email; the first account is the owner) or set `RADAR_PASSWORD`, and the whole API, live socket and UI data sit behind a login (HttpOnly session cookie that stays signed in for 90 days rolling on a remembered device; 10 attempts per minute per IP). Without it, the app is open, so docker-compose binds to `127.0.0.1` only. The only unauthenticated endpoint is `/api/healthz` (liveness, no data). Saved keys are encrypted with AES-256-GCM using `RADAR_SECRET` or an auto-generated `data/secret.key`.
 
 ## Status
 
@@ -140,6 +140,28 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - Exits: take-profit ladder, stop loss, trailing stop, time stop, rug exit (dev dumps / insiders / TRAP), panic sell.
 - Execution: PumpPortal Local Transaction API (pump.fun, PumpSwap, Raydium) signed locally and sent through your RPC (Helius
   when connected); Jupiter as fallback. Fills are read back from the chain. Telegram: `/autopilot`, `/autopilot demo|off`, `/panic`.
+
+### Self-driving brain (v4)
+
+Its own algorithm on its own 10 SOL of demo money (and real money only if you pick it under your hard caps).
+
+- **Two models, always learning**: a WIN model (odds of +60% before the stop) and a RUG model (odds of −60% inside
+  20 min), online logistic regressions over ~70 signals with RMSProp step sizes that never decay, so it keeps adapting.
+- **Reads the chart off the trade tape**: volume influx, liquidity flowing in / draining, holders arriving / leaving,
+  drawdown, vertical candles, higher lows, volatility, dump candles vs liquidity, whales doing the selling, sell streaks,
+  wash trading, bubble map (coordinated same-second buys, funder-linked clusters), dev holding / dumping / serial / fresh,
+  age and market-cap buckets — on top of every Radar score (narratives, X calls, top wallets, insiders, snipers, top-10…).
+- **Learns all the time**: every scored coin is sampled at several ages and followed (hundreds of lessons an hour);
+  real trades teach 4× harder; every lesson is stored (`brain_examples`) and rehearsed in the background, so it keeps
+  improving between trades and across restarts.
+- **Gets discouraged**: losses lower its mood (rugs most), wins raise it, time heals it; a low mood = higher bar,
+  smaller size, fewer positions; 4 losses in a row = a short cool-off; a deep drawdown caps the mood.
+- **Pattern memory**: a decaying win/loss record for ~40 readable patterns ("coins under 2 min old", "serial-launcher
+  devs", "liquidity draining"…). Losing patterns get penalised and it tells you; winning ones get a boost.
+- **Blacklists**: copied wallets that keep losing get benched for 12h; devs whose coins rugged it are blocked.
+- **Adaptive exits**: after every stop / trailing exit it keeps watching the coin — shaken out → stops get more room,
+  kept dumping → stops tighten. Instant exits on rug patterns (liquidity drained, one sell dumping the curve, whales
+  unloading, one hand holding the supply) and when the rug model is sure.
 
 Not financial advice. Most memecoins go to zero.
 

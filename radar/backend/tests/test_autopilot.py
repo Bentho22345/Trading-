@@ -304,3 +304,100 @@ def test_brain_v3_hyper_default_and_narrative_signals(tmp_path):
         assert hot > botted > plain - 10 and hot - plain > 15          # a live, igniting narrative + X calls move it a lot
         await db.close()
     asyncio.run(run())
+
+
+def _tape_launch(mint, trades, vsol=60.0, peak=None, **res):
+    from collections import deque
+    L = launch(mint, mcap_sol=vsol * vsol / 30 * 0 + 40.0 * (vsol / 40.0) ** 2, **res)
+    L.trades = deque(trades, maxlen=1500)
+    L.vsol, L.peak_mcap_sol = vsol, peak or L.mcap_sol
+    L.balances, L.buyers, L.intel, L.dev_tokens, L.dev_sold_tokens, L.dev_buy_pct, L.graduated_at = {}, {}, None, 0, 0, None, None
+    for t in trades:
+        if t[1] == "buy":
+            L.buyers.setdefault(t[4], t[0])
+            L.balances[t[4]] = L.balances.get(t[4], 0) + t[3]
+        else:
+            L.balances[t[4]] = max(0, L.balances.get(t[4], 0) - t[3])
+    return L
+
+
+def test_patterns_read_flows_and_rug_tells_off_the_tape():
+    from radar import patterns as pat
+    now = time.time()
+    # healthy: steady buying from many wallets, liquidity climbing, higher lows
+    good = [(now - 280 + i * 4, "buy", 0.3 + (i % 3) * 0.1, 1e6, f"w{i}", 32 + i * 0.4) for i in range(70)]
+    g = _tape_launch("GOODmint" + "1" * 32, good, vsol=60.0)
+    cg = pat.chart(g, now)
+    ng = pat.normalise(cg, 300, 9000)
+    assert cg["holders"] == 70 and cg["liq_delta"] > 0 and ng["staircase"] >= 0.75 and pat.rug_alarm(cg) is None
+    # rug: liquidity in, then one wallet dumps most of it
+    rug = good[:60] + [(now - 20, "sell", 18.0, 3e7, "whale", 40.0), (now - 10, "sell", 2.0, 2e6, "whale", 37.0)]
+    r = _tape_launch("RUGGmint" + "2" * 32, rug, vsol=37.0, peak=200.0)
+    cr = pat.chart(r, now)
+    assert pat.rug_alarm(cr) and pat.normalise(cr, 300, 9000)["dump_candle"] == 1.0
+    # bubble map from the tape: four wallets, same second, same size
+    bundle = [(now - 200, "buy", 1.0, 5e7, f"b{i}", 35.0) for i in range(4)] + good[:10]
+    b = _tape_launch("BUNDmint" + "3" * 32, bundle)
+    cb = pat.chart(b, now)
+    assert cb["coord_wallets"] == 4 and cb["coord_hold"] >= 19
+    assert "coordinated-buys" in pat.tags(pat.normalise(cb, 200, 9000) | {"top10": 0.2}, "brain")
+
+
+def test_brain_v4_gets_discouraged_learns_patterns_benches_and_adapts_stops(tmp_path):
+    async def run():
+        coin = launch("MOODmint" + "7" * 32, upside=40, risk=20, buyers=30, deployer="DevRug")
+        ap, db = await make(tmp_path, [coin])
+        b = ap.brain
+        f = {"upside": 0.4, "age_0_2m": 1.0, "dev_serial": 1.0, "top10": 0.2}
+        mood0, size0 = b.mood_factor(), b.size(10, 0.5, "auto")
+        for i in range(6):                                              # six losers in a row, all young serial-dev coins
+            p = {"id": 1000 + i, "mint": coin.mint, "symbol": "MOOD", "sol_in": 1.0, "sol_out": 0.6, "exit_reason": "stop −40%",
+                 "features": f, "leaders0": ["Lead" + "x" * 40], "brain_trig": "copy", "entry_mcap_sol": 40.0}
+            await b.learn(p)
+        assert b.mood_factor() < mood0 - 0.3 and b.size(10, 0.5, "auto") < size0 and b.streak == -6
+        assert b.cool_until > time.time() and b.mood_word() == "cooling off"
+        assert b.benched("Lead" + "x" * 40) and "DevRug" not in b.bad_devs          # stops, not rugs: dev not blocked yet
+        # those patterns now carry a penalty on top of the model
+        for i in range(6):
+            await b.learn({"id": 2000 + i, "mint": "OTHER", "symbol": "WIN", "sol_in": 1.0, "sol_out": 1.6, "exit_reason": "trailing stop",
+                           "features": {"upside": 0.4, "age_5_15m": 1.0, "top10": 0.2}, "brain_trig": "brain"})
+        adj, worst = b.tag_adj(__import__("radar.patterns", fromlist=["tags"]).tags(f, "copy"))
+        assert adj < 0 and worst and any("Pattern learned" in e["text"] for e in b.log)
+        assert b.mood_factor() > 0.35                                    # wins bring it back
+        # a rug burns the dev
+        await b.learn({"id": 3000, "mint": coin.mint, "symbol": "MOOD", "sol_in": 1.0, "sol_out": 0.1, "exit_reason": "rug pattern: x",
+                       "features": f, "brain_trig": "brain"})
+        assert "DevRug" in b.bad_devs and b.veto(coin, time.time()) == "dev burnt it before"
+        # adaptive stop: stopped out, then the coin ran → stops get more room
+        s0 = b.stop_pct()
+        b.post[coin.mint] = {"ts": time.time() - 1000, "kind": "stop", "symbol": "MOOD", "entry": 40.0, "exit": 24.0, "max": 24.0, "min": 24.0}
+        coin.mcap_sol = 60.0
+        lessons = b.post_mortem(time.time())
+        assert b.stop_pct() > s0 and lessons and "shaken out" in lessons[0][1] and b.exit_stats["shaken"] == 1
+        await db.close()
+    asyncio.run(run())
+
+
+def test_brain_v4_replay_memory_survives_a_restart_and_rug_model_learns(tmp_path):
+    from radar.brain import Brain
+
+    async def run():
+        coin = launch("REPLmint" + "8" * 32, upside=50, risk=20, buyers=30)
+        ap, db = await make(tmp_path, [coin])
+        b = ap.brain
+        rugish = {"upside": 0.3, "dev_serial": 1.0, "coordinated": 1.0, "liq_drain": 1.0}
+        p0 = b.rug.p(rugish)
+        for i in range(60):
+            b._remember(rugish, 0.0, 1.0, 1.0, "shadow")
+            b.rug.step(rugish, 1.0, 0.03)
+        assert b.rug.p(rugish) > p0
+        b.rehearse(48)
+        assert b.rehearsed == 48
+        await b.save()
+        b2 = Brain(ap)
+        await b2.load()
+        assert len(b2.replay) == 60 and b2.rug.n == b.rug.n and b2.rehearsed == 48
+        snap = await b.snapshot()
+        assert snap["learning"]["replay"] == 60 and snap["mood"]["word"] and "rug_model" in snap and "patterns" in snap
+        await db.close()
+    asyncio.run(run())

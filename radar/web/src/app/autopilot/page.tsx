@@ -337,14 +337,23 @@ function RealModal({ d, onClose, onDone }: { d: any; onClose: () => void; onDone
 
 type Brain = {
   threshold: number; trained: number; balance: number; summary: any; mode: string; aggression: string; levels: Record<string, any>;
-  shadow: { trained: number; hit_rate: number | null; pending: number; brier: number | null };
-  diag: { launches?: number; scored?: number; copy_watch?: number; shadow_pending?: number };
+  shadow: { trained: number; hit_rate: number | null; pending: number; brier: number | null; accuracy?: number | null };
+  diag: { launches?: number; scored?: number; copy_watch?: number; shadow_pending?: number; mood?: number; top_pct?: number };
+  mood?: { value: number; word: string; streak: number; cool_s: number; drawdown_pct: number; top_pct: number };
+  rug_model?: { trained: number; brier: number | null; accuracy: number | null; rugs_seen: number; top: { key: string; label: string; w: number }[] };
+  learning?: { lessons_per_hour: number; replay: number; rehearsed: number; models: number; signals: number };
+  patterns?: { base_win_pct: number | null; worst: Pat[]; best: Pat[] };
+  exits?: { stop_pct: number; trail_mult: number; shaken: number; stop_right: number; sold_early: number; trail_right: number; watching: number };
+  benched?: { wallet: string; n: number; wins: number; until: number }[];
+  blocked_devs?: number;
   copies: { mint: string; symbol?: string | null; wallets: number; best_rank: number; last: number; age_s: number }[];
   sizing: { n: number; wr: number; avg_win: number; avg_loss: number } | null;
   weights: { key: string; label: string; w: number; prior: number }[];
-  candidates: { mint: string; symbol?: string; value: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
+  candidates: { mint: string; symbol?: string; value: number; p_rug?: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
   log: { ts: number; kind: string; text: string; mint?: string }[]; equity: { ts: number; equity: number }[]; open: Pos[];
 };
+type Pat = { tag: string; text: string; n: number; win_pct: number; avg_pnl_pct: number };
+const MOOD_TONE: Record<string, string> = { 'on fire': 'text-up', confident: 'text-up', cautious: 'text-warn', discouraged: 'text-down', shaken: 'text-down', 'cooling off': 'text-flash' };
 const LOG_TONE: Record<string, string> = { buy: 'text-up', sell: 'text-warn', learn: 'text-accent', skip: 'text-white/55', error: 'text-down', mode: 'text-flash', reset: 'text-flash' };
 
 function Equity({ pts, start }: { pts: { ts: number; equity: number }[]; start: number }) {
@@ -379,6 +388,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
       if (data.candidates) n.candidates = data.candidates;
       if (data.threshold != null) n.threshold = data.threshold;
       if (data.diag) n.diag = data.diag;
+      if (data.mood) n.mood = data.mood;
       return n;
     });
     if (data.event && ['buy', 'sell', 'learn'].includes(data.event.kind)) load();
@@ -387,6 +397,8 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
   const start = 10;
   const eq = b?.equity?.length ? b.equity[b.equity.length - 1].equity : b?.balance ?? start;
   const maxW = Math.max(1, ...(b?.weights || []).map((w) => Math.max(Math.abs(w.w), Math.abs(w.prior))));
+  const [allW, setAllW] = useState(false);
+  const md = b?.mood;
   return (
     <section className="mb-6 overflow-hidden rounded-[28px] border border-flash/30 bg-flash/[0.04]">
       <header className="flex flex-wrap items-center gap-3 border-b border-flash/20 px-6 py-4">
@@ -412,10 +424,32 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
       <div className="num flex flex-wrap gap-x-5 gap-y-1 px-6 pt-3 text-[11.5px] text-white/55">
         <span>watching <b className="text-white">{b?.diag?.scored ?? 0}</b> of {b?.diag?.launches ?? 0} live launches</span>
         <span>copy signals <b className="text-white">{b?.diag?.copy_watch ?? 0}</b></span>
-        <span>learned from <b className="text-white">{(b?.shadow?.trained ?? 0).toLocaleString()}</b> watched coins{b?.shadow?.hit_rate != null ? ` (${b.shadow.hit_rate}% ran ≥1.8×)` : ''}</span>
+        <span>learned from <b className="text-white">{(b?.shadow?.trained ?? 0).toLocaleString()}</b> watched coins{b?.shadow?.hit_rate != null ? ` (${b.shadow.hit_rate}% hit +60% before the stop)` : ''}</span>
         {b?.shadow?.brier != null && <span>forecast error <b className="text-white">{b.shadow.brier}</b></span>}
         <span>sizing: <b className="text-white">{b?.sizing && b.sizing.n >= 10 ? `half-Kelly (${Math.round(b.sizing.wr * 100)}% wins)` : 'base % until 10 trades'}</b></span>
         {(b?.diag?.launches ?? 1) === 0 && <span className="text-warn">No live launches are reaching Radar — check PumpPortal on the Health page.</span>}
+      </div>
+      <div className="mx-6 mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3">
+          <div className="eyebrow">Mood</div>
+          <div className={`display text-[24px] capitalize ${MOOD_TONE[md?.word || ''] || ''}`}>{md?.word || '—'}</div>
+          <div className="num text-[11px] text-white/50">{md ? <>{md.streak > 0 ? `${md.streak} wins in a row` : md.streak < 0 ? `${-md.streak} losses in a row` : 'no streak'} · buys top {md.top_pct}%{md.cool_s > 0 ? ` · back in ${Math.ceil(md.cool_s / 60)}m` : ''}{md.drawdown_pct > 5 ? ` · ${md.drawdown_pct}% off its high` : ''}</> : 'Losses discourage it, wins build confidence.'}</div>
+        </div>
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3">
+          <div className="eyebrow">Win model</div>
+          <div className="display text-[24px]">{b?.shadow?.accuracy != null ? `${b.shadow.accuracy}%` : '—'} <span className="text-[12px] text-white/45">right</span></div>
+          <div className="num text-[11px] text-white/50">{(b?.shadow?.trained ?? 0).toLocaleString()} coin lessons{b?.shadow?.hit_rate != null ? ` · ${b.shadow.hit_rate}% hit +60%` : ''}</div>
+        </div>
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3">
+          <div className="eyebrow">Rug detector</div>
+          <div className="display text-[24px]">{b?.rug_model?.accuracy != null ? `${b.rug_model.accuracy}%` : '—'} <span className="text-[12px] text-white/45">right</span></div>
+          <div className="num truncate text-[11px] text-white/50" title={(b?.rug_model?.top || []).map((t) => t.label).join(', ')}>{b?.rug_model?.rugs_seen ?? 0} rugs studied · {(b?.rug_model?.top || []).slice(0, 2).map((t) => t.label.toLowerCase()).join(', ') || 'learning'}</div>
+        </div>
+        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3">
+          <div className="eyebrow">Always learning</div>
+          <div className="display text-[24px]">{b?.learning?.lessons_per_hour ?? 0}<span className="text-[12px] text-white/45"> lessons/h</span></div>
+          <div className="num text-[11px] text-white/50">{(b?.learning?.replay ?? 0).toLocaleString()} remembered · {(b?.learning?.rehearsed ?? 0).toLocaleString()} rehearsals · {b?.learning?.signals ?? 0} signals</div>
+        </div>
       </div>
       <div className="px-6 pt-2"><Equity pts={b?.equity || []} start={start} /></div>
       <div className="grid gap-px bg-white/[0.06] lg:grid-cols-3">
@@ -445,6 +479,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
                     <div className="absolute inset-y-0 w-px bg-flash" style={{ left: `${b?.threshold ?? 0}%` }} />
                   </div>
                   <b className="num w-8 text-right">{c.value.toFixed(0)}</b>
+                  {c.p_rug != null && <span className={`num w-12 text-right text-[10.5px] ${c.p_rug >= 50 ? 'text-down' : c.p_rug >= 30 ? 'text-warn' : 'text-white/40'}`} title="Rug model: odds it collapses −60% within 20 min">rug {c.p_rug}%</span>}
                 </div>
                 <div className="truncate pl-[104px] text-[10.5px] text-white/40">{c.hard ? `✗ ${c.hard}` : c.copy_ranks ? `🪞 ${c.copy_ranks} buying · ${c.why}` : c.why}</div>
               </li>
@@ -464,9 +499,10 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           </ul>
         </div>
         <div className="bg-[var(--color-bg)]/60 p-5">
-          <div className="eyebrow mb-3">What it has learned · weight per signal</div>
+          <div className="eyebrow mb-3 flex items-center">What it has learned · weight per signal
+            <button onClick={() => setAllW(!allW)} className="ml-auto text-[10.5px] normal-case text-white/45 hover:text-white">{allW ? 'top 20' : `all ${b?.weights?.length ?? 0}`}</button></div>
           <ul className="space-y-1.5">
-            {(b?.weights || []).map((w) => (
+            {(b?.weights || []).slice(0, allW ? 200 : 20).map((w) => (
               <li key={w.key} className="flex items-center gap-2 text-[11.5px]" title={`started at ${w.prior}`}>
                 <span className="w-36 truncate text-white/65">{w.label}</span>
                 <div className="relative h-2 flex-1 rounded-full bg-white/[0.05]">
@@ -482,7 +518,44 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <p className="mt-3 text-[10.5px] text-white/35">Bars = what it believes now; white tick = where it started. Winners&apos; signals grow, losers&apos; shrink.</p>
         </div>
       </div>
+      <div className="grid gap-px border-t border-white/[0.06] bg-white/[0.06] lg:grid-cols-3">
+        <div className="bg-[var(--color-bg)]/60 p-5">
+          <div className="eyebrow mb-2">Patterns that keep losing · it backs off these</div>
+          <PatList rows={b?.patterns?.worst || []} base={b?.patterns?.base_win_pct} empty="It needs a few trades before it can tell which patterns lose." />
+        </div>
+        <div className="bg-[var(--color-bg)]/60 p-5">
+          <div className="eyebrow mb-2">Patterns that work · it leans in</div>
+          <PatList rows={b?.patterns?.best || []} base={b?.patterns?.base_win_pct} empty="Winning patterns show up here as it learns." />
+        </div>
+        <div className="num bg-[var(--color-bg)]/60 p-5 text-[12px] text-white/65">
+          <div className="eyebrow mb-2">Adaptive exits & blacklists</div>
+          <p>Stop loss now <b className="text-white">−{b?.exits?.stop_pct ?? '—'}%</b> · trailing ×<b className="text-white">{b?.exits?.trail_mult ?? 1}</b></p>
+          <p className="mt-1 text-[11px] text-white/45">After every stop it keeps watching: shaken out {b?.exits?.shaken ?? 0}× (stops loosen) · stop was right {b?.exits?.stop_right ?? 0}× (stops tighten) · sold too early {b?.exits?.sold_early ?? 0}× · trailing right {b?.exits?.trail_right ?? 0}×{b?.exits?.watching ? ` · watching ${b.exits.watching} exits now` : ''}</p>
+          <p className="mt-3">Blocked devs <b className="text-white">{b?.blocked_devs ?? 0}</b> <span className="text-white/45">(their coin rugged it)</span></p>
+          <p className="mt-1">Benched wallets <b className="text-white">{b?.benched?.length ?? 0}</b> <span className="text-white/45">(copying them kept losing)</span></p>
+          <ul className="mt-1 space-y-0.5 text-[11px] text-white/45">
+            {(b?.benched || []).map((x) => <li key={x.wallet}><Link href={`/wallet?a=${x.wallet}`} className="hover:underline">{x.wallet.slice(0, 4)}…{x.wallet.slice(-4)}</Link> · {x.wins}/{x.n} won · back in {Math.max(0, Math.round((x.until - now) / 3600))}h</li>)}
+          </ul>
+        </div>
+      </div>
       {!!b?.open?.length && <div className="border-t border-flash/20"><Positions rows={b.open} now={now} onChange={load} /></div>}
     </section>
+  );
+}
+
+function PatList({ rows, base, empty }: { rows: Pat[]; base?: number | null; empty: string }) {
+  if (!rows.length) return <p className="text-[11.5px] text-white/40">{empty}</p>;
+  return (
+    <ul className="space-y-1.5">
+      {rows.map((r) => (
+        <li key={r.tag} className="flex items-center gap-2 text-[11.5px]">
+          <span className="flex-1 truncate text-white/70">{r.text}</span>
+          <span className="num text-white/40">{r.n.toFixed(0)}×</span>
+          <b className={`num w-10 text-right ${base != null && r.win_pct < base ? 'text-down' : 'text-up'}`}>{r.win_pct}%</b>
+          <span className={`num w-14 text-right text-[10.5px] ${r.avg_pnl_pct >= 0 ? 'text-up' : 'text-down'}`}>{r.avg_pnl_pct > 0 ? '+' : ''}{r.avg_pnl_pct}%</span>
+        </li>
+      ))}
+      {base != null && <li className="pt-1 text-[10.5px] text-white/35">overall win rate {base}% · recent trades count most</li>}
+    </ul>
   );
 }

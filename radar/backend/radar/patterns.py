@@ -36,7 +36,7 @@ def chart(L: Any, now: float) -> dict[str, float]:
     tape = getattr(L, "trades", None) or ()
     recent: list[tuple] = []
     for t in reversed(tape):
-        if t[0] < now - 300:
+        if t[0] < now - 300 or len(recent) >= 400:              # last 5 min, at most 400 trades: cheap on busy coins
             break
         recent.append(t)
     recent.reverse()
@@ -56,11 +56,12 @@ def chart(L: Any, now: float) -> dict[str, float]:
     drawdown = 1 - (L.mcap_sol or 0) / peak if peak and L.mcap_sol else 0.0
     p_60 = next((p for ts, p in pts if ts >= now - 60), p_now)
     vertical = p_now / p_60 if p_60 else 1.0
-    lows: list[float] = []
-    for k in range(5, 0, -1):
-        seg = [p for ts, p in pts if now - 60 * k <= ts < now - 60 * (k - 1)]
-        if seg:
-            lows.append(min(seg))
+    mins: dict[int, float] = {}
+    for ts, p in pts:                                           # one pass: the low of each of the last 5 minutes
+        k = int((now - ts) // 60)
+        if 0 <= k < 5 and (k not in mins or p < mins[k]):
+            mins[k] = p
+    lows = [mins[k] for k in sorted(mins, reverse=True)]
     stairs = sum(1 for a, b in zip(lows, lows[1:]) if b >= a) / (len(lows) - 1) if len(lows) >= 3 else 0.5
     rets = [math.log(b[1] / a[1]) for a, b in zip(pts[-60:], pts[-59:]) if a[1] > 0 and b[1] > 0]
     vola = math.sqrt(sum(r * r for r in rets) / len(rets)) if len(rets) >= 5 else 0.0
@@ -84,18 +85,28 @@ def chart(L: Any, now: float) -> dict[str, float]:
     left = len({t[4] for t in s3 if bal.get(t[4], 0) <= 1})
     # wash trading: the same wallet buying and selling inside a minute
     seen: dict[str, list[tuple[float, str]]] = defaultdict(list)
-    for t in recent[-400:]:
+    for t in recent[-250:]:
         seen[t[4]].append((t[0], t[1]))
     wash = sum(1 for w, ev in seen.items() if any(a[1] != b[1] and abs(a[0] - b[0]) <= 60 for a, b in zip(ev, ev[1:])))
     buys2 = [t for t in recent if t[0] >= now - 120 and t[1] == "buy"]
     avg_buy = sum(t[2] or 0 for t in buys2) / len(buys2) if buys2 else 0.0
     retail = sum(1 for t in buys2 if (t[2] or 0) < 0.5) / len(buys2) if buys2 else 0.0
     # bubble map from the tape: 3+ wallets buying the same size in the same second = one hand
-    groups: dict[tuple[int, float], set[str]] = defaultdict(set)
-    for t in tape if len(tape) <= 600 else list(tape)[:600]:          # the launch window is where bundles show up
-        if t[1] == "buy" and t[2]:
-            groups[(int(t[0]), round(t[2], 2))].add(t[4])
-    coord_wallets = {w for k, ws in groups.items() if len(ws) >= 3 for w in ws}
+    coord_wallets = getattr(L, "_coord", None)
+    if coord_wallets is None:
+        groups: dict[tuple[int, float], set[str]] = defaultdict(set)
+        for i, t in enumerate(tape):                            # the launch window is where bundles show up
+            if i >= 600:
+                break
+            if t[1] == "buy" and t[2]:
+                groups[(int(t[0]), round(t[2], 2))].add(t[4])
+        coord_wallets = {w for k, ws in groups.items() if len(ws) >= 3 for w in ws}
+        created = getattr(L, "created", None)
+        if created and now - created > 90:                      # the launch window is over: freeze it
+            try:
+                L._coord = coord_wallets
+            except AttributeError:
+                pass
     coord_hold = sum(bal.get(w, 0.0) for w in coord_wallets) / SUPPLY * 100
     it = getattr(L, "intel", None) or {}
     clusters = it.get("clusters") or []
