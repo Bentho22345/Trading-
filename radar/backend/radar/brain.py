@@ -353,6 +353,8 @@ class Brain:
         self.real_balance: tuple[float, float] = (0.0, 0.0)  # (ts, SOL)
         self.diag: dict[str, Any] = {}
         self.rng = random.Random()
+        from .council import Council
+        self.council = Council(self)                         # the Nebula: skeptic + optimist overseeing this executor
         # experience replay
         self.replay: deque[tuple[array, float, float, float]] = deque(maxlen=4000)
         self.pending: list[tuple] = []
@@ -419,6 +421,7 @@ class Brain:
         self.patience = float(s.get("patience", 1.0))
         self.copied_sells = int(s.get("copied_sells", 0))
         self.dn_margin = float(s.get("dn_margin", 0.12))
+        self.council.restore(s.get("council"))
         self.scalp_adj.update(s.get("scalp_adj") or {})
         if ver < 8:
             self.scalp_adj["bar"] = 0.0                 # v8: clear the ratcheted-up bar left behind by older versions
@@ -464,7 +467,7 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "version": 9, "win": self.win.state(), "rug": self.rug.state(),
+            "council": self.council.state(), "version": 9, "win": self.win.state(), "rug": self.rug.state(),
             "up": self.up.state(), "dn": self.dn.state(), "dn_margin": round(self.dn_margin, 4), "grad_frac": round(self.grad_frac, 4),
             "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "snipes": self.snipes, "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
@@ -832,6 +835,8 @@ class Brain:
                            "deployer": L.deployer, "leaders": leaders, "copy_ranks": ranks, "mcap_sol": L.mcap_sol, "r": r})
             self.sample(L, f, v, now)
         self.market_stats(scored)
+        self.council.step(now)
+        self.council.idle(now, self.last_buy_ts)
         nb = [L for L in allL if now - L.created < 45]
         self.pipe = {"ts": now, "launches": len(launches), "launches_60s": sum(1 for L in allL if now - L.created < 60),
                      "newborn": len(nb), "newborn_traded": sum(1 for L in nb if getattr(L, "trades", None)),
@@ -927,7 +932,9 @@ class Brain:
             elif k < 4 or not await self._tradeable(mint):
                 continue
             size = self.size(bal, 0.8, mode, copy=True)
-            await self._buy(mint, size, mode, "copy", f"influx: {desc}", L.result if L else None, f, v, leaders)
+            if not await self._council_buy("copy", mint, size, mode, "copy", f"influx: {desc}", L.result if L else None, f, v, leaders,
+                                           _clip(0.6 + 0.05 * k, 0, 0.95), L):
+                continue
             bought += 1
             copies_open += 1
             bal = await self.balance(mode)
@@ -973,10 +980,11 @@ class Brain:
                 power = self.power(hit["f"])
                 size = bal * sn["size"] * (0.6 + 0.8 * sc_) * (0.6 + 0.4 * min(1.0, mf)) * (POWER["size"] if power else 1.0)
                 ex = self.fast_exits(sn, power)
-                await self._buy(L.mint, round(max(0.02, size), 4), mode, "snipe",
+                if not await self._council_buy("snipe", L.mint, round(max(0.02, size), 4), mode, "snipe",
                                 f"{'💥 POWER ' if power else ''}snipe {sc_ * 100:.0f} at {now - L.created:.0f}s old (bar {bar * 100:.0f}) · "
                                 f"tp +{(ex['tp'] - 1) * 100:.0f}% / stop −{ex['stop'] * 100:.0f}%",
-                                L.result, hit["f"], hit["v"], [], exits=ex)
+                                L.result, hit["f"], hit["v"], [], _clip(0.5 + (sc_ - bar) * 1.5, 0, 1), L, exits=ex):
+                    continue
                 bought += 1
                 bal = await self.balance(mode)
         if bought >= room:
@@ -1011,7 +1019,9 @@ class Brain:
             conv = max(0.0, min(1.0, (c["value"] - self.threshold) / max(5.0, 100 - self.threshold)))
             size = self.size(bal, 0.3 if explore else conv, mode, explore=explore)
             detail = (f"value {c['value']:.0f} (bar {self.threshold:.0f}) · rug {c['p_rug']}%{' · explore' if explore else ''} · {c['why']}")
-            await self._buy(c["mint"], size, mode, "explore" if explore else "brain", detail, c["r"], c["f"], c["value"], c["leaders"])
+            if not await self._council_buy("swing", c["mint"], size, mode, "explore" if explore else "brain", detail, c["r"], c["f"], c["value"],
+                                           c["leaders"], _clip(0.5 + (c["value"] - self.threshold) / max(10.0, 100 - self.threshold), 0, 1), L):
+                continue
             devs.add(c["deployer"])
             bought += 1
             if explore:
@@ -1043,9 +1053,10 @@ class Brain:
             power = self.power(c["f"])
             size = max(0.02, bal * sc["size"] * (0.6 + 0.8 * c["scalp"]) * (0.6 + 0.4 * min(1.0, mf)) * (POWER["size"] if power else 1.0))
             ex = self.fast_exits(sc, power)
-            await self._buy(c["mint"], round(size, 4), mode, "scalp", f"{'💥 POWER ' if power else ''}scalp {c['scalp'] * 100:.0f} (bar {sc['bar'] * 100:.0f}) · "
+            if not await self._council_buy("scalp", c["mint"], round(size, 4), mode, "scalp", f"{'💥 POWER ' if power else ''}scalp {c['scalp'] * 100:.0f} (bar {sc['bar'] * 100:.0f}) · "
                             f"▲{c['p_up']} ▼{c['p_dn']} · tp +{(ex['tp'] - 1) * 100:.0f}% / stop −{ex['stop'] * 100:.0f}%",
-                            c["r"], c["f"], c["value"], c["leaders"], exits=ex)
+                            c["r"], c["f"], c["value"], c["leaders"], _clip(0.5 + (c["scalp"] - sbar) * 1.5, 0, 1), L, exits=ex):
+                continue
             bought += 1
             bal = await self.balance(mode)
         # 4) drought breaker (surreal): nothing bought for 15 s → take the best live coin that still passes the safety checks
@@ -1060,9 +1071,10 @@ class Brain:
                 if L is None or self.veto(L, now, c["p_rug"] / 100):
                     continue
                 ex = self.fast_exits(sc, False)
-                await self._buy(c["mint"], round(max(0.02, bal * sc["size"] * 0.7), 4), mode, "scalp",
-                                f"drought breaker: best live coin (scalp {c['scalp'] * 100:.0f}, value {c['value']:.0f}) · "
-                                f"tp +{(ex['tp'] - 1) * 100:.0f}% / stop −{ex['stop'] * 100:.0f}%", c["r"], c["f"], c["value"], c["leaders"], exits=ex)
+                if not await self._council_buy("scalp", c["mint"], round(max(0.02, bal * sc["size"] * 0.7), 4), mode, "scalp",
+                                               f"drought breaker: best live coin (scalp {c['scalp'] * 100:.0f}, value {c['value']:.0f})",
+                                               c["r"], c["f"], c["value"], c["leaders"], 0.5, L, exits=ex):
+                    continue
                 self.skip("drought breaker fired")
                 break
 
@@ -1185,8 +1197,25 @@ class Brain:
         tok = await self.ap.tracker.token_summary(mint)
         return bool(tok and tok.get("price_usd") and (tok.get("liquidity_usd") or 0) >= 10_000)
 
+    async def _council_buy(self, style: str, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
+                           f: dict[str, float] | None, value: float | None, leaders: list[str], exec_conf: float, L: Any,
+                           exits: dict[str, Any] | None = None) -> bool:
+        """Every buy goes to the Nebula first: executor, skeptic and optimist vote; the council sets size and exit playbook."""
+        d = self.council.decide(style, f or {}, exec_conf, (r or {}).get("symbol") or mint[:6], mint)
+        if not d["go"]:
+            self.skip("council: skeptic veto" if d["veto"] else "council said no")
+            self.council.ghost(mint, f or {}, L, d, size)
+            return False
+        ex = dict(d["exits"])
+        if exits and exits.get("power"):                          # a flood of volume / holders: keep the wider leash of the two
+            ex.update(tp=max(ex["tp"], exits["tp"]), stop=max(ex["stop"], exits["stop"]), max_s=max(ex["max_s"], exits["max_s"]), power=True)
+        p = await self._buy(mint, round(max(0.02, size * d["size_mult"]), 4), mode, trig, f"{detail} · {d['summary']}", r, f, value, leaders,
+                            exits=ex, council=d)
+        return p is not None
+
     async def _buy(self, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
-                   f: dict[str, float] | None, value: float | None, leaders: list[str], exits: dict[str, Any] | None = None) -> None:
+                   f: dict[str, float] | None, value: float | None, leaders: list[str], exits: dict[str, Any] | None = None,
+                   council: dict[str, Any] | None = None) -> dict[str, Any] | None:
         ap = self.ap
         L = ap.sniper.launches.get(mint)
         if L is not None and getattr(L, "vsol", None):
@@ -1201,14 +1230,18 @@ class Brain:
             ap.entered[mint] = time.time()            # don't retry the same failing coin every tick
             self.last_exit[mint] = (time.time(), (self.last_exit.get(mint) or (0, 0))[1])
             await self.note("error", f"⚠️ Couldn't buy {(r or {}).get('symbol') or mint[:6]}: {e}", mint=mint)
-            return
+            return None
         p["leaders"] = list(leaders or [])
         p["features"], p["score"], p["style"] = f, value, style
         if exits:
             p["exits"] = exits
             if exits.get("power"):
                 self.snipes["power"] += 1
-        meta = {"f": f, "leaders0": p["leaders"], "trig": trig, "v": value, "style": style, "exits": exits}
+        if council:
+            p["council"] = {"votes": council["votes"], "play": council["play"]}
+            self.council.open_track(f"p:{p['id']}", mint, f, (L.mcap_sol if L is not None and L.mcap_sol else p["entry_mcap_sol"]), p["sol_in"],
+                                    getattr(L, "vsol", None) if L is not None else None, council, real=True, sol=p["sol_in"])
+        meta = {"f": f, "leaders0": p["leaders"], "trig": trig, "v": value, "style": style, "exits": exits, "council": p.get("council")}
         p["entry_value"] = value
         await ap.db.exec("UPDATE auto_positions SET features_json=?, score=?, leaders_json=? WHERE id=?",
                          (json.dumps(meta) if f else None, value, json.dumps(p["leaders"]), p["id"]))
@@ -1217,6 +1250,7 @@ class Brain:
         icon = "🪞" if trig == "copy" else "🧪" if trig == "explore" else "⚡" if trig == "scalp" else "🎯" if trig == "snipe" else "🟢"
         await self.note("buy", f"{icon} {'REAL ' if mode == 'real' else ''}Bought ${p['symbol']} for ◎{p['sol_in']:.3f} — {detail}",
                         mint=mint, value=value, sol=p["sol_in"])
+        return p
 
     async def balance(self, mode: str) -> float:
         if mode != "real":
@@ -1437,11 +1471,17 @@ class Brain:
             if x <= peak_x * (1 - trail):
                 return self._exit(p, 1.0, f"ride trailing stop ({peak_x:.1f}× peak, {trail * 100:.0f}% trail)", "trail")
             return None
+        cv = self.council.exit_vote(p, f, x, age)                    # the skeptic can pull the plug; the optimist can hold
+        if cv:
+            return cv
         if f and x >= 1.03 and self.surging(f):
             p["ride"] = True
             return (0.25, f"surge: holders, volume and liquidity pouring in — banked 25% at {x:.2f}×, riding the rest until it dies down")
         if p.get("style") in ("scalp", "snipe"):
             return self.scalp_exit(p, f, raw, hit, x, age, peak_x)
+        pb = p.get("exits") if (p.get("exits") or {}).get("preset") else None   # the council's playbook sets the leash for swings
+        if pb:
+            stop = _clip(float(pb["stop"]) * self.stop_mult, 0.04, 0.6)
         if x <= 1 - stop:
             return self._exit(p, 1.0, f"stop −{stop * 100:.0f}%", "stop")
         L = self.ap.sniper.launches.get(p["mint"])
@@ -1481,7 +1521,7 @@ class Brain:
         if peak_x >= first and x <= 1.02:
             return self._exit(p, 1.0, f"back to entry after {peak_x:.2f}× — protecting the trade", "trail")
         if peak_x >= first:
-            trail = _clip((0.30 if peak_x < 2 else 0.25 if peak_x < 5 else 0.18) * self.trail_mult, 0.08, 0.5)
+            trail = _clip(((pb or {}).get("trail") or (0.30 if peak_x < 2 else 0.25 if peak_x < 5 else 0.18)) * self.trail_mult, 0.08, 0.5)
             if x <= peak_x * (1 - trail):
                 return self._exit(p, 1.0, f"trailing stop ({peak_x:.1f}× peak, {trail * 100:.0f}% trail)", "trail")
         # momentum fading while in profit: take half off the table (once every 30 s at most)
@@ -1505,7 +1545,7 @@ class Brain:
             p["_best_x"], p["_high_ts"] = x, now
         elif now - last_high > stall and x < 1.15 and age > stall:
             return self._exit(p, 1.0, f"stalled (no new high in {stall / 60:.0f} min)", "early")
-        tmax = agg["time_s"] * self.patience
+        tmax = (float(pb["max_s"]) if pb else agg["time_s"]) * self.patience
         if age > tmax and x < 1.3:
             return self._exit(p, 1.0, f"{tmax / 60:.0f}-min time stop", "early")
         return None
@@ -1514,11 +1554,13 @@ class Brain:
                    x: float, age: float, peak_x: float = 1.0) -> tuple[float, str] | None:
         """In and out: bank the move, cut the miss, never let a scalp turn into a bag. Power trades get room to run."""
         sc = {**(self.scalp_cfg() or AGGRESSION["hyper"]["scalp"]), **(p.get("exits") or {})}
-        name = "snipe" if p.get("style") == "snipe" else "scalp"
+        name = "snipe" if p.get("style") == "snipe" else "scalp" if p.get("style") == "scalp" else (p.get("exits") or {}).get("preset") or "trade"
         if x <= 1 - sc["stop"]:
             return self._exit(p, 1.0, f"{name} stop −{(1 - x) * 100:.0f}%", "scalp")
         if sc.get("power") and peak_x >= 1.15 and x <= peak_x * (1 - POWER["trail"]):
             return self._exit(p, 1.0, f"power {name}: trailing stop after {peak_x:.2f}× — banked {x:.2f}×", "scalp")
+        if sc.get("trail") and sc.get("arm") and peak_x >= sc["arm"] and x <= peak_x * (1 - sc["trail"]):
+            return self._exit(p, 1.0, f"{sc.get('preset') or name} playbook: trailing stop after {peak_x:.2f}× — banked {x:.2f}×", "scalp")
         if x >= sc["tp"]:
             if sc.get("power") and self.power(f):                        # still flooding in: let it keep running on the trail
                 return None
@@ -1636,8 +1678,9 @@ class Brain:
         mult = (p["sol_out"] / p["sol_in"]) if p["sol_in"] else 0
         reason = p.get("exit_reason") or ""
         y = 1.0 if mult >= 1.15 else 0.0
+        council_notes = self.council.on_close(p, mult, f if isinstance(f, dict) else None)
         rugged = 1.0 if (mult <= 0.45 or reason.startswith("rug")) else 0.0
-        notes = []
+        notes = list(council_notes)
         scalp = p.get("style") in ("scalp", "snipe") or trig in ("scalp", "snipe")
         snipe = p.get("style") == "snipe" or trig == "snipe"
         now = time.time()
@@ -1895,6 +1938,7 @@ class Brain:
                              "riding": sum(1 for p in self.ap.open.values() if p.get("ride")), "streak": self.scalp_streak,
                              "recent_pct": round(sum(self.scalp_hist) / len(self.scalp_hist) * 100, 2) if self.scalp_hist else None}),
                 "verdict": self._safe_verdict(),
+                "nebula": self.council.snapshot(),
                 "bars": {k: round(v * 100) for k, v in self.bars.items()}, "idle_s": round(now - self.last_buy_ts) if self.last_buy_ts else None,
                 "snipes": {**self.snipes, "on": bool(AGGRESSION[self.aggression].get("snipe")),
                            "per_hour": sum(1 for t in self.fast_ts if t > now - 3600),

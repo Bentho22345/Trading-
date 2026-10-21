@@ -563,6 +563,7 @@ def test_hyper_keeps_trading_when_the_models_calibrate_low_and_scalps_in_and_out
         dull = launch("DULLmint" + "2" * 32, upside=5, risk=50, buyers=8)
         ap, db = await make(tmp_path, [coin, dull])
         b = ap.brain
+        b.council.choose_play = lambda style, v: "quick"
         b.win.b = -7.0                                                   # calibrated to a ~1% base rate: every value is tiny
         await ap.set_mode("auto")
         await b.tick("auto")
@@ -636,6 +637,7 @@ def test_surreal_snipes_new_launches_fast_and_compounds(tmp_path):
         old.created = now - 900
         ap, db = await make(tmp_path, coins + [old])
         b = ap.brain
+        b.council.choose_play = lambda style, v: "quick"                 # pin the playbook: this test is about the snipe path
         await b.set_aggression("surreal")
         await ap.set_mode("auto")
         await b.tick("auto")

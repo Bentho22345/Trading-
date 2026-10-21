@@ -358,6 +358,7 @@ type Brain = {
   compound?: { start: number; growth_pct: number };
   bars?: Record<string, number>; idle_s?: number | null;
   verdict?: { state: string; text: string; [k: string]: any };
+  nebula?: Nebula;
   last_error?: { ts: number; error: string; where?: string } | null; engine_error?: string | null; refills?: number;
   timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_margin: number;
     market?: { coins: number; dn_med: number; up_med: number } | null;
@@ -473,6 +474,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <div className="num text-[11px] text-white/50">{(b?.learning?.replay ?? 0).toLocaleString()} remembered · {(b?.learning?.rehearsed ?? 0).toLocaleString()} rehearsals · {b?.learning?.signals ?? 0} signals</div>
         </div>
       </div>
+      {b?.nebula && <NebulaPanel n={b.nebula} now={now} />}
       {b?.verdict && (
         <div className={`mx-6 mt-3 flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3 text-[13px] ${b.verdict.state === 'trading' ? 'border-up/30 bg-up/[0.07] text-up' : 'border-warn/40 bg-warn/[0.08] text-warn'}`}>
           <b className="uppercase tracking-wide">{b.verdict.state === 'trading' ? '● Trading' : '● Not trading'}</b>
@@ -631,5 +633,87 @@ function PatList({ rows, base, empty }: { rows: Pat[]; base?: number | null; emp
       ))}
       {base != null && <li className="pt-1 text-[10.5px] text-white/35">overall win rate {base}% · recent trades count most</li>}
     </ul>
+  );
+}
+
+type Vote = { executor: number; skeptic: number; optimist: number; p_lose: number; p_big: number };
+type Nebula = {
+  cred: Record<string, number>; bar: number; regime: string; base_lose_pct: number; base_big_pct: number; exploring: number;
+  skeptic: { trained: number; accuracy: number | null }; optimist: { trained: number; accuracy: number | null };
+  playbooks: Record<string, { play: string; n: number; avg_pct: number }[]>; tracking: { real: number; ghosts: number };
+  stats: Record<string, number>; recent_avg_pct: number | null;
+  debate: { ts: number; symbol: string; mint: string; go: boolean; veto: boolean; score: number; bar: number; votes: Vote; play: string; style: string;
+    size_mult: number; why: { skeptic: string; optimist: string } }[];
+};
+const BRAIN_META: Record<string, { icon: string; name: string; tone: string; role: string }> = {
+  executor: { icon: '⚙️', name: 'Executor', tone: 'text-flash', role: 'finds the trade' },
+  skeptic: { icon: '🛡', name: 'Skeptic', tone: 'text-down', role: 'models losing after fees' },
+  optimist: { icon: '🚀', name: 'Optimist', tone: 'text-up', role: 'models the runners' },
+};
+const REGIME_TONE: Record<string, string> = { defensive: 'text-down', aggressive: 'text-up', normal: 'text-white/80' };
+
+function NebulaPanel({ n, now }: { n: Nebula; now: number }) {
+  const st = n.stats || {};
+  return (
+    <div className="mx-6 mt-3 overflow-hidden rounded-2xl border border-accent/30 bg-gradient-to-br from-accent/[0.08] via-transparent to-flash/[0.06]">
+      <div className="flex flex-wrap items-center gap-3 border-b border-white/[0.06] px-4 py-2.5">
+        <span className="font-extrabold tracking-wide text-accent">✦ NEBULA · 3-brain council</span>
+        <span className="text-[12px] text-white/55">every trade is argued out: size, exit playbook, buy or not</span>
+        <span className={`num ml-auto text-[12px] font-bold uppercase ${REGIME_TONE[n.regime] || ''}`}>{n.regime}{n.exploring ? ` · exploring ${n.exploring}` : ''}</span>
+        <span className="num text-[12px] text-white/60">bar <b className="text-white">{n.bar.toFixed(2)}</b>{n.recent_avg_pct != null ? <> · last trades <b className={n.recent_avg_pct >= 0 ? 'text-up' : 'text-down'}>{n.recent_avg_pct > 0 ? '+' : ''}{n.recent_avg_pct}%</b></> : null}</span>
+      </div>
+      <div className="grid gap-px bg-white/[0.05] sm:grid-cols-3">
+        {Object.entries(BRAIN_META).map(([k, m]) => (
+          <div key={k} className="bg-[var(--color-bg)]/70 p-3">
+            <div className="flex items-center gap-2"><span className="text-[18px]">{m.icon}</span><b className={m.tone}>{m.name}</b><span className="text-[11px] text-white/40">{m.role}</span></div>
+            <div className="mt-1 flex items-end gap-2">
+              <span className="display text-[26px]">{n.cred[k]?.toFixed(0)}%</span><span className="mb-1 text-[11px] text-white/45">credibility</span>
+            </div>
+            <div className="mt-1 h-1.5 rounded-full bg-white/[0.06]"><div className={`h-full rounded-full ${k === 'skeptic' ? 'bg-down' : k === 'optimist' ? 'bg-up' : 'bg-flash'}`} style={{ width: `${n.cred[k] ?? 0}%` }} /></div>
+            <div className="num mt-1.5 text-[11px] text-white/50">
+              {k === 'skeptic' && <>{(n.skeptic.trained || 0).toLocaleString()} lessons · {n.skeptic.accuracy != null ? `${n.skeptic.accuracy}% right · ` : ''}base loss rate {n.base_lose_pct}% · vetoed {st.vetoed ?? 0} · pulled the plug {st.skeptic_exits ?? 0}×</>}
+              {k === 'optimist' && <>{(n.optimist.trained || 0).toLocaleString()} lessons · {n.optimist.accuracy != null ? `${n.optimist.accuracy}% right · ` : ''}runner rate {n.base_big_pct}% · held {st.optimist_holds ?? 0} surges</>}
+              {k === 'executor' && <>proposed {st.proposed ?? 0} · approved {st.approved ?? 0} · turned down {st.rejected ?? 0}</>}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-px bg-white/[0.05] lg:grid-cols-[1.4fr_1fr]">
+        <div className="bg-[var(--color-bg)]/70 p-3">
+          <div className="eyebrow mb-2">The debate · latest votes</div>
+          <ul className="max-h-[230px] space-y-1 overflow-y-auto pr-1 text-[11.5px]">
+            {(n.debate || []).map((d, i) => (
+              <li key={`${d.ts}${i}`} className="num flex flex-wrap items-center gap-x-2" title={`skeptic: ${d.why?.skeptic || '—'} · optimist: ${d.why?.optimist || '—'}`}>
+                <span className="w-9 text-white/35">{ago(d.ts, now)}</span>
+                <Link href={`/token?a=${d.mint}`} className="w-20 truncate font-semibold hover:underline">${d.symbol}</Link>
+                <span className="text-flash">⚙️{d.votes.executor.toFixed(2)}</span>
+                <span className="text-down">🛡{d.votes.skeptic.toFixed(2)}</span>
+                <span className="text-up">🚀{d.votes.optimist.toFixed(2)}</span>
+                <b className={d.veto ? 'text-down' : d.go ? 'text-up' : 'text-white/45'}>{d.veto ? 'VETO' : d.go ? `GO ×${d.size_mult.toFixed(2)}` : 'no'}</b>
+                <span className="text-white/45">{d.style} · {d.play}</span>
+              </li>
+            ))}
+            {!n.debate?.length && <li className="text-white/40">Waiting for the first proposal…</li>}
+          </ul>
+        </div>
+        <div className="bg-[var(--color-bg)]/70 p-3 text-[11.5px]">
+          <div className="eyebrow mb-2">Exit playbooks · replayed on every trade &amp; ghost</div>
+          {Object.entries(n.playbooks || {}).map(([style, rows]) => (
+            <div key={style} className="mb-2">
+              <div className="mb-0.5 text-white/55 capitalize">{style}</div>
+              <div className="flex flex-wrap gap-1.5">
+                {rows.map((r, i) => (
+                  <span key={r.play} className={`num rounded-full px-2 py-0.5 ${i === 0 ? 'bg-accent/25 text-white' : 'bg-white/[0.05] text-white/60'}`}>
+                    {r.play} <b className={r.avg_pct >= 0 ? 'text-up' : 'text-down'}>{r.avg_pct > 0 ? '+' : ''}{r.avg_pct}%</b> <span className="text-white/35">{r.n.toFixed(0)}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+          {!Object.keys(n.playbooks || {}).length && <p className="text-white/40">Fills in as trades and ghosts finish.</p>}
+          <p className="num mt-2 text-white/50">ghost trades: {st.ghosts_done ?? 0} · saying no saved <b className="text-up">◎{(st.saved_sol ?? 0).toFixed(3)}</b> · missed <b className="text-warn">◎{(st.missed_sol ?? 0).toFixed(3)}</b> · tracking {n.tracking.real} real / {n.tracking.ghosts} ghosts</p>
+        </div>
+      </div>
+    </div>
   );
 }

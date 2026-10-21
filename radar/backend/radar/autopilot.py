@@ -115,6 +115,7 @@ class Autopilot:
                 p["features"], p["leaders0"], p["brain_trig"], p["entry_value"] = meta["f"], meta.get("leaders0"), meta.get("trig"), meta.get("v")
                 p["style"] = meta.get("style") or ("scalp" if meta.get("trig") == "scalp" else "copy" if meta.get("trig") == "copy" else "swing")
                 p["exits"] = meta.get("exits")
+                p["council"] = meta.get("council")
             else:
                 p["features"] = meta
             p["leaders"] = json.loads(p.get("leaders_json") or "[]")

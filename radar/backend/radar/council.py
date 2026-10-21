@@ -1,0 +1,343 @@
+"""The Nebula: three brains that argue every trade out before money moves.
+
+  EXECUTOR   the main brain (brain.py): finds the trade — snipes, scalps, swings, influx copies — and proposes it.
+  SKEPTIC    its own model of "this trade LOSES after fees", trained on every real outcome AND every trade the council
+             turned down. It argues for smaller size, tighter exits — and can veto outright when it's sure.
+  OPTIMIST   its own model of "this trade could RUN (+25% or more)". It argues for a bigger bet and room to run, and
+             holds a position the skeptic wants to dump while volume, holders and liquidity keep pouring in.
+
+How they decide (bull / bear debate + risk vote, as in TradingAgents, arXiv 2412.20138)
+  Each brain votes a go-confidence; votes are weighted by CREDIBILITY, learned with Hedge (multiplicative weights):
+  after every outcome each brain loses weight in proportion to how wrong its vote was, so the council listens to
+  whoever has been right lately. Size, and which exit PLAYBOOK to use, come out of the same weighted vote.
+
+How they learn — from every trade, taken or not
+  Playbooks   flash · quick · swing · runner · moon (take-profit / stop / max hold / trailing). For EVERY trade and
+              every ghost (a trade the council rejected or vetoed) all five playbooks are replayed on the real price
+              path, after fees. So each trade teaches what the best exit WOULD have been, not just what happened, and a
+              Thompson-sampled bandit per style picks the playbook that's actually making money.
+  Ghosts      rejected trades are followed anyway: the skeptic learns whether its vetoes saved money or cost it.
+  Regimes     a losing run flips the council DEFENSIVE (higher bar, smaller size, more exploration of exits — it
+              changes things up); a winning run flips it AGGRESSIVE. The bar also relaxes while idle so it never stalls.
+"""
+from __future__ import annotations
+
+import math
+import random
+import time
+from array import array
+from collections import deque
+from typing import Any
+
+from .brain import DN_PRIORS, KEYS, LABELS, PRIORS, RUG_PRIORS, UP_PRIORS, Logit, _clip
+
+BRAINS = ("executor", "skeptic", "optimist")
+PLAYBOOKS: dict[str, dict[str, float | None]] = {
+    "flash": {"tp": 1.08, "stop": 0.05, "hold": 45, "trail": None, "arm": None},
+    "quick": {"tp": 1.12, "stop": 0.07, "hold": 90, "trail": None, "arm": None},
+    "swing": {"tp": 1.30, "stop": 0.10, "hold": 240, "trail": 0.10, "arm": 1.15},
+    "runner": {"tp": 2.00, "stop": 0.15, "hold": 600, "trail": 0.15, "arm": 1.30},
+    "moon": {"tp": 4.00, "stop": 0.25, "hold": 1500, "trail": 0.22, "arm": 1.60},
+}
+ORDER = list(PLAYBOOKS)
+DEFAULT_PLAY = {"snipe": "quick", "scalp": "quick", "swing": "swing", "copy": "swing"}
+BIG = 0.25                                   # what the optimist calls a run: +25% after fees
+# shrunk priors: start near calibrated (a saturated skeptic says "no" to everything, which is useless, not careful)
+SKEPTIC_PRIORS = {k: round(0.35 * (0.6 * RUG_PRIORS.get(k, 0) + 0.6 * DN_PRIORS.get(k, 0) - 0.4 * UP_PRIORS.get(k, 0) - 0.3 * PRIORS.get(k, 0)), 3)
+                  for k in KEYS}
+OPTIMIST_PRIORS = {k: round(0.35 * (0.7 * PRIORS.get(k, 0) + 0.6 * UP_PRIORS.get(k, 0) - 0.3 * RUG_PRIORS.get(k, 0)), 3) for k in KEYS}
+FAST = ("snipe", "scalp")                    # fast styles never take the 25-minute moon playbook
+MAX_REAL, MAX_GHOST, GHOST_RATE = 400, 400, 0.15
+ETA = 0.4                                    # Hedge learning rate
+LR = 0.05
+
+
+def _logit(p: float) -> float:
+    p = min(0.99, max(0.01, p))
+    return math.log(p / (1 - p))
+
+
+def costs(size: float, vsol: float | None, prio: float = 0.0005) -> tuple[float, float]:
+    """Fraction lost on the way in and on the way out: pump.fun 1% + router 0.5% + curve impact + priority fee."""
+    impact = size / max(30.0, vsol or 60.0)
+    fixed = prio / max(0.01, size)
+    return 0.015 + impact + fixed, 0.015 + impact + fixed
+
+
+class Council:
+    def __init__(self, brain: Any) -> None:
+        self.b = brain
+        self.skeptic = Logit(SKEPTIC_PRIORS, _logit(0.55))
+        self.optimist = Logit(OPTIMIST_PRIORS, _logit(0.10))
+        self.cred = {k: 1 / 3 for k in BRAINS}
+        self.bar = 0.48
+        self.base_lose, self.base_big = 0.55, 0.10
+        self.plays: dict[str, dict[str, list[float]]] = {}       # style -> playbook -> [n, mean, M2] (decayed)
+        self.track: dict[str, dict[str, Any]] = {}               # counterfactual trackers: real positions + ghosts
+        self.debate: deque[dict[str, Any]] = deque(maxlen=60)
+        self.recent: deque[float] = deque(maxlen=25)              # last real trades' net results
+        self.regime = "normal"
+        self.regime_trades = 0                                    # trades since the last regime change (hysteresis)
+        self.explore_left = 0
+        self.win_rate = 0.45                                      # the no-information baseline every vote is scored against
+        self.recent_lose: deque[float] = deque(maxlen=200)        # the skeptic's recent p_lose on proposals (its veto is relative)
+        self.stats = {"proposed": 0, "approved": 0, "rejected": 0, "vetoed": 0, "ghosts_done": 0, "saved_sol": 0.0, "missed_sol": 0.0,
+                      "skeptic_exits": 0, "optimist_holds": 0, "regime_changes": 0}
+        self.rng = random.Random()
+        self.last_step = 0.0
+        self.last_decision_ts = 0.0
+
+    # ---------------- persistence ----------------
+    def state(self) -> dict[str, Any]:
+        return {"skeptic": self.skeptic.state(), "optimist": self.optimist.state(), "cred": self.cred, "bar": round(self.bar, 4),
+                "base": [round(self.base_lose, 4), round(self.base_big, 4)], "plays": self.plays, "stats": self.stats,
+                "regime": self.regime, "recent": list(self.recent), "win_rate": round(self.win_rate, 4)}
+
+    def restore(self, s: dict[str, Any] | None) -> None:
+        if not s:
+            return
+        self.skeptic.restore(s.get("skeptic"))
+        self.optimist.restore(s.get("optimist"))
+        c = s.get("cred") or {}
+        if all(k in c for k in BRAINS):
+            self.cred = {k: float(c[k]) for k in BRAINS}
+        self.bar = float(s.get("bar", self.bar))
+        self.base_lose, self.base_big = (s.get("base") or [self.base_lose, self.base_big])[:2]
+        self.plays = s.get("plays") or {}
+        self.stats.update(s.get("stats") or {})
+        self.regime = s.get("regime") or "normal"
+        self.win_rate = float(s.get("win_rate", self.win_rate))
+        self.recent.extend(s.get("recent") or [])
+
+    # ---------------- the vote ----------------
+    def votes(self, f: dict[str, float], exec_conf: float) -> dict[str, Any]:
+        p_lose, p_big = self.skeptic.p(f), self.optimist.p(f)
+        # each judged against its own base rate (most memecoin trades lose — an absolute cut-off would block everything)
+        skep = _clip(0.5 + 0.35 * math.log2(max(0.2, (1 - p_lose) / max(0.05, 1 - self.base_lose))), 0, 1)
+        opt = _clip(0.5 + 0.25 * math.log2(max(0.25, p_big / max(0.02, self.base_big))), 0, 1)
+        return {"executor": round(exec_conf, 3), "skeptic": round(skep, 3), "optimist": round(opt, 3), "p_lose": round(p_lose, 3),
+                "p_big": round(p_big, 3)}
+
+    def why(self, model: Logit, f: dict[str, float], n: int = 2) -> str:
+        c = sorted(((model.w[k] * f.get(k, 0.0), k) for k in model.w), reverse=True)
+        return ", ".join(LABELS.get(k, k).lower() for v, k in c[:n] if v > 0.1)
+
+    def choose_play(self, style: str, v: dict[str, Any]) -> str:
+        stats = self.plays.get(style) or {}
+        temp = 2.0 if self.explore_left > 0 else 1.0
+        default = DEFAULT_PLAY.get(style, "quick")
+        best, best_s = default, -9.0
+        allowed = [n for n in ORDER if not (style in FAST and n == "moon")]
+        for name in allowed:
+            # unproven playbooks start just behind the style's default, with a narrow prior: it explores, it doesn't gamble
+            n, mean, m2 = stats.get(name, [0.0, 0.0 if name == default else -0.03, 0.0])
+            sd = math.sqrt(m2 / n) if n > 1 else 0.04
+            draw = mean + temp * self.rng.gauss(0, max(0.01, sd) / math.sqrt(n + 1))
+            if draw > best_s:
+                best, best_s = name, draw
+        i = ORDER.index(best)
+        top = len(allowed) - 1
+        if v["optimist"] >= 0.8 and self.cred["optimist"] >= 0.3 and i < top:
+            i += 1                                                   # the optimist talks it into giving the trade room
+        if v["skeptic"] <= 0.25 and self.cred["skeptic"] >= 0.3 and i > 0:
+            i -= 1                                                   # the skeptic talks it into a tighter leash
+        if self.regime == "defensive" and i > 1:
+            i -= 1
+        return ORDER[i]
+
+    def decide(self, style: str, f: dict[str, float], exec_conf: float, symbol: str, mint: str) -> dict[str, Any]:
+        """The debate: three votes, weighted by credibility → go / no, size multiplier, exit playbook, and a one-line record."""
+        self.stats["proposed"] += 1
+        self.last_decision_ts = time.time()
+        v = self.votes(f, exec_conf)
+        c = self.cred
+        go = sum(c[k] * v[k] for k in BRAINS)
+        bar = self.bar + (0.04 if self.regime == "defensive" else -0.03 if self.regime == "aggressive" else 0.0)
+        self.recent_lose.append(v["p_lose"])
+        st = self.skeptic.stats()
+        calibrated = self.skeptic.n >= 50 and (st["accuracy"] or 0) >= 58 and (st["brier"] or 1) <= 0.22
+        q85 = sorted(self.recent_lose)[int(0.85 * (len(self.recent_lose) - 1))] if len(self.recent_lose) >= 20 else 0.0
+        veto = calibrated and c["skeptic"] >= 0.25 and v["p_lose"] >= max(0.8, self.base_lose + 0.2, q85)
+        ok = go >= bar and not veto
+        size_mult = (c["executor"] * 1.0 + c["skeptic"] * _clip(0.4 + v["skeptic"], 0.4, 1.3)
+                     + c["optimist"] * _clip(0.6 + 1.2 * v["optimist"], 0.6, 1.8))
+        size_mult *= 0.7 if self.regime == "defensive" else 1.2 if self.regime == "aggressive" else 1.0
+        play = self.choose_play(style, v)
+        pb = PLAYBOOKS[play]
+        out = {"go": ok, "veto": veto, "score": round(go, 3), "bar": round(bar, 3), "votes": v, "cred": {k: round(c[k], 3) for k in BRAINS},
+               "size_mult": round(_clip(size_mult, 0.3, 2.0), 3), "play": play, "style": style,
+               "exits": {"tp": pb["tp"], "stop": pb["stop"], "max_s": pb["hold"], "trail": pb["trail"], "arm": pb["arm"], "preset": play,
+                         "power": False},
+               "why": {"skeptic": self.why(self.skeptic, f), "optimist": self.why(self.optimist, f)}}
+        out["summary"] = (f"🗳 exec {v['executor']:.2f} · skeptic {v['skeptic']:.2f} · optimist {v['optimist']:.2f} → "
+                          f"{'VETO' if veto else 'GO' if ok else 'no'} ({go:.2f} vs {bar:.2f}) · {play}")
+        self.debate.appendleft({"ts": time.time(), "symbol": symbol, "mint": mint, **{k: out[k] for k in ("go", "veto", "score", "bar", "votes", "play", "style", "why")},
+                                "size_mult": out["size_mult"]})
+        if self.explore_left > 0:
+            self.explore_left -= 1
+        self.stats["approved" if ok else "vetoed" if veto else "rejected"] += 1
+        return out
+
+    # ---------------- holding: the skeptic can pull the plug, the optimist can hold ----------------
+    def exit_vote(self, p: dict[str, Any], f: dict[str, float], x: float, age: float) -> tuple[float, str] | None:
+        if not f or age < 8:
+            return None
+        p_lose, p_big = self.skeptic.p(f), self.optimist.p(f)
+        sell = self.cred["skeptic"] * (1.0 if p_lose >= max(0.8, self.base_lose + 0.2) else 0.0)
+        hold = self.cred["optimist"] * (1.0 if (p_big >= 2 * self.base_big or self.b.surging(f)) else 0.0)
+        if sell - hold >= 0.2:
+            self.stats["skeptic_exits"] += 1
+            p["_exit_kind"] = "model"
+            return (1.0 if x < 1.0 else 0.5), (f"skeptic pulled the plug ({p_lose * 100:.0f}% it loses: {self.why(self.skeptic, f)})"
+                                                 + (" — banked half" if x >= 1.0 else ""))
+        if hold > 0 and sell > 0:
+            self.stats["optimist_holds"] += 1
+        return None
+
+    # ---------------- counterfactual tracking (real positions + ghosts) ----------------
+    def open_track(self, key: str, mint: str, f: dict[str, float] | None, entry_mcap: float, size: float, vsol: float | None,
+                   d: dict[str, Any], real: bool, sol: float = 0.0) -> None:
+        if not entry_mcap or key in self.track:
+            return
+        n_real = sum(1 for t in self.track.values() if t["real"])
+        if (real and n_real >= MAX_REAL) or (not real and len(self.track) - n_real >= MAX_GHOST):
+            return
+        cb, cs = costs(size, vsol)
+        style = d.get("style")
+        self.track[key] = {"mint": mint, "t0": time.time(), "entry": entry_mcap, "cb": cb, "cs": cs, "real": real, "sol": sol,
+                           "vec": array("f", ((f or {}).get(k, 0.0) for k in KEYS)), "votes": d.get("votes"), "play": d.get("play"),
+                           "style": d.get("style"), "go": d.get("go"), "veto": d.get("veto"), "last": 1.0,
+                           "st": {n: [False, 1.0, None] for n in ORDER if not (style in FAST and n == "moon")}}
+
+    def ghost(self, mint: str, f: dict[str, float], L: Any, d: dict[str, Any], size: float) -> None:
+        """A trade the council turned down — follow it anyway, so it learns whether saying no was right."""
+        if L is None or not getattr(L, "mcap_sol", None) or self.rng.random() > GHOST_RATE:
+            return
+        self.open_track(f"g:{mint}:{int(time.time())}", mint, f, L.mcap_sol, size, getattr(L, "vsol", None), d, real=False, sol=size)
+
+    def step(self, now: float) -> None:
+        if now - self.last_step < 0.5:
+            return
+        self.last_step = now
+        launches = self.b.ap.sniper.launches
+        done = []
+        for key, t in self.track.items():
+            L = launches.get(t["mint"])
+            age = now - t["t0"]
+            if L is not None and L.mcap_sol:
+                t["last"] = (L.mcap_sol / t["entry"]) / (1 + t["cb"])
+            x = t["last"]
+            alive = False
+            for name, st in t["st"].items():
+                if st[0]:
+                    continue
+                pb = PLAYBOOKS[name]
+                st[1] = max(st[1], x)
+                hit = (x <= 1 - pb["stop"] or x >= pb["tp"] or age >= pb["hold"] or L is None
+                       or (pb["trail"] and st[1] >= pb["arm"] and x <= st[1] * (1 - pb["trail"])))
+                if hit:
+                    st[0], st[2] = True, x * (1 - t["cs"]) - 1
+                else:
+                    alive = True
+            if not alive:
+                done.append(key)
+        for key in done:
+            self.finish(self.track.pop(key))
+
+    def finish(self, t: dict[str, Any]) -> None:
+        nets = {n: st[2] for n, st in t["st"].items() if st[2] is not None}
+        if not nets:
+            return
+        style = t["style"] or "scalp"
+        w = 1.0 if t["real"] else 0.5
+        bucket = self.plays.setdefault(style, {})
+        for n, net in nets.items():                                  # every playbook learns from every path
+            s = bucket.setdefault(n, [0.0, -0.02, 0.0])
+            s[0] = s[0] * 0.995 + w
+            d = net - s[1]
+            s[1] += w * d / max(1.0, s[0])
+            s[2] = s[2] * 0.995 + w * d * (net - s[1])
+        f = dict(zip(KEYS, t["vec"]))
+        best = max(nets.values())
+        self.optimist.step(f, 1.0 if best >= BIG else 0.0, LR * w)
+        self.base_big = 0.98 * self.base_big + 0.02 * (1.0 if best >= BIG else 0.0)
+        if not t["real"]:
+            net = nets.get(t["play"] or "quick", best)
+            lose = 1.0 if net < 0 else 0.0
+            self.skeptic.step(f, lose, LR * 0.5)
+            self.base_lose = 0.99 * self.base_lose + 0.01 * lose
+            self.hedge(t["votes"], net, ETA / 2)
+            self.stats["ghosts_done"] += 1
+            sol = t.get("sol") or 0.0
+            if net < 0:
+                self.stats["saved_sol"] = round(self.stats["saved_sol"] - net * sol, 6)     # saying no saved this
+                self.bar = min(0.62, self.bar + 0.0005)
+            else:
+                self.stats["missed_sol"] = round(self.stats["missed_sol"] + net * sol, 6)   # saying no cost this
+                if net > 0.03:
+                    self.bar = max(0.38, self.bar - 0.003)               # turning down winners costs more than taking a loser
+
+    # ---------------- outcomes ----------------
+    def hedge(self, votes: dict[str, float] | None, net: float, eta: float = ETA) -> None:
+        if not votes:
+            return
+        y = 1.0 if net > 0 else 0.0
+        base = (self.win_rate - y) ** 2                       # what "no information" would have scored
+        for k in BRAINS:
+            if k in votes:                                    # only beating the baseline earns trust (a constant "no" doesn't)
+                self.cred[k] *= math.exp(-eta * ((votes[k] - y) ** 2 - base))
+        tot = sum(self.cred.values()) or 1.0
+        self.cred = {k: max(0.08, v / tot) for k, v in self.cred.items()}
+        tot = sum(self.cred.values())
+        self.cred = {k: v / tot for k, v in self.cred.items()}
+
+    def on_close(self, p: dict[str, Any], mult: float, f: dict[str, float] | None) -> list[str]:
+        """A real trade closed: the skeptic learns, credibility moves, the bar and the regime adapt."""
+        notes = []
+        net = mult - 1
+        cv = p.get("council") or {}
+        if f:
+            lose = 1.0 if net < 0 else 0.0
+            self.skeptic.step(f, lose, LR)
+            self.base_lose = 0.98 * self.base_lose + 0.02 * lose
+        self.hedge(cv.get("votes"), net)
+        self.win_rate = 0.97 * self.win_rate + 0.03 * (1.0 if net > 0 else 0.0)
+        self.bar = _clip(self.bar + (0.004 if net < 0 else -0.003), 0.38, 0.62)
+        self.recent.append(net)
+        self.regime_trades += 1
+        if len(self.recent) >= 10 and self.regime_trades >= 20:
+            avg = sum(self.recent) / len(self.recent)
+            r = self.regime                                   # hysteresis: harder to enter a regime than to stay in it
+            new = ("defensive" if avg < -0.03 else "aggressive" if avg > 0.03 else
+                   r if (r == "defensive" and avg < 0) or (r == "aggressive" and avg > 0) else "normal")
+            if new != self.regime:
+                self.regime_trades = 0
+                self.stats["regime_changes"] += 1
+                leader = max(self.cred, key=self.cred.get)
+                if new == "defensive":
+                    self.explore_left = 40                           # change things up: try other exit playbooks hard
+                    notes.append(f"🔄 Nebula goes DEFENSIVE — last {len(self.recent)} trades averaged {avg * 100:+.1f}%. Raising the bar, "
+                                 f"cutting size, exploring new exit playbooks. Listening most to the {leader} ({self.cred[leader] * 100:.0f}%).")
+                elif new == "aggressive":
+                    notes.append(f"🚀 Nebula goes AGGRESSIVE — last {len(self.recent)} trades averaged {avg * 100:+.1f}%. Lower bar, bigger size.")
+                else:
+                    notes.append(f"⚖️ Nebula back to NORMAL (last {len(self.recent)} trades {avg * 100:+.1f}%).")
+                self.regime = new
+        return notes
+
+    def idle(self, now: float, last_buy: float) -> None:
+        if last_buy and now - last_buy > 30 and self.bar > 0.48:
+            self.bar = max(0.48, self.bar - 0.002)                    # never stalls: an idle council relaxes
+
+    # ---------------- reads ----------------
+    def snapshot(self) -> dict[str, Any]:
+        lb = {}
+        for style, plays in self.plays.items():
+            lb[style] = sorted(({"play": n, "n": round(s[0], 1), "avg_pct": round(s[1] * 100, 2)} for n, s in plays.items()),
+                               key=lambda r: -r["avg_pct"])
+        return {"cred": {k: round(v * 100, 1) for k, v in self.cred.items()}, "bar": round(self.bar, 3), "regime": self.regime,
+                "base_lose_pct": round(self.base_lose * 100, 1), "base_big_pct": round(self.base_big * 100, 1),
+                "skeptic": self.skeptic.stats(), "optimist": self.optimist.stats(), "playbooks": lb,
+                "tracking": {"real": sum(1 for t in self.track.values() if t["real"]), "ghosts": sum(1 for t in self.track.values() if not t["real"])},
+                "stats": self.stats, "debate": list(self.debate)[:25], "exploring": self.explore_left,
+                "recent_avg_pct": round(sum(self.recent) / len(self.recent) * 100, 2) if self.recent else None}

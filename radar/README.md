@@ -141,6 +141,21 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - Execution: PumpPortal Local Transaction API (pump.fun, PumpSwap, Raydium) signed locally and sent through your RPC (Helius
   when connected); Jupiter as fallback. Fills are read back from the chain. Telegram: `/autopilot`, `/autopilot demo|off`, `/panic`.
 
+### The Nebula: a 3-brain council over every trade
+
+- **Executor** (the self-driving brain below) proposes each trade. **Skeptic** — its own model of "this loses after
+  fees" — argues for smaller size and tighter exits and can veto. **Optimist** — its own model of "this runs +25%" —
+  argues for a bigger bet and room to run, and can hold a surge the skeptic wants to dump.
+- Votes are weighted by **credibility** learned with Hedge (multiplicative weights), scored against a no-information
+  baseline so a brain that just says "no" to everything earns nothing. The skeptic can only veto once it's proven
+  calibrated, and only the riskiest slice of proposals (bull/bear debate + risk vote, as in TradingAgents, arXiv 2412.20138).
+- **Exit playbooks** (flash · quick · swing · runner · moon) are replayed on the real price path of every trade AND
+  every ghost (a trade the council turned down), after fees; a Thompson-sampled bandit per style picks what's making
+  money. Ghosts also tell it whether saying no saved money or cost it — the bar moves accordingly.
+- **Regimes**: a losing run flips it defensive (higher bar, smaller size, explores new exit playbooks — it changes
+  things up); a winning run flips it aggressive; hysteresis stops it flip-flopping. The Autopilot page shows the three
+  brains' credibility, the live debate, the playbook leaderboard and the saved / missed ledger.
+
 ### Self-driving brain (v7)
 
 Its own algorithm on its own 10 SOL of demo money (and real money only if you pick it under your hard caps).
