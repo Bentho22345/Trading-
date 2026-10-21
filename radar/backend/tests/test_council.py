@@ -93,7 +93,7 @@ def test_skeptic_pulls_the_plug_and_the_optimist_holds_a_surge(tmp_path):
         c.cred = {"executor": 0.2, "skeptic": 0.6, "optimist": 0.2}
         p = {"opened": time.time() - 30}
         ex = c.exit_vote(p, {"risk": 1.0}, 0.95, 30)
-        assert ex and ex[0] == 1.0 and "skeptic" in ex[1]
+        assert ex and ex[0] == 1.0 and "skeptic" in ex[1] and p["_exit_kind"] == "skeptic"
         c.cred = {"executor": 0.2, "skeptic": 0.35, "optimist": 0.45}
         c.optimist.b = 3.0                                                # …but now the optimist sees a run and outvotes it
         assert c.exit_vote(p, {"risk": 1.0}, 1.1, 30) is None
@@ -123,5 +123,18 @@ def test_council_runs_the_executor_end_to_end_and_learns_on_close(tmp_path):
         b2 = type(b)(ap)
         await b2.load()
         assert b2.council.skeptic.n == b.council.skeptic.n                  # the council's memory survives a restart
+        await db.close()
+    asyncio.run(run())
+
+
+def test_the_skeptic_learns_from_plug_pulls_that_were_wrong(tmp_path):
+    async def run():
+        ap, db = await make(tmp_path, [])
+        c = ap.brain.council
+        m0 = c.plug_margin
+        msg = c.plug_lesson(True, False, "RUN", 1.6)
+        assert c.plug_margin > m0 and msg and "more sure" in msg
+        c.plug_lesson(False, True, "DUMP", 0.6)
+        assert c.plug_margin < m0 + 0.03
         await db.close()
     asyncio.run(run())

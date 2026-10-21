@@ -359,6 +359,9 @@ type Brain = {
   bars?: Record<string, number>; idle_s?: number | null;
   verdict?: { state: string; text: string; [k: string]: any };
   nebula?: Nebula;
+  allocator?: { strategies: { strategy: string; trades: number; win_pct: number | null; avg_pct: number; sol: number; benched: boolean; bench_s: number; size_mult: number }[]; notes: string[] };
+  heat?: number;
+  report?: { trades: number; by_strategy: RepRow[]; by_exit: RepRow[]; by_hold: RepRow[] };
   last_error?: { ts: number; error: string; where?: string } | null; engine_error?: string | null; refills?: number;
   timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_margin: number;
     market?: { coins: number; dn_med: number; up_med: number } | null;
@@ -475,6 +478,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
         </div>
       </div>
       {b?.nebula && <NebulaPanel n={b.nebula} now={now} />}
+      {(b?.allocator || b?.report) && <WorkingPanel b={b} />}
       {b?.verdict && (
         <div className={`mx-6 mt-3 flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3 text-[13px] ${b.verdict.state === 'trading' ? 'border-up/30 bg-up/[0.07] text-up' : 'border-warn/40 bg-warn/[0.08] text-warn'}`}>
           <b className="uppercase tracking-wide">{b.verdict.state === 'trading' ? '● Trading' : '● Not trading'}</b>
@@ -483,7 +487,9 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
             {b.verdict.trade_feed && <> · trade feed: {b.verdict.trade_feed.chain_running
               ? `on-chain ${b.verdict.trade_feed.chain?.connected ? '●' : '○'} ${b.verdict.trade_feed.chain?.per_min ?? 0}/min`
               : `PumpPortal${b.verdict.trade_feed.pumpportal_key ? ' (key)' : ''} ${b.verdict.trade_feed.pumpportal_trades_90s ?? 0}/90s`}</>}</span>
-          <button onClick={() => { const txt = JSON.stringify({ verdict: b.verdict, skips: b.skips, bars: b.bars, idle_s: b.idle_s, diag: b.diag, mood: b.mood,
+          <button onClick={() => { const txt = JSON.stringify({ report: b.report, allocator: b.allocator, heat: b.heat,
+              nebula: b.nebula && { cred: b.nebula.cred, bar: b.nebula.bar, regime: b.nebula.regime, stats: b.nebula.stats, playbooks: b.nebula.playbooks,
+                skeptic: b.nebula.skeptic, optimist: b.nebula.optimist }, verdict: b.verdict, skips: b.skips, bars: b.bars, idle_s: b.idle_s, diag: b.diag, mood: b.mood,
               scalper: b.scalper, snipes: b.snipes, last_error: b.last_error, engine_error: b.engine_error, aggression: b.aggression, mode: b.mode,
               timing: b.timing && { up: b.timing.up, down: b.timing.down, market: b.timing.market }, log: (b.log || []).slice(0, 12).map((e) => e.text) }, null, 1);
             navigator.clipboard?.writeText(txt).then(() => alert('Diagnostics copied — paste them to Claude.')).catch(() => prompt('Copy this:', txt)); }}
@@ -636,6 +642,7 @@ function PatList({ rows, base, empty }: { rows: Pat[]; base?: number | null; emp
   );
 }
 
+type RepRow = { key: string; n: number; win_pct: number; avg_pct: number; sol: number };
 type Vote = { executor: number; skeptic: number; optimist: number; p_lose: number; p_big: number };
 type Nebula = {
   cred: Record<string, number>; bar: number; regime: string; base_lose_pct: number; base_big_pct: number; exploring: number;
@@ -713,6 +720,59 @@ function NebulaPanel({ n, now }: { n: Nebula; now: number }) {
           {!Object.keys(n.playbooks || {}).length && <p className="text-white/40">Fills in as trades and ghosts finish.</p>}
           <p className="num mt-2 text-white/50">ghost trades: {st.ghosts_done ?? 0} · saying no saved <b className="text-up">◎{(st.saved_sol ?? 0).toFixed(3)}</b> · missed <b className="text-warn">◎{(st.missed_sol ?? 0).toFixed(3)}</b> · tracking {n.tracking.real} real / {n.tracking.ghosts} ghosts</p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function RepTable({ title, rows }: { title: string; rows: RepRow[] }) {
+  return (
+    <div>
+      <div className="eyebrow mb-1">{title}</div>
+      <table className="num w-full text-[11.5px]"><tbody>
+        {rows.map((r) => (
+          <tr key={r.key} className="border-t border-white/[0.05]">
+            <td className="py-0.5 pr-2 text-white/75">{r.key}</td><td className="text-white/45">{r.n}</td>
+            <td className="text-white/60">{r.win_pct}%</td>
+            <td className={r.avg_pct >= 0 ? 'text-up' : 'text-down'}>{r.avg_pct > 0 ? '+' : ''}{r.avg_pct}%</td>
+            <td className={`text-right ${r.sol >= 0 ? 'text-up' : 'text-down'}`}>◎{r.sol >= 0 ? '+' : ''}{r.sol.toFixed(3)}</td>
+          </tr>
+        ))}
+        {!rows.length && <tr><td className="text-white/40">no closed trades yet</td></tr>}
+      </tbody></table>
+    </div>
+  );
+}
+
+function WorkingPanel({ b }: { b: Brain }) {
+  const a = b.allocator;
+  const r = b.report;
+  return (
+    <div className="mx-6 mt-3 overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.02]">
+      <div className="flex flex-wrap items-center gap-3 border-b border-white/[0.06] px-4 py-2.5">
+        <span className="font-extrabold tracking-wide text-flash">⚖️ ALLOCATOR · what's working</span>
+        <span className="text-[12px] text-white/55">every strategy books its real results after fees — losers get benched, winners get more size</span>
+        {b.heat != null && <span className={`num ml-auto text-[12px] font-bold ${b.heat >= 1.05 ? 'text-up' : b.heat <= 0.9 ? 'text-down' : 'text-white/70'}`}>market heat ×{b.heat.toFixed(2)}</span>}
+      </div>
+      <div className="grid gap-px bg-white/[0.05] lg:grid-cols-[1.1fr_1fr_1fr]">
+        <div className="bg-[var(--color-bg)]/70 p-3">
+          <div className="eyebrow mb-1">Strategies</div>
+          <table className="num w-full text-[11.5px]"><tbody>
+            {(a?.strategies || []).map((x) => (
+              <tr key={x.strategy} className="border-t border-white/[0.05]">
+                <td className="py-0.5 pr-2 font-semibold">{x.strategy}</td>
+                <td className="text-white/45">{x.trades}</td>
+                <td className="text-white/60">{x.win_pct ?? '—'}%</td>
+                <td className={x.avg_pct >= 0 ? 'text-up' : 'text-down'}>{x.avg_pct > 0 ? '+' : ''}{x.avg_pct}%</td>
+                <td className="text-right">{x.benched ? <span className="text-down">benched {Math.ceil(x.bench_s / 60)}m</span> : <span className="text-white/60">×{x.size_mult}</span>}</td>
+              </tr>
+            ))}
+            {!a?.strategies?.length && <tr><td className="text-white/40">fills in as trades close</td></tr>}
+          </tbody></table>
+          {!!a?.notes?.length && <ul className="mt-2 space-y-0.5 text-[11px] text-white/55">{a.notes.slice(0, 3).map((n, i) => <li key={i}>{n}</li>)}</ul>}
+        </div>
+        <div className="bg-[var(--color-bg)]/70 p-3"><RepTable title={`By exit reason · last ${r?.trades ?? 0} trades`} rows={r?.by_exit || []} /></div>
+        <div className="bg-[var(--color-bg)]/70 p-3"><RepTable title="By hold time" rows={r?.by_hold || []} /></div>
       </div>
     </div>
   );

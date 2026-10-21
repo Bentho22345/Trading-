@@ -141,7 +141,7 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - Execution: PumpPortal Local Transaction API (pump.fun, PumpSwap, Raydium) signed locally and sent through your RPC (Helius
   when connected); Jupiter as fallback. Fills are read back from the chain. Telegram: `/autopilot`, `/autopilot demo|off`, `/panic`.
 
-### The Nebula: a 3-brain council over every trade
+### The Nebula: a 4-brain council over every trade
 
 - **Executor** (the self-driving brain below) proposes each trade. **Skeptic** — its own model of "this loses after
   fees" — argues for smaller size and tighter exits and can veto. **Optimist** — its own model of "this runs +25%" —
@@ -152,6 +152,17 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - **Exit playbooks** (flash · quick · swing · runner · moon) are replayed on the real price path of every trade AND
   every ghost (a trade the council turned down), after fees; a Thompson-sampled bandit per style picks what's making
   money. Ghosts also tell it whether saying no saved money or cost it — the bar moves accordingly.
+- **Allocator (4th brain, risk manager)**: every strategy — early snipe, mid snipe, second wave, scalp, swing, copy,
+  explore, drought breaker — books its real results after fees. A strategy that keeps losing (≥ 12 trades, average
+  < −1% and confidently below zero) is benched for 20+ min, probed with small trades, and un-benched when the probes
+  pay; winners get up to 1.8× size. It's how the bot "takes out what isn't working" from live results.
+- **Second wave**: research shows devs and their bundles took $579M+ vs snipers' $31.5M and 65% of devs sell inside a
+  minute (Bitquery, Oct 2026) — a bot seeing trades seconds late is often exit liquidity. So it also waits out the
+  first-minute flush and buys coins that survived it (dip bought back, holders growing, dev and snipers out).
+- **Market brain**: sizes scale with how hot pump.fun is right now (share of coins going +12% first, fast vs slow).
+- **Fee-aware exits**: it no longer "banks" +3–4% moves that are break-even after the ~2% it costs to sell; the
+  skeptic learns from its own plug-pulls (a coin that ran after it sold makes it demand more next time).
+- **Report**: the Autopilot page and Copy diagnostics show the last 300 trades by strategy, exit reason and hold time.
 - **Regimes**: a losing run flips it defensive (higher bar, smaller size, explores new exit playbooks — it changes
   things up); a winning run flips it aggressive; hysteresis stops it flip-flopping. The Autopilot page shows the three
   brains' credibility, the live debate, the playbook leaderboard and the saved / missed ledger.

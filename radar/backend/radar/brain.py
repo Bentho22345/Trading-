@@ -77,6 +77,7 @@ from collections import deque
 from typing import Any
 
 from . import patterns as pat
+from .allocator import strat_key
 
 PRIORS: dict[str, float] = {
     "upside": 2.4, "risk": -2.0, "alpha": 1.4, "copy": 2.0, "velocity": 1.0, "progress": 0.8, "flow": 1.0, "sol_rate": 0.8,
@@ -325,6 +326,7 @@ class Brain:
         self.skips_prev: dict[str, int] = {}
         self.skips_ts = 0.0
         self.bars: dict[str, float] = {}
+        self.heat = [0.0, 0.0]                              # [fast, slow] EMA of "this coin went +12% first" (the market brain)
         self.pipe: dict[str, Any] = {}
         self.last_tick_ts = time.time()
         self.grad_frac = 0.5                                # learned: how much it sells into a graduation
@@ -353,8 +355,10 @@ class Brain:
         self.real_balance: tuple[float, float] = (0.0, 0.0)  # (ts, SOL)
         self.diag: dict[str, Any] = {}
         self.rng = random.Random()
+        from .allocator import Allocator
         from .council import Council
         self.council = Council(self)                         # the Nebula: skeptic + optimist overseeing this executor
+        self.alloc = Allocator()                             # …and a risk manager deciding which strategies get money
         # experience replay
         self.replay: deque[tuple[array, float, float, float]] = deque(maxlen=4000)
         self.pending: list[tuple] = []
@@ -422,6 +426,7 @@ class Brain:
         self.copied_sells = int(s.get("copied_sells", 0))
         self.dn_margin = float(s.get("dn_margin", 0.12))
         self.council.restore(s.get("council"))
+        self.alloc.restore(s.get("alloc"))
         self.scalp_adj.update(s.get("scalp_adj") or {})
         if ver < 8:
             self.scalp_adj["bar"] = 0.0                 # v8: clear the ratcheted-up bar left behind by older versions
@@ -467,7 +472,7 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "council": self.council.state(), "version": 9, "win": self.win.state(), "rug": self.rug.state(),
+            "council": self.council.state(), "alloc": self.alloc.state(), "version": 9, "win": self.win.state(), "rug": self.rug.state(),
             "up": self.up.state(), "dn": self.dn.state(), "dn_margin": round(self.dn_margin, 4), "grad_frac": round(self.grad_frac, 4),
             "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "snipes": self.snipes, "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
@@ -933,7 +938,7 @@ class Brain:
                 continue
             size = self.size(bal, 0.8, mode, copy=True)
             if not await self._council_buy("copy", mint, size, mode, "copy", f"influx: {desc}", L.result if L else None, f, v, leaders,
-                                           _clip(0.6 + 0.05 * k, 0, 0.95), L):
+                                           _clip(0.6 + 0.05 * k, 0, 0.95), L, strat="copy"):
                 continue
             bought += 1
             copies_open += 1
@@ -983,12 +988,48 @@ class Brain:
                 if not await self._council_buy("snipe", L.mint, round(max(0.02, size), 4), mode, "snipe",
                                 f"{'💥 POWER ' if power else ''}snipe {sc_ * 100:.0f} at {now - L.created:.0f}s old (bar {bar * 100:.0f}) · "
                                 f"tp +{(ex['tp'] - 1) * 100:.0f}% / stop −{ex['stop'] * 100:.0f}%",
-                                L.result, hit["f"], hit["v"], [], _clip(0.5 + (sc_ - bar) * 1.5, 0, 1), L, exits=ex):
+                                L.result, hit["f"], hit["v"], [], _clip(0.5 + (sc_ - bar) * 1.5, 0, 1), L, exits=ex,
+                                strat=strat_key("snipe", now - L.created)):
                     continue
                 bought += 1
                 bal = await self.balance(mode)
         if bought >= room:
             return
+        # 1c) SECOND WAVE: wait out the first-minute flush (65% of devs sell inside a minute, 55% of snipes are gone in one),
+        #     then buy the coins that SURVIVED it — dip being bought back, holders still growing, snipers and dev out
+        if agg.get("snipe") or agg.get("scalp"):
+            wave = []
+            for L in allL:
+                age = now - L.created
+                if not (45 <= age <= 300) or not L.result or not L.mcap_sol:
+                    continue
+                hit = self.cache.get(L.mint)
+                raw = self.charts.get(L.mint)
+                if hit and raw:
+                    w = self.wave2_score(hit["f"], raw)
+                    if w > 0:
+                        wave.append((w, L, hit))
+            wave.sort(key=lambda t: -t[0])
+            wbar = max(0.35, self.rel_bar(0.45, [t[0] for t in wave], 0.4))
+            self.bars["wave2"] = wbar
+            for w, L, hit in wave:
+                if bought >= room or bal < 0.06 or w < wbar:
+                    break
+                if self.can_enter(L.mint, mode, "scalp") or (L.deployer and L.deployer in self.bad_devs):
+                    continue
+                hard = self.hard_no(L.result)
+                if hard or self.veto(L, now, hit["rug"]):
+                    continue
+                cfg = AGGRESSION[self.aggression].get("scalp") or AGGRESSION["hyper"]["scalp"]
+                size = bal * cfg["size"] * (0.7 + 0.8 * w) * (0.6 + 0.4 * min(1.0, mf))
+                if not await self._council_buy("wave2", L.mint, round(max(0.02, size), 4), mode, "scalp",
+                                               f"🌊 second wave {w * 100:.0f} at {now - L.created:.0f}s (survived the flush: dip bought back, holders growing)",
+                                               L.result, hit["f"], hit["v"], [], _clip(0.5 + (w - wbar) * 1.5, 0, 1), L, strat="wave2"):
+                    continue
+                bought += 1
+                bal = await self.balance(mode)
+            if bought >= room:
+                return
         # 2) its own picks: the best coins it can see above its (percentile) bar — several per tick when it's hot
         for c in ([] if cooling else scored):
             if bought >= room or bal < 0.06:
@@ -1020,7 +1061,8 @@ class Brain:
             size = self.size(bal, 0.3 if explore else conv, mode, explore=explore)
             detail = (f"value {c['value']:.0f} (bar {self.threshold:.0f}) · rug {c['p_rug']}%{' · explore' if explore else ''} · {c['why']}")
             if not await self._council_buy("swing", c["mint"], size, mode, "explore" if explore else "brain", detail, c["r"], c["f"], c["value"],
-                                           c["leaders"], _clip(0.5 + (c["value"] - self.threshold) / max(10.0, 100 - self.threshold), 0, 1), L):
+                                           c["leaders"], _clip(0.5 + (c["value"] - self.threshold) / max(10.0, 100 - self.threshold), 0, 1), L,
+                                           strat="explore" if explore else "swing"):
                 continue
             devs.add(c["deployer"])
             bought += 1
@@ -1073,7 +1115,7 @@ class Brain:
                 ex = self.fast_exits(sc, False)
                 if not await self._council_buy("scalp", c["mint"], round(max(0.02, bal * sc["size"] * 0.7), 4), mode, "scalp",
                                                f"drought breaker: best live coin (scalp {c['scalp'] * 100:.0f}, value {c['value']:.0f})",
-                                               c["r"], c["f"], c["value"], c["leaders"], 0.5, L, exits=ex):
+                                               c["r"], c["f"], c["value"], c["leaders"], 0.5, L, exits=ex, strat="drought"):
                     continue
                 self.skip("drought breaker fired")
                 break
@@ -1129,6 +1171,29 @@ class Brain:
         if self.up.n >= 400:
             h = 0.45 * h + 0.55 * self.edge_rank(self.up.p(f), self.dn.p(f))
         return round(_clip(h, 0, 1), 3)
+
+    @staticmethod
+    def wave2_score(f: dict[str, float], raw: dict[str, float]) -> float:
+        """A coin that took the first-minute dump and is being bought back: off its early high, buyers back in control,
+        holders still arriving, the dev and the snipers mostly out (they were the sellers)."""
+        dd = raw.get("drawdown", 0)
+        if not (0.15 <= dd <= 0.65) or raw.get("holders", 0) < 12 or raw.get("quiet_s", 99) > 15:
+            return 0.0
+        if raw.get("dev_hold", 0) >= 5 or f.get("coordinated", 0) >= 0.25 or f.get("cluster_hold", 0) >= 0.25:
+            return 0.0
+        h = (0.25 * f.get("dip_reclaim", 0) + 0.20 * max(0.0, f.get("mom_30s", 0)) + 0.15 * _clip(raw.get("net_30s", 0) / 2, 0, 1)
+             + 0.15 * f.get("holder_growth", 0) + 0.10 * f.get("buy_pressure", 0) + 0.10 * f.get("staircase", 0)
+             + 0.05 * f.get("dev_dumping", 0) + 0.05 * f.get("narrative", 0) + 0.05 * f.get("influx", 0))
+        h -= 0.3 * f.get("snipers", 0) + 0.3 * f.get("sell_streak", 0) + 0.3 * f.get("whale_sells", 0) + 0.2 * f.get("liq_drain", 0)
+        return round(_clip(h, 0, 1), 3)
+
+    def heat_mult(self) -> float:
+        """The market brain: how hot pump.fun is right now vs its normal (share of live coins whose next 3 minutes went
+        +12% first). Hot → bet a bit more; cold → bet less. Sizes only — the council still decides."""
+        fast, slow = self.heat[0], self.heat[1]
+        if slow <= 0.01:
+            return 1.0
+        return round(_clip(fast / slow, 0.6, 1.35), 3)
 
     def power(self, f: dict[str, float]) -> bool:
         """Volume, liquidity or holders flooding in fast — the coins worth a bigger bet and a wider stop / target."""
@@ -1199,8 +1264,14 @@ class Brain:
 
     async def _council_buy(self, style: str, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
                            f: dict[str, float] | None, value: float | None, leaders: list[str], exec_conf: float, L: Any,
-                           exits: dict[str, Any] | None = None) -> bool:
-        """Every buy goes to the Nebula first: executor, skeptic and optimist vote; the council sets size and exit playbook."""
+                           exits: dict[str, Any] | None = None, strat: str | None = None) -> bool:
+        """Every buy goes to the Nebula first: the allocator checks the strategy is still earning its keep, then executor,
+        skeptic and optimist vote; the council sets size and exit playbook."""
+        strat = strat or style
+        ok, amult, why = self.alloc.gate(strat)
+        if not ok:
+            self.skip(f"allocator: {strat} benched")
+            return False
         d = self.council.decide(style, f or {}, exec_conf, (r or {}).get("symbol") or mint[:6], mint)
         if not d["go"]:
             self.skip("council: skeptic veto" if d["veto"] else "council said no")
@@ -1209,8 +1280,13 @@ class Brain:
         ex = dict(d["exits"])
         if exits and exits.get("power"):                          # a flood of volume / holders: keep the wider leash of the two
             ex.update(tp=max(ex["tp"], exits["tp"]), stop=max(ex["stop"], exits["stop"]), max_s=max(ex["max_s"], exits["max_s"]), power=True)
-        p = await self._buy(mint, round(max(0.02, size * d["size_mult"]), 4), mode, trig, f"{detail} · {d['summary']}", r, f, value, leaders,
-                            exits=ex, council=d)
+        heat = self.heat_mult()
+        p = await self._buy(mint, round(max(0.02, size * d["size_mult"] * amult * heat), 4), mode, trig,
+                            f"{detail} · {d['summary']}{' · probe' if why == 'probe' else ''}", r, f, value, leaders, exits=ex, council=d)
+        if p is not None:
+            p["strat"], p["probe"] = strat, why == "probe"
+            await self.ap.db.exec("UPDATE auto_positions SET features_json=json_set(COALESCE(features_json,'{}'), '$.strat', ?, '$.probe', ?) WHERE id=?",
+                                  (strat, 1 if why == "probe" else 0, p["id"]))
         return p is not None
 
     async def _buy(self, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
@@ -1430,6 +1506,8 @@ class Brain:
             self.up.step(f, up, LR_TIMING)
             self.dn.step(f, dn, LR_TIMING * (1.3 if dn else 1.0))
             self.replay_t.append((t["vec"], up, dn))
+            self.heat[0] = 0.97 * self.heat[0] + 0.03 * up
+            self.heat[1] = 0.997 * self.heat[1] + 0.003 * up if self.heat[1] else up
             self.pending.append((now, KEYS_VER, t["vec"].tobytes(), up, dn, "timing", 1.0))
             self.label_ts.append(now)
 
@@ -1474,7 +1552,7 @@ class Brain:
         cv = self.council.exit_vote(p, f, x, age)                    # the skeptic can pull the plug; the optimist can hold
         if cv:
             return cv
-        if f and x >= 1.03 and self.surging(f):
+        if f and x >= 1.10 and self.surging(f):          # bank into a surge only once it covers the fees (+3% was ~break-even)
             p["ride"] = True
             return (0.25, f"surge: holders, volume and liquidity pouring in — banked 25% at {x:.2f}×, riding the rest until it dies down")
         if p.get("style") in ("scalp", "snipe"):
@@ -1566,7 +1644,7 @@ class Brain:
                 return None
             return self._exit(p, 1.0, f"{name} take-profit +{(x - 1) * 100:.0f}%", "scalp")
         flipped = raw is not None and (raw.get("net_30s", 0) < 0 or f.get("mom_30s", 0) < 0)
-        if x >= 1.04 and flipped:
+        if x >= 1.07 and flipped:                          # after the ~2% it costs to sell, +4% was ~nothing
             return self._exit(p, 1.0, f"scalp: momentum flipped — banked +{(x - 1) * 100:.0f}%", "scalp")
         if hit and self.dn_hot(hit["dn"]):
             return self._exit(p, 1.0, f"scalp: dump odds {hit['dn'] * 100:.0f}% — out at {x:.2f}×", "scalp")
@@ -1622,6 +1700,9 @@ class Brain:
                 elif dumped or w["max"] <= w["exit"] * 1.1:
                     self.patience = max(0.6, self.patience * 0.98)
                     self.exit_stats["early_right"] += 1
+            elif w["kind"] == "skeptic":                              # the skeptic pulled the plug — was it right?
+                w["lesson"] = self.council.plug_lesson(w["max"] >= w["exit"] * 1.25, dumped or w["max"] <= w["exit"] * 1.05,
+                                                       w["symbol"], w["max"] / w["exit"])
             elif w["kind"] == "scalp":                                # was the scalp exit well timed?
                 a = self.scalp_adj
                 if w.get("why", "").startswith("scalp stop"):
@@ -1679,6 +1760,10 @@ class Brain:
         reason = p.get("exit_reason") or ""
         y = 1.0 if mult >= 1.15 else 0.0
         council_notes = self.council.on_close(p, mult, f if isinstance(f, dict) else None)
+        akey = p.get("strat") or ("snipe:mid" if p.get("style") == "snipe" else p.get("style") or "swing")
+        am = self.alloc.book(akey, mult - 1, p["sol_out"] - p["sol_in"], probe=bool(p.get("probe")))
+        if am:
+            council_notes.append(am)
         rugged = 1.0 if (mult <= 0.45 or reason.startswith("rug")) else 0.0
         notes = list(council_notes)
         scalp = p.get("style") in ("scalp", "snipe") or trig in ("scalp", "snipe")
@@ -1750,7 +1835,7 @@ class Brain:
         # --- adaptive exits: watch what happens after a stop / trailing exit ---
         kind = p.get("_exit_kind") or ("stop" if reason.startswith("stop") else "trail" if reason.startswith(("trailing", "back to entry"))
                                        else "smart" if "sold" in reason or "leaving" in reason else "early")
-        if L is not None and L.mcap_sol and kind in ("stop", "trail", "early", "smart", "model", "scalp"):
+        if L is not None and L.mcap_sol and kind in ("stop", "trail", "early", "smart", "model", "scalp", "skeptic"):
             self.post[p["mint"]] = {"ts": time.time(), "kind": kind, "symbol": p["symbol"], "why": reason,
                                     "horizon": 300 if kind == "scalp" else 900,
                                     "entry": p.get("entry_mcap_sol") or L.mcap_sol, "exit": L.mcap_sol, "max": L.mcap_sol, "min": L.mcap_sol}
@@ -1884,6 +1969,41 @@ class Brain:
         return out("waiting", f"Candidates are there (best snipe {p.get('best_snipe')}, bar {self.bars.get('snipe')}) but every one was "
                               f"blocked — most common reason: {top_skip or 'n/a'}.")
 
+    async def report(self) -> dict[str, Any]:
+        """Its own read of its live results: the last 300 closed trades by strategy, by exit reason and by hold time."""
+        now = time.time()
+        if self._report and now - self._report[0] < 10:
+            return self._report[1]
+        rows = await self.ap.db.all("SELECT sol_in, sol_out, exit_reason, features_json, opened, closed FROM auto_positions "
+                                    "WHERE mode='auto' AND status='closed' ORDER BY closed DESC LIMIT 300")
+        def bucket(groups: dict[str, list], k: str, net: float, pnl: float) -> None:
+            groups.setdefault(k, []).append((net, pnl))
+        by_s: dict[str, list] = {}
+        by_x: dict[str, list] = {}
+        by_h: dict[str, list] = {}
+        for r in rows:
+            if not r["sol_in"]:
+                continue
+            net, pnl = r["sol_out"] / r["sol_in"] - 1, r["sol_out"] - r["sol_in"]
+            try:
+                meta = json.loads(r["features_json"] or "{}") or {}
+            except ValueError:
+                meta = {}
+            bucket(by_s, meta.get("strat") or meta.get("style") or "?", net, pnl)
+            reason = (r["exit_reason"] or "?").split(" —")[0].split(" (")[0].split(":")[0]
+            bucket(by_x, " ".join(reason.split()[:3]), net, pnl)
+            held = (r["closed"] or now) - (r["opened"] or now)
+            bucket(by_h, "<30s" if held < 30 else "30-90s" if held < 90 else "1.5-5m" if held < 300 else "5-15m" if held < 900 else "15m+", net, pnl)
+        def table(g: dict[str, list]) -> list[dict[str, Any]]:
+            out = [{"key": k, "n": len(v), "win_pct": round(sum(1 for n, _ in v if n > 0) / len(v) * 100), "avg_pct": round(sum(n for n, _ in v) / len(v) * 100, 2),
+                    "sol": round(sum(p for _, p in v), 4)} for k, v in g.items()]
+            return sorted(out, key=lambda r: r["sol"])
+        rep_ = {"trades": len(rows), "by_strategy": table(by_s), "by_exit": table(by_x)[:12], "by_hold": table(by_h)}
+        self._report = (now, rep_)
+        return rep_
+
+    _report: tuple[float, dict[str, Any]] | None = None
+
     def _safe_verdict(self) -> dict[str, Any]:
         try:
             return self.verdict()
@@ -1938,7 +2058,7 @@ class Brain:
                              "riding": sum(1 for p in self.ap.open.values() if p.get("ride")), "streak": self.scalp_streak,
                              "recent_pct": round(sum(self.scalp_hist) / len(self.scalp_hist) * 100, 2) if self.scalp_hist else None}),
                 "verdict": self._safe_verdict(),
-                "nebula": self.council.snapshot(),
+                "nebula": self.council.snapshot(), "allocator": self.alloc.snapshot(), "heat": self.heat_mult(), "report": await self.report(),
                 "bars": {k: round(v * 100) for k, v in self.bars.items()}, "idle_s": round(now - self.last_buy_ts) if self.last_buy_ts else None,
                 "snipes": {**self.snipes, "on": bool(AGGRESSION[self.aggression].get("snipe")),
                            "per_hour": sum(1 for t in self.fast_ts if t > now - 3600),

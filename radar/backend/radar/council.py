@@ -40,13 +40,13 @@ PLAYBOOKS: dict[str, dict[str, float | None]] = {
     "moon": {"tp": 4.00, "stop": 0.25, "hold": 1500, "trail": 0.22, "arm": 1.60},
 }
 ORDER = list(PLAYBOOKS)
-DEFAULT_PLAY = {"snipe": "quick", "scalp": "quick", "swing": "swing", "copy": "swing"}
+DEFAULT_PLAY = {"snipe": "quick", "scalp": "quick", "swing": "swing", "copy": "swing", "wave2": "swing"}
 BIG = 0.25                                   # what the optimist calls a run: +25% after fees
 # shrunk priors: start near calibrated (a saturated skeptic says "no" to everything, which is useless, not careful)
 SKEPTIC_PRIORS = {k: round(0.35 * (0.6 * RUG_PRIORS.get(k, 0) + 0.6 * DN_PRIORS.get(k, 0) - 0.4 * UP_PRIORS.get(k, 0) - 0.3 * PRIORS.get(k, 0)), 3)
                   for k in KEYS}
 OPTIMIST_PRIORS = {k: round(0.35 * (0.7 * PRIORS.get(k, 0) + 0.6 * UP_PRIORS.get(k, 0) - 0.3 * RUG_PRIORS.get(k, 0)), 3) for k in KEYS}
-FAST = ("snipe", "scalp")                    # fast styles never take the 25-minute moon playbook
+FAST = ("snipe", "scalp", "wave2")                    # fast styles never take the 25-minute moon playbook
 MAX_REAL, MAX_GHOST, GHOST_RATE = 400, 400, 0.15
 ETA = 0.4                                    # Hedge learning rate
 LR = 0.05
@@ -84,6 +84,7 @@ class Council:
         self.stats = {"proposed": 0, "approved": 0, "rejected": 0, "vetoed": 0, "ghosts_done": 0, "saved_sol": 0.0, "missed_sol": 0.0,
                       "skeptic_exits": 0, "optimist_holds": 0, "regime_changes": 0}
         self.rng = random.Random()
+        self.plug_margin = 0.0                                    # learned: how much more sure the skeptic must be to pull the plug
         self.last_step = 0.0
         self.last_decision_ts = 0.0
 
@@ -91,7 +92,8 @@ class Council:
     def state(self) -> dict[str, Any]:
         return {"skeptic": self.skeptic.state(), "optimist": self.optimist.state(), "cred": self.cred, "bar": round(self.bar, 4),
                 "base": [round(self.base_lose, 4), round(self.base_big, 4)], "plays": self.plays, "stats": self.stats,
-                "regime": self.regime, "recent": list(self.recent), "win_rate": round(self.win_rate, 4)}
+                "regime": self.regime, "recent": list(self.recent), "win_rate": round(self.win_rate, 4),
+                "plug_margin": round(self.plug_margin, 4)}
 
     def restore(self, s: dict[str, Any] | None) -> None:
         if not s:
@@ -107,6 +109,7 @@ class Council:
         self.stats.update(s.get("stats") or {})
         self.regime = s.get("regime") or "normal"
         self.win_rate = float(s.get("win_rate", self.win_rate))
+        self.plug_margin = float(s.get("plug_margin", 0.0))
         self.recent.extend(s.get("recent") or [])
 
     # ---------------- the vote ----------------
@@ -183,11 +186,11 @@ class Council:
         if not f or age < 8:
             return None
         p_lose, p_big = self.skeptic.p(f), self.optimist.p(f)
-        sell = self.cred["skeptic"] * (1.0 if p_lose >= max(0.8, self.base_lose + 0.2) else 0.0)
+        sell = self.cred["skeptic"] * (1.0 if p_lose >= min(0.97, max(0.8, self.base_lose + 0.2) + self.plug_margin) else 0.0)
         hold = self.cred["optimist"] * (1.0 if (p_big >= 2 * self.base_big or self.b.surging(f)) else 0.0)
         if sell - hold >= 0.2:
             self.stats["skeptic_exits"] += 1
-            p["_exit_kind"] = "model"
+            p["_exit_kind"] = "skeptic"
             return (1.0 if x < 1.0 else 0.5), (f"skeptic pulled the plug ({p_lose * 100:.0f}% it loses: {self.why(self.skeptic, f)})"
                                                  + (" — banked half" if x >= 1.0 else ""))
         if hold > 0 and sell > 0:
@@ -325,6 +328,16 @@ class Council:
                 self.regime = new
         return notes
 
+    def plug_lesson(self, ran: bool, dumped: bool, symbol: str, after: float) -> str | None:
+        """After the skeptic pulls the plug it keeps watching: a coin that ran anyway makes it demand more next time."""
+        if ran:
+            self.plug_margin = min(0.15, self.plug_margin + 0.03)
+            return (f"🛡 The skeptic dumped ${symbol} and it ran {after:.1f}× after — it now needs to be more sure before pulling the "
+                    f"plug (+{self.plug_margin * 100:.0f} pts).")
+        if dumped:
+            self.plug_margin = max(0.0, self.plug_margin - 0.01)
+        return None
+
     def idle(self, now: float, last_buy: float) -> None:
         if last_buy and now - last_buy > 30 and self.bar > 0.48:
             self.bar = max(0.48, self.bar - 0.002)                    # never stalls: an idle council relaxes
@@ -340,4 +353,5 @@ class Council:
                 "skeptic": self.skeptic.stats(), "optimist": self.optimist.stats(), "playbooks": lb,
                 "tracking": {"real": sum(1 for t in self.track.values() if t["real"]), "ghosts": sum(1 for t in self.track.values() if not t["real"])},
                 "stats": self.stats, "debate": list(self.debate)[:25], "exploring": self.explore_left,
-                "recent_avg_pct": round(sum(self.recent) / len(self.recent) * 100, 2) if self.recent else None}
+                "recent_avg_pct": round(sum(self.recent) / len(self.recent) * 100, 2) if self.recent else None,
+                "plug_margin": round(self.plug_margin * 100, 1)}
