@@ -359,7 +359,8 @@ type Brain = {
   bars?: Record<string, number>; idle_s?: number | null;
   verdict?: { state: string; text: string; [k: string]: any };
   nebula?: Nebula;
-  allocator?: { strategies: { strategy: string; trades: number; win_pct: number | null; avg_pct: number; sol: number; benched: boolean; bench_s: number; size_mult: number }[]; notes: string[] };
+  allocator?: { strategies: { strategy: string; trades: number; win_pct: number | null; avg_pct: number; sol: number; benched: boolean; bench_s: number; size_mult: number; avg_win_pct?: number; avg_loss_pct?: number }[]; notes: string[] };
+  breaker?: { active: boolean; why: string | null; resume_s: number; trips: number };
   heat?: number;
   report?: { trades: number; by_strategy: RepRow[]; by_exit: RepRow[]; by_hold: RepRow[] };
   last_error?: { ts: number; error: string; where?: string } | null; engine_error?: string | null; refills?: number;
@@ -649,6 +650,7 @@ type Nebula = {
   skeptic: { trained: number; accuracy: number | null }; optimist: { trained: number; accuracy: number | null };
   playbooks: Record<string, { play: string; n: number; avg_pct: number }[]>; tracking: { real: number; ghosts: number };
   stats: Record<string, number>; recent_avg_pct: number | null;
+  exit_audit?: { rule: string; n: number; vs_playbook_pct: number; muted: boolean }[]; audit_notes?: string[];
   debate: { ts: number; symbol: string; mint: string; go: boolean; veto: boolean; score: number; bar: number; votes: Vote; play: string; style: string;
     size_mult: number; why: { skeptic: string; optimist: string } }[];
 };
@@ -752,6 +754,7 @@ function WorkingPanel({ b }: { b: Brain }) {
       <div className="flex flex-wrap items-center gap-3 border-b border-white/[0.06] px-4 py-2.5">
         <span className="font-extrabold tracking-wide text-flash">⚖️ ALLOCATOR · what's working</span>
         <span className="text-[12px] text-white/55">every strategy books its real results after fees — losers get benched, winners get more size</span>
+        {b.breaker?.active && <span className="rounded-full bg-down/20 px-2 py-0.5 text-[11px] font-bold text-down">⛔ circuit breaker: {b.breaker.why} · back in {Math.ceil(b.breaker.resume_s / 60)}m</span>}
         {b.heat != null && <span className={`num ml-auto text-[12px] font-bold ${b.heat >= 1.05 ? 'text-up' : b.heat <= 0.9 ? 'text-down' : 'text-white/70'}`}>market heat ×{b.heat.toFixed(2)}</span>}
       </div>
       <div className="grid gap-px bg-white/[0.05] lg:grid-cols-[1.1fr_1fr_1fr]">
@@ -764,12 +767,26 @@ function WorkingPanel({ b }: { b: Brain }) {
                 <td className="text-white/45">{x.trades}</td>
                 <td className="text-white/60">{x.win_pct ?? '—'}%</td>
                 <td className={x.avg_pct >= 0 ? 'text-up' : 'text-down'}>{x.avg_pct > 0 ? '+' : ''}{x.avg_pct}%</td>
+                <td className="text-white/40" title="average win / average loss — what the expected-value gate uses">{x.avg_win_pct != null ? `+${x.avg_win_pct}/−${x.avg_loss_pct}` : ''}</td>
                 <td className="text-right">{x.benched ? <span className="text-down">benched {Math.ceil(x.bench_s / 60)}m</span> : <span className="text-white/60">×{x.size_mult}</span>}</td>
               </tr>
             ))}
             {!a?.strategies?.length && <tr><td className="text-white/40">fills in as trades close</td></tr>}
           </tbody></table>
           {!!a?.notes?.length && <ul className="mt-2 space-y-0.5 text-[11px] text-white/55">{a.notes.slice(0, 3).map((n, i) => <li key={i}>{n}</li>)}</ul>}
+          {!!b.nebula?.exit_audit?.length && (
+            <div className="mt-3">
+              <div className="eyebrow mb-1">Exit auditor · each exit rule vs just following the playbook</div>
+              <div className="flex flex-wrap gap-1.5">
+                {b.nebula.exit_audit.map((r) => (
+                  <span key={r.rule} className={`num rounded-full px-2 py-0.5 text-[11px] ${r.muted ? 'bg-down/20 text-down' : 'bg-white/[0.05] text-white/65'}`}
+                    title={`${r.n.toFixed(0)} exits audited`}>
+                    {r.muted ? '🔇 ' : ''}{r.rule} <b className={r.vs_playbook_pct >= 0 ? 'text-up' : 'text-down'}>{r.vs_playbook_pct > 0 ? '+' : ''}{r.vs_playbook_pct}%</b>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <div className="bg-[var(--color-bg)]/70 p-3"><RepTable title={`By exit reason · last ${r?.trades ?? 0} trades`} rows={r?.by_exit || []} /></div>
         <div className="bg-[var(--color-bg)]/70 p-3"><RepTable title="By hold time" rows={r?.by_hold || []} /></div>

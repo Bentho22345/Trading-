@@ -56,3 +56,49 @@ def test_second_wave_buys_the_coin_that_survived_the_flush_and_the_report_reads_
         assert b.alloc.s["wave2"]["trades"] == 1
         await db.close()
     asyncio.run(run())
+
+
+def test_expected_value_gate_and_calibration():
+    from radar.council import Calibrator
+    a = Allocator()
+    for i in range(20):                                                  # wins small, losses big: negative expectancy
+        a.book("scalp", 0.04 if i % 2 else -0.12, 0.0)
+    ev, evidence = a.ev("scalp", 0.5)
+    assert evidence >= 15 and ev < 0
+    for i in range(20):
+        a.book("wave2", 0.20 if i % 2 else -0.06, 0.0)
+    assert a.ev("wave2", 0.5)[0] > 0
+    c = Calibrator()
+    assert abs(c(0.9) - 0.9) < 1e-9                                       # no data: trust the raw odds
+    for _ in range(40):
+        c.add(0.9, lost=False)                                           # the skeptic says 90% but they keep winning
+    assert c(0.9) < 0.3
+
+
+def test_the_ev_gate_breakers_and_exposure_cap_in_the_executor(tmp_path):
+    async def run():
+        now = time.time()
+        coins = [__import__("tests.test_autopilot", fromlist=["_newborn"])._newborn(f"EV{i:02d}mint" + str(i % 10) * 30, now) for i in range(6)]
+        ap, db = await make(tmp_path, coins)
+        b = ap.brain
+        await b.set_aggression("surreal")
+        await ap.set_mode("auto")
+        for s in ("snipe:early", "snipe:mid", "scalp", "wave2", "swing", "copy"):
+            for i in range(20):
+                b.alloc._payoff(b.alloc._get(s), 0.02 if i % 2 else -0.2, 1.0)   # every strategy: tiny wins, big losses
+        await b.tick("auto")
+        assert not [p for p in ap.open.values() if p["mode"] == "auto"] and b.skips.get("negative expected value")
+        b.alloc = Allocator()                                            # fresh record: it trades again…
+        b.last_eq, b.day_start = 7.0, (int(time.time() // 86400), 10.0)  # …unless the day is already −30%
+        await b.tick("auto")
+        assert not [p for p in ap.open.values() if p["mode"] == "auto"] and any("circuit breaker" in k for k in b.skips)
+        assert (await b.snapshot())["breaker"]["active"]
+        b.brk_until, b.last_eq = 0.0, 10.0
+        b.day_start = (int(time.time() // 86400), 10.0)
+        await b.tick("auto")
+        held = [p for p in ap.open.values() if p["mode"] == "auto"]
+        assert held and "EV" in held[0]["detail"]
+        deployed = sum(p["sol_in"] for p in held)
+        assert deployed <= 0.6 * 10 + 0.5                                # never more than ~60% of the pot at once
+        await db.close()
+    asyncio.run(run())

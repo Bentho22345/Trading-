@@ -168,3 +168,21 @@ def test_the_brains_judge_a_top_wallet_influx_and_say_why(tmp_path):
         assert any(k.startswith(f"g:{late.mint}") for k in b.council.track)  # a passed influx is always followed as a ghost
         await db.close()
     asyncio.run(run())
+
+
+def test_exit_auditor_mutes_rules_that_lose_to_the_playbook(tmp_path):
+    async def run():
+        ap, db = await make(tmp_path, [])
+        b = ap.brain
+        c = b.council
+        p = {"opened": time.time() - 60}
+        assert b.exit_on(p, "quiet") and p["_exit_rule"] == "quiet"
+        for _ in range(14):
+            c.audit("quiet", -0.05)                                        # quitting on a quiet tape kept costing 5% vs the playbook
+            c.audit("momentum", +0.03)                                     # banking on a momentum flip kept beating it
+        assert c.exit_muted("quiet") and not c.exit_muted("momentum")
+        assert not b.exit_on({}, "quiet") and any("muted 'quiet'" in n for n in c.audit_notes)
+        snap = c.snapshot()
+        assert snap["exit_audit"][0]["rule"] == "quiet" and snap["exit_audit"][0]["muted"]
+        await db.close()
+    asyncio.run(run())

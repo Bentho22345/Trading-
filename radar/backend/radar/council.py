@@ -64,6 +64,27 @@ def costs(size: float, vsol: float | None, prio: float = 0.0005) -> tuple[float,
     return 0.015 + impact + fixed, 0.015 + impact + fixed
 
 
+class Calibrator:
+    """Maps the skeptic's raw 'it loses' odds onto how often trades at those odds ACTUALLY lost (10 bins, decayed).
+    The expected-value gate runs on these honest numbers, not on the model's self-belief."""
+
+    def __init__(self) -> None:
+        self.bins = [[0.0, 0.0] for _ in range(10)]          # [weight, losses]
+
+    def _i(self, p: float) -> int:
+        return min(9, max(0, int(p * 10)))
+
+    def add(self, p: float, lost: bool, w: float = 1.0) -> None:
+        b = self.bins[self._i(p)]
+        b[0] = b[0] * 0.995 + w
+        b[1] = b[1] * 0.995 + (w if lost else 0.0)
+
+    def __call__(self, p: float) -> float:
+        n, l = self.bins[self._i(p)]
+        k = 6.0                                              # sparse bins lean on the raw odds
+        return (l + k * p) / (n + k)
+
+
 class Council:
     def __init__(self, brain: Any) -> None:
         self.b = brain
@@ -75,6 +96,7 @@ class Council:
         self.plays: dict[str, dict[str, list[float]]] = {}       # style -> playbook -> [n, mean, M2] (decayed)
         self.track: dict[str, dict[str, Any]] = {}               # counterfactual trackers: real positions + ghosts
         self.debate: deque[dict[str, Any]] = deque(maxlen=60)
+        self.audit_notes: deque[str] = deque(maxlen=10)
         self.recent: deque[float] = deque(maxlen=25)              # last real trades' net results
         self.regime = "normal"
         self.regime_trades = 0                                    # trades since the last regime change (hysteresis)
@@ -85,6 +107,8 @@ class Council:
                       "skeptic_exits": 0, "optimist_holds": 0, "regime_changes": 0}
         self.rng = random.Random()
         self.plug_margin = 0.0                                    # learned: how much more sure the skeptic must be to pull the plug
+        self.cal = Calibrator()
+        self.exit_q: dict[str, list[float]] = {}                  # exit rule -> [weight, mean(real − playbook), muted_until]
         self.last_step = 0.0
         self.last_decision_ts = 0.0
 
@@ -93,7 +117,8 @@ class Council:
         return {"skeptic": self.skeptic.state(), "optimist": self.optimist.state(), "cred": self.cred, "bar": round(self.bar, 4),
                 "base": [round(self.base_lose, 4), round(self.base_big, 4)], "plays": self.plays, "stats": self.stats,
                 "regime": self.regime, "recent": list(self.recent), "win_rate": round(self.win_rate, 4),
-                "plug_margin": round(self.plug_margin, 4)}
+                "plug_margin": round(self.plug_margin, 4), "cal": self.cal.bins,
+                "exit_q": self.exit_q}
 
     def restore(self, s: dict[str, Any] | None) -> None:
         if not s:
@@ -110,6 +135,9 @@ class Council:
         self.regime = s.get("regime") or "normal"
         self.win_rate = float(s.get("win_rate", self.win_rate))
         self.plug_margin = float(s.get("plug_margin", 0.0))
+        self.exit_q = {k: list(v) for k, v in (s.get("exit_q") or {}).items()}
+        if s.get("cal") and len(s["cal"]) == 10:
+            self.cal.bins = [list(b) for b in s["cal"]]
         self.recent.extend(s.get("recent") or [])
 
     # ---------------- the vote ----------------
@@ -209,7 +237,7 @@ class Council:
         style = d.get("style")
         self.track[key] = {"mint": mint, "t0": time.time(), "entry": entry_mcap, "cb": cb, "cs": cs, "real": real, "sol": sol,
                            "vec": array("f", ((f or {}).get(k, 0.0) for k in KEYS)), "votes": d.get("votes"), "play": d.get("play"),
-                           "style": d.get("style"), "go": d.get("go"), "veto": d.get("veto"), "last": 1.0,
+                           "style": d.get("style"), "strat": d.get("strat"), "go": d.get("go"), "veto": d.get("veto"), "last": 1.0,
                            "st": {n: [False, 1.0, None] for n in ORDER if not (style in FAST and n == "moon")}}
 
     def ghost(self, mint: str, f: dict[str, float], L: Any, d: dict[str, Any], size: float) -> None:
@@ -264,11 +292,17 @@ class Council:
             s[2] = s[2] * 0.995 + w * d * (net - s[1])
         f = dict(zip(KEYS, t["vec"]))
         best = max(nets.values())
+        if t["real"] and t.get("rule") and t.get("real_net") is not None:
+            self.audit(t["rule"], t["real_net"] - nets.get(t["play"] or "quick", best))
         self.optimist.step(f, 1.0 if best >= BIG else 0.0, LR * w)
         self.base_big = 0.98 * self.base_big + 0.02 * (1.0 if best >= BIG else 0.0)
         if not t["real"]:
             net = nets.get(t["play"] or "quick", best)
             lose = 1.0 if net < 0 else 0.0
+            if t.get("votes"):
+                self.cal.add(t["votes"].get("p_lose", 0.5), net < 0, 0.5)
+            if t.get("strat"):
+                self.b.alloc.book_ghost(t["strat"], net)
             self.skeptic.step(f, lose, LR * 0.5)
             self.base_lose = 0.99 * self.base_lose + 0.01 * lose
             self.hedge(t["votes"], net, ETA / 2)
@@ -301,6 +335,8 @@ class Council:
         notes = []
         net = mult - 1
         cv = p.get("council") or {}
+        if (cv.get("votes") or {}).get("p_lose") is not None:
+            self.cal.add(cv["votes"]["p_lose"], net < 0)
         if f:
             lose = 1.0 if net < 0 else 0.0
             self.skeptic.step(f, lose, LR)
@@ -330,6 +366,21 @@ class Council:
                 self.regime = new
         return notes
 
+    def audit(self, rule: str, diff: float) -> None:
+        """Book how much a discretionary exit beat (or lost to) just following the playbook; mute rules that keep losing."""
+        q = self.exit_q.setdefault(rule, [0.0, 0.0, 0.0])
+        q[0] = q[0] * 0.98 + 1
+        q[1] += (diff - q[1]) / q[0]
+        if q[0] >= 12 and q[1] < -0.01 and q[2] < time.time():
+            q[2] = time.time() + 1800
+            q[0] *= 0.5                                               # when it's retested, the old verdict counts for less
+            self.audit_notes.appendleft(f"🔇 Exit auditor muted '{rule}' for 30 min — it did {q[1] * 100:+.1f}% vs just following "
+                                        f"the playbook. Retesting after.")
+
+    def exit_muted(self, rule: str) -> bool:
+        q = self.exit_q.get(rule)
+        return bool(q and q[2] > time.time())
+
     def plug_lesson(self, ran: bool, dumped: bool, symbol: str, after: float) -> str | None:
         """After the skeptic pulls the plug it keeps watching: a coin that ran anyway makes it demand more next time."""
         if ran:
@@ -356,4 +407,7 @@ class Council:
                 "tracking": {"real": sum(1 for t in self.track.values() if t["real"]), "ghosts": sum(1 for t in self.track.values() if not t["real"])},
                 "stats": self.stats, "debate": list(self.debate)[:25], "exploring": self.explore_left,
                 "recent_avg_pct": round(sum(self.recent) / len(self.recent) * 100, 2) if self.recent else None,
-                "plug_margin": round(self.plug_margin * 100, 1)}
+                "plug_margin": round(self.plug_margin * 100, 1),
+                "exit_audit": sorted(({"rule": k, "n": round(v[0], 1), "vs_playbook_pct": round(v[1] * 100, 2), "muted": v[2] > time.time()}
+                                      for k, v in self.exit_q.items()), key=lambda r: r["vs_playbook_pct"]),
+                "audit_notes": list(self.audit_notes)[:5]}

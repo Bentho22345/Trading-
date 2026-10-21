@@ -331,7 +331,11 @@ class Brain:
         self.skips_prev: dict[str, int] = {}
         self.skips_ts = 0.0
         self.bars: dict[str, float] = {}
-        self.heat = [0.0, 0.0]                              # [fast, slow] EMA of "this coin went +12% first" (the market brain)
+        self.heat = [0.0, 0.0]
+        self.brk_until, self.brk_why, self.breaker_trips = 0.0, "", 0
+        self.day_start: tuple[int, float] = (0, 0.0)
+        self.last_eq = 0.0
+        self.pnl_log: deque[tuple[float, float]] = deque(maxlen=2000)   # (ts, realized SOL) for the hourly breaker                              # [fast, slow] EMA of "this coin went +12% first" (the market brain)
         self.pipe: dict[str, Any] = {}
         self.last_tick_ts = time.time()
         self.grad_frac = 0.5                                # learned: how much it sells into a graduation
@@ -1111,7 +1115,7 @@ class Brain:
                 continue
             explore = False
             if c["value"] < self.threshold:
-                if not bought and c["value"] >= self.threshold - 6 and self.rng.random() < 0.12 * mf:
+                if False:                                    # explore buys removed: ghost trades teach the same thing for free
                     explore = True
                 else:
                     if not bought and now - self.last_skip_note > 25:
@@ -1164,24 +1168,7 @@ class Brain:
                 continue
             bought += 1
             bal = await self.balance(mode)
-        # 4) drought breaker (surreal): nothing bought for 15 s → take the best live coin that still passes the safety checks
-        if agg.get("snipe") and not bought and now - self.last_buy_ts > 15 and bal >= 0.06:
-            for c in sorted(scored, key=lambda c: -(c["scalp"] + (0.3 if c["age_s"] < 60 else 0) + c["value"] / 200)):
-                hard = c["hard"]
-                if hard and hard != "too few buyers":
-                    continue
-                if (c["r"].get("buyers") or 0) < 2 or self.can_enter(c["mint"], mode, "scalp") or (c["deployer"] and c["deployer"] in self.bad_devs):
-                    continue
-                L = launches.get(c["mint"])
-                if L is None or self.veto(L, now, c["p_rug"] / 100):
-                    continue
-                ex = self.fast_exits(sc, False)
-                if not await self._council_buy("scalp", c["mint"], round(max(0.02, bal * sc["size"] * 0.7), 4), mode, "scalp",
-                                               f"drought breaker: best live coin (scalp {c['scalp'] * 100:.0f}, value {c['value']:.0f})",
-                                               c["r"], c["f"], c["value"], c["leaders"], 0.5, L, exits=ex, strat="drought"):
-                    continue
-                self.skip("drought breaker fired")
-                break
+        # (the drought breaker was removed: forcing a trade every 15 s just to stay busy bought coins with no edge)
 
     # ---------------- scalper: immediate in-and-out trades ----------------
     def scalp_cfg(self) -> dict[str, float] | None:
@@ -1325,6 +1312,26 @@ class Brain:
         tok = await self.ap.tracker.token_summary(mint)
         return bool(tok and tok.get("price_usd") and (tok.get("liquidity_usd") or 0) >= 10_000)
 
+    def breaker(self) -> str | None:
+        """Circuit breakers: a bad stretch can't drain the pot. Daily −15% → 30-min pause; −8% in the last hour → 10-min pause."""
+        now = time.time()
+        if now < self.brk_until:
+            return self.brk_why
+        day = int(now // 86400)
+        eq = self.last_eq or 0.0
+        if eq and self.day_start[0] != day:
+            self.day_start = (day, eq)
+        start = self.day_start[1]
+        hour = [x for ts, x in self.pnl_log if ts > now - 3600]
+        if start and eq and eq < start * 0.85:
+            self.brk_until, self.brk_why = now + 1800, f"down {(1 - eq / start) * 100:.0f}% today — 30-min pause"
+        elif eq and sum(hour) < -0.08 * eq:
+            self.brk_until, self.brk_why = now + 600, f"lost ◎{-sum(hour):.2f} in the last hour — 10-min pause"
+        else:
+            return None
+        self.breaker_trips += 1
+        return self.brk_why
+
     async def _council_buy(self, style: str, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
                            f: dict[str, float] | None, value: float | None, leaders: list[str], exec_conf: float, L: Any,
                            exits: dict[str, Any] | None = None, strat: str | None = None) -> bool:
@@ -1335,17 +1342,37 @@ class Brain:
         if not ok:
             self.skip(f"allocator: {strat} benched")
             return False
+        brk = self.breaker()
+        if brk:
+            self.skip(f"circuit breaker: {brk}")
+            return False
         d = self.council.decide(style, f or {}, exec_conf, (r or {}).get("symbol") or mint[:6], mint)
+        d["strat"] = strat
         if not d["go"]:
             self.skip("council: skeptic veto" if d["veto"] else "council said no")
             self.council.ghost(mint, f or {}, L, d, size)
+            return False
+        # the expected-value gate: honest (calibrated) odds × this strategy's real average win / loss, after fees
+        p_lose = self.council.cal(d["votes"]["p_lose"])
+        ev, evidence = self.alloc.ev(strat, p_lose)
+        d["ev"] = round(ev, 4)
+        if evidence >= 15 and ev <= 0:
+            self.skip("negative expected value")
+            self.council.ghost(mint, f or {}, L, {**d, "go": False}, size)
+            return False
+        amult *= _clip(1 + 4 * ev, 0.5, 1.6) if evidence >= 15 else 1.0      # lean into the best positive-EV trades
+        exposure = sum(p["sol_in"] - p["sol_out"] for p in self.ap.open.values() if p["mode"] == mode and p["tokens_left"] > 0)
+        bal = await self.balance(mode)
+        if exposure + size > 0.6 * (bal + exposure):
+            self.skip("exposure cap (60% of the pot deployed)")
             return False
         ex = dict(d["exits"])
         if exits and exits.get("power"):                          # a flood of volume / holders: keep the wider leash of the two
             ex.update(tp=max(ex["tp"], exits["tp"]), stop=max(ex["stop"], exits["stop"]), max_s=max(ex["max_s"], exits["max_s"]), power=True)
         heat = self.heat_mult()
         p = await self._buy(mint, round(max(0.02, size * d["size_mult"] * amult * heat), 4), mode, trig,
-                            f"{detail} · {d['summary']}{' · probe' if why == 'probe' else ''}", r, f, value, leaders, exits=ex, council=d)
+                            f"{detail} · {d['summary']} · EV {ev * 100:+.1f}%{' · probe' if why == 'probe' else ''}", r, f, value, leaders,
+                            exits=ex, council=d)
         if p is not None:
             p["strat"], p["probe"] = strat, why == "probe"
             await self.ap.db.exec("UPDATE auto_positions SET features_json=json_set(COALESCE(features_json,'{}'), '$.strat', ?, '$.probe', ?) WHERE id=?",
@@ -1585,6 +1612,7 @@ class Brain:
 
     def exit_for(self, p: dict[str, Any], r: dict[str, Any] | None, x: float, peak_x: float) -> tuple[float, str] | None:
         """One decision per tick, so as a coin moves you see it scale out, cut, and recycle the money into the next trade."""
+        p.pop("_exit_rule", None)                                     # the auditor books only the rule that actually fired
         agg = AGGRESSION[self.aggression]
         now = time.time()
         age = now - p["opened"]
@@ -1612,8 +1640,9 @@ class Brain:
             if x <= peak_x * (1 - trail):
                 return self._exit(p, 1.0, f"ride trailing stop ({peak_x:.1f}× peak, {trail * 100:.0f}% trail)", "trail")
             return None
-        cv = self.council.exit_vote(p, f, x, age)                    # the skeptic can pull the plug; the optimist can hold
-        if cv:
+        cv = self.council.exit_vote(p, f, x, age) if self.exit_on(p, "skeptic", check_only=True) else None
+        if cv:                                                       # the skeptic can pull the plug; the optimist can hold
+            p["_exit_rule"] = "skeptic"
             return cv
         if f and x >= 1.10 and self.surging(f):          # bank into a surge only once it covers the fees (+3% was ~break-even)
             p["ride"] = True
@@ -1673,18 +1702,18 @@ class Brain:
             return self._exit(p, 1.0, "sellers took over", "early")
         # the reason it bought is gone: its own read of the coin collapsed and it isn't up
         ev = p.get("entry_value")
-        if hit and ev and age > 60 and x < 1.1 and hit["v"] < max(4.0, ev * 0.4):
+        if hit and ev and age > 60 and x < 1.1 and hit["v"] < max(4.0, ev * 0.4) and self.exit_on(p, "thesis"):
             return self._exit(p, 1.0, f"thesis broken (value {ev:.0f} → {hit['v']:.0f})", "early")
         if self.smart_selling(p["mint"]) >= 2 and x < 1.3:
             return self._exit(p, 1.0, "top wallets are leaving", "smart")
         tape = getattr(L, "trades", None) if L is not None else None
-        if tape and age > 90 and x < 1.2 and now - tape[-1][0] > 120 * self.patience:
+        if tape and age > 90 and x < 1.2 and now - tape[-1][0] > 120 * self.patience and self.exit_on(p, "dried"):
             return self._exit(p, 1.0, f"volume dried up (no trades for {now - tape[-1][0]:.0f}s)", "early")
         stall = agg["stall_s"] * self.patience
         last_high = p.setdefault("_high_ts", p["opened"])
         if x > p.get("_best_x", 1.0) * 1.02:                               # a real new high (+2%), not just sitting flat
             p["_best_x"], p["_high_ts"] = x, now
-        elif now - last_high > stall and x < 1.15 and age > stall:
+        elif now - last_high > stall and x < 1.15 and age > stall and self.exit_on(p, "stalled"):
             return self._exit(p, 1.0, f"stalled (no new high in {stall / 60:.0f} min)", "early")
         tmax = (float(pb["max_s"]) if pb else agg["time_s"]) * self.patience
         if age > tmax and x < 1.3:
@@ -1707,17 +1736,26 @@ class Brain:
                 return None
             return self._exit(p, 1.0, f"{name} take-profit +{(x - 1) * 100:.0f}%", "scalp")
         flipped = raw is not None and (raw.get("net_30s", 0) < 0 or f.get("mom_30s", 0) < 0)
-        if x >= 1.07 and flipped:                          # after the ~2% it costs to sell, +4% was ~nothing
+        if x >= 1.07 and flipped and self.exit_on(p, "momentum"):   # after the ~2% it costs to sell, +4% was ~nothing
             return self._exit(p, 1.0, f"scalp: momentum flipped — banked +{(x - 1) * 100:.0f}%", "scalp")
-        if hit and self.dn_hot(hit["dn"]):
+        if hit and self.dn_hot(hit["dn"]) and self.exit_on(p, "dumpodds"):
             return self._exit(p, 1.0, f"scalp: dump odds {hit['dn'] * 100:.0f}% — out at {x:.2f}×", "scalp")
-        if raw and raw.get("quiet_s", 0) > 25 and x < 1.03:
+        if raw and raw.get("quiet_s", 0) > 25 and x < 1.03 and self.exit_on(p, "quiet"):
             return self._exit(p, 1.0, "scalp: the tape went quiet", "scalp")
-        if age > sc["max_s"] * 0.5 and x < 1.0 and f.get("mom_30s", 0) <= 0:
+        if age > sc["max_s"] * 0.5 and x < 1.0 and f.get("mom_30s", 0) <= 0 and self.exit_on(p, "notworking"):
             return self._exit(p, 1.0, f"scalp not working ({x:.2f}× after {age:.0f}s)", "scalp")
         if age > sc["max_s"]:
             return self._exit(p, 1.0, f"scalp time's up ({x:.2f}× after {age:.0f}s)", "scalp")
         return None
+
+    def exit_on(self, p: dict[str, Any], rule: str, check_only: bool = False) -> bool:
+        """The exit auditor's switch: a discretionary exit rule that keeps doing WORSE than simply following the trade's
+        playbook is muted (30 min, then retested). Safety exits (stops, rug signals, playbook targets) are never muted."""
+        if self.council.exit_muted(rule):
+            return False
+        if not check_only:
+            p["_exit_rule"] = rule
+        return True
 
     @staticmethod
     def _exit(p: dict[str, Any], frac: float, reason: str, kind: str) -> tuple[float, str]:
@@ -1823,6 +1861,10 @@ class Brain:
         reason = p.get("exit_reason") or ""
         y = 1.0 if mult >= 1.15 else 0.0
         council_notes = self.council.on_close(p, mult, f if isinstance(f, dict) else None)
+        self.pnl_log.append((time.time(), p["sol_out"] - p["sol_in"]))
+        tr = self.council.track.get(f"p:{p['id']}")
+        if tr is not None:                                           # the auditor compares this exit to the playbook's
+            tr["real_net"], tr["rule"] = mult - 1, p.get("_exit_rule")
         akey = p.get("strat") or ("snipe:mid" if p.get("style") == "snipe" else p.get("style") or "swing")
         am = self.alloc.book(akey, mult - 1, p["sol_out"] - p["sol_in"], probe=bool(p.get("probe")))
         if am:
@@ -1975,6 +2017,7 @@ class Brain:
         bal = await self.ap.demo_balance("auto")
         held = sum(p["tokens_left"] * p["last_price_sol"] for p in self.ap.open.values() if p["mode"] == "auto")
         eq = round(bal + held, 6)
+        self.last_eq = eq
         self.peak_equity = max(self.peak_equity, eq)
         dd = 1 - eq / self.peak_equity if self.peak_equity else 0.0
         if dd >= 0.3 and self.drawdown < 0.3:
@@ -2122,6 +2165,8 @@ class Brain:
                              "recent_pct": round(sum(self.scalp_hist) / len(self.scalp_hist) * 100, 2) if self.scalp_hist else None}),
                 "verdict": self._safe_verdict(),
                 "nebula": self.council.snapshot(), "allocator": self.alloc.snapshot(), "heat": self.heat_mult(), "report": await self.report(),
+                "breaker": {"active": time.time() < self.brk_until, "why": self.brk_why if time.time() < self.brk_until else None,
+                            "resume_s": max(0, round(self.brk_until - time.time())), "trips": self.breaker_trips},
                 "bars": {k: round(v * 100) for k, v in self.bars.items()}, "idle_s": round(now - self.last_buy_ts) if self.last_buy_ts else None,
                 "snipes": {**self.snipes, "on": bool(AGGRESSION[self.aggression].get("snipe")),
                            "per_hour": sum(1 for t in self.fast_ts if t > now - 3600),

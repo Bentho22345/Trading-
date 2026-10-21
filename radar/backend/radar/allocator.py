@@ -37,8 +37,27 @@ class Allocator:
         self.probe_tick = 0
 
     def _get(self, key: str) -> dict[str, Any]:
-        return self.s.setdefault(key, {"n": 0.0, "mean": 0.0, "m2": 0.0, "trades": 0, "wins": 0, "sol": 0.0, "bench_until": 0.0,
-                                       "benched_times": 0, "last": deque(maxlen=12)})
+        st = self.s.setdefault(key, {"n": 0.0, "mean": 0.0, "m2": 0.0, "trades": 0, "wins": 0, "sol": 0.0, "bench_until": 0.0,
+                                     "benched_times": 0, "last": deque(maxlen=12)})
+        st.setdefault("aw", [0.0, 0.0])                   # decayed [weight, mean] of winning results — the payoff the EV gate uses
+        st.setdefault("al", [0.0, 0.0])                   # …and of losing results (as a positive number)
+        return st
+
+    def _payoff(self, st: dict[str, Any], net: float, w: float) -> None:
+        side = st["aw"] if net > 0 else st["al"]
+        side[0] = side[0] * DECAY + w
+        side[1] += w * ((abs(net)) - side[1]) / side[0]
+
+    def payoff(self, key: str) -> tuple[float, float, float]:
+        """(average win, average loss, how much evidence) for strategy `key` — real trades, plus ghosts at half weight."""
+        st = self._get(key)
+        aw, al = st["aw"], st["al"]
+        evidence = aw[0] + al[0]
+        return (aw[1] if aw[0] >= 2 else 0.12), (al[1] if al[0] >= 2 else 0.08), evidence
+
+    def book_ghost(self, key: str, net: float) -> None:
+        """A trade the bot passed on, followed anyway: it only informs the payoff estimate, never the bench."""
+        self._payoff(self._get(key), net, 0.5)
 
     def gate(self, key: str) -> tuple[bool, float, str]:
         """(allowed, size multiplier, why) for a proposal from strategy `key`."""
@@ -65,6 +84,7 @@ class Allocator:
         st["wins"] += int(net > 0)
         st["sol"] = round(st["sol"] + sol_pnl, 6)
         st["last"].append(net)
+        self._payoff(st, net, 1.0)
         now = time.time()
         msg = None
         if st["bench_until"] > now:
@@ -86,6 +106,11 @@ class Allocator:
     def state(self) -> dict[str, Any]:
         return {k: {**{kk: v for kk, v in st.items() if kk != "last"}, "last": list(st["last"])} for k, st in self.s.items()}
 
+    def ev(self, key: str, p_lose: float) -> tuple[float, float]:
+        """Expected net result of the next trade from `key`, given calibrated odds it loses: (ev, evidence)."""
+        aw, al, evidence = self.payoff(key)
+        return (1 - p_lose) * aw - p_lose * al, evidence
+
     def restore(self, s: dict[str, Any] | None) -> None:
         for k, st in (s or {}).items():
             cur = self._get(k)
@@ -99,7 +124,8 @@ class Allocator:
             ok, mult, why = (True, 1.0, "new")
             if st["bench_until"] <= now:
                 ok, mult, why = self.gate(k)
-            rows.append({"strategy": k, "trades": st["trades"], "win_pct": round(st["wins"] / st["trades"] * 100) if st["trades"] else None,
+            aw, al, _ = self.payoff(k)
+            rows.append({"strategy": k, "trades": st["trades"], "avg_win_pct": round(aw * 100, 1), "avg_loss_pct": round(al * 100, 1), "win_pct": round(st["wins"] / st["trades"] * 100) if st["trades"] else None,
                          "avg_pct": round(st["mean"] * 100, 2), "sol": st["sol"], "benched": st["bench_until"] > now,
                          "bench_s": max(0, round(st["bench_until"] - now)), "size_mult": round(mult, 2) if st["bench_until"] <= now else 0.3})
         rows.sort(key=lambda r: -r["avg_pct"])

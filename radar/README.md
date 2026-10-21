@@ -167,6 +167,17 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - **Market brain**: sizes scale with how hot pump.fun is right now (share of coins going +12% first, fast vs slow).
 - **Fee-aware exits**: it no longer "banks" +3–4% moves that are break-even after the ~2% it costs to sell; the
   skeptic learns from its own plug-pulls (a coin that ran after it sold makes it demand more next time).
+- **Expected-value gate**: before any buy, the skeptic's loss odds are calibrated against what actually happened at
+  those odds, then combined with that strategy's real average win and loss: a negative-EV trade is not taken, and
+  the best positive-EV trades get more size.
+- **Circuit breakers**: −15% on the day → 30-minute pause; −8% of the pot in the last hour → 10-minute pause; never
+  more than 60% of the pot deployed at once.
+- **Exit auditor**: every discretionary exit rule (skeptic plug-pull, momentum flip, quiet tape, dump odds, "not
+  working", thesis broken, volume dried up, stalled) is measured against what simply following the trade's
+  playbook would have made (the counterfactual tracker keeps replaying after the real exit). Rules that keep doing
+  worse are muted for 30 min, then retested. Stops and rug exits are never muted.
+- **Stripped**: the drought breaker and random exploration buys (forced trades with no edge — ghost trades now teach
+  the same lessons for free).
 - **Report**: the Autopilot page and Copy diagnostics show the last 300 trades by strategy, exit reason and hold time.
 - **Regimes**: a losing run flips it defensive (higher bar, smaller size, explores new exit playbooks — it changes
   things up); a winning run flips it aggressive; hysteresis stops it flip-flopping. The Autopilot page shows the three
