@@ -364,7 +364,7 @@ def test_brain_v3_hyper_default_and_narrative_signals(tmp_path):
         coin = launch("NARRmint" + "6" * 32, upside=30, risk=30, buyers=20)
         ap, db = await make(tmp_path, [coin])
         b = ap.brain
-        assert b.aggression == "hyper" and AGGRESSION["hyper"]["max_open"] >= 20
+        assert b.aggression == "surreal" and AGGRESSION["surreal"]["max_open"] >= 20 and AGGRESSION["hyper"]["max_open"] >= 20
         plain = b.value(features(coin.result))
         hot = b.value(features(coin.result, 0, {"narr": {"strength": 90, "stage": "ignition", "z": 6, "bot_share": 0}, "x_calls": 2}))
         botted = b.value(features(coin.result, 0, {"narr": {"strength": 90, "stage": "ignition", "z": 6, "bot_share": 0.8}, "x_calls": 0}))
@@ -574,9 +574,9 @@ def test_hyper_keeps_trading_when_the_models_calibrate_low_and_scalps_in_and_out
             b.last_buy_ts = 0
             await b.tick("auto")
             sc = next(p for p in ap.open.values() if p.get("style") == "scalp")
-        assert sc["sol_in"] < 0.2 and "scalp" in sc["detail"]           # tiny size
+        assert sc["sol_in"] < 0.5 and "scalp" in sc["detail"]           # small size (power trades are 2.5× a normal scalp)
         b.cache[coin.mint]["f"] = {"mom_30s": 0.5}                       # moving up, but not a surge (that would be ridden)
-        coin.mcap_sol *= 1.15                                            # +15% on the chart ≈ +12% after fees and impact
+        coin.mcap_sol *= 1.15 if not (sc.get("exits") or {}).get("power") else 1.5   # past its target after fees and impact
         await ap.manage()
         assert sc["status"] == "closed" and "scalp take-profit" in sc["exit_reason"] and sc["sol_out"] > sc["sol_in"]
         assert b.scalps["n"] == 1 and b.scalps["wins"] == 1
@@ -614,5 +614,65 @@ def test_scalps_cut_fast_and_surges_get_ridden_until_they_die_down(tmp_path):
         b.cache[coin.mint]["f"] = {"holder_growth": 0.1, "vol_accel": -0.4, "ape_accel": -0.7}   # it dies down
         ex = b.exit_for(q, coin.result, 1.5, 1.6)
         assert ex[0] == 1.0 and "died down" in ex[1]
+        await db.close()
+    asyncio.run(run())
+
+
+def _newborn(mint, now, buyers=6, age=12):
+    """A launch seconds old: a handful of independent buyers, money flowing in, a small dev buy."""
+    trades = [(now - age + 1 + i * (age - 2) / buyers, "buy", 0.3 + 0.05 * i, 2e6, f"{mint[:3]}b{i}", 30.5 + i * 0.4) for i in range(buyers)]
+    L = _tape_launch(mint, trades, vsol=30.5 + buyers * 0.4, upside=20, risk=15, buyers=buyers)
+    L.created = now - age
+    return L
+
+
+def test_surreal_snipes_new_launches_fast_and_compounds(tmp_path):
+    async def run():
+        now = time.time()
+        coins = [_newborn(f"SN{i:02d}mint" + str(i % 10) * 30, now) for i in range(5)]
+        old = launch("OLDDmint" + "9" * 32, upside=50, risk=10, buyers=40)
+        old.created = now - 900
+        ap, db = await make(tmp_path, coins + [old])
+        b = ap.brain
+        await b.set_aggression("surreal")
+        await ap.set_mode("auto")
+        await b.tick("auto")
+        snipes = [p for p in ap.open.values() if p.get("style") == "snipe"]
+        assert len(snipes) >= 3, b.skips                                  # several brand-new coins sniped in ONE tick
+        assert all(p["mint"] != old.mint or p.get("style") != "snipe" for p in ap.open.values())
+        s0 = snipes[0]
+        assert s0["sol_in"] < 0.8 and "snipe" in s0["detail"] and s0["exits"]["tp"] >= 1.1
+        # take profit fast, then it can't re-snipe the same launch (it becomes a scalp candidate)
+        L = ap.sniper.launches[s0["mint"]]
+        b.cache[L.mint]["f"] = {"mom_30s": 0.4}
+        L.mcap_sol *= 1.5                                                # past even a power trade's wider target
+        await ap.manage()
+        assert s0["status"] == "closed" and "snipe take-profit" in s0["exit_reason"] and s0["sol_out"] > s0["sol_in"]
+        assert b.snipes["n"] == 1 and b.snipes["wins"] == 1 and b.can_enter(L.mint, "auto", "snipe") == "already sniped"
+        # compounding: sizes come off the current balance, so a bigger pot means bigger snipes
+        bal = await ap.demo_balance("auto")
+        await ap._demo_add(bal, "auto")                                  # pot doubled
+        assert b.size(await ap.demo_balance("auto"), 0.5, "auto") > b.size(bal, 0.5, "auto")
+        snap = await b.snapshot()
+        assert snap["snipes"]["on"] and snap["snipes"]["n"] == 1 and "compound" in snap
+        await db.close()
+    asyncio.run(run())
+
+
+def test_power_trades_bet_bigger_with_wider_stops_when_a_coin_floods(tmp_path):
+    async def run():
+        ap, db = await make(tmp_path, [])
+        b = ap.brain
+        flood = {"holder_growth": 0.8, "vol_accel": 0.6, "liq_influx": 0.5, "ape_wave": 1.0}
+        calm = {"holder_growth": 0.1, "vol_accel": 0.0, "ape_wave": 0.2}
+        assert b.power(flood) and not b.power(calm) and not b.power({**flood, "exhaustion": 0.6})
+        sn = __import__("radar.brain", fromlist=["AGGRESSION"]).AGGRESSION["surreal"]["snipe"]
+        wide, tight = b.fast_exits(sn, True), b.fast_exits(sn, False)
+        assert wide["tp"] > tight["tp"] and wide["stop"] > tight["stop"] and wide["max_s"] > tight["max_s"]
+        # a power trade at its target keeps running while it's still flooding; trails out when it turns
+        p = {"style": "snipe", "exits": wide, "tp_done": [], "opened": time.time() - 20, "mint": "X"}
+        assert b.scalp_exit(p, flood, {"net_30s": 2, "quiet_s": 1}, None, 1.4, 20, 1.4) is None
+        ex = b.scalp_exit(p, calm, {"net_30s": 2, "quiet_s": 1}, None, 1.2, 25, 1.45)
+        assert ex and ex[0] == 1.0 and "trailing" in ex[1]
         await db.close()
     asyncio.run(run())

@@ -97,6 +97,7 @@ class Autopilot:
         self.last_buy = 0.0
         self.kick = asyncio.Event()                                      # set on every scoring batch / copy signal: react at once
         self.paused_reason: str | None = None
+        self._pub_ts, self._pub_pending = 0.0, False
         self.stats = {"ticks": 0, "buys": 0, "sells": 0, "errors": 0, "last_error": None}
         from .brain import Brain
         self.brain = Brain(self)                                         # self-driving mode: its own algorithm, demo money
@@ -113,6 +114,7 @@ class Autopilot:
             if isinstance(meta, dict) and "f" in meta:                  # the brain's record: features + why it bought
                 p["features"], p["leaders0"], p["brain_trig"], p["entry_value"] = meta["f"], meta.get("leaders0"), meta.get("trig"), meta.get("v")
                 p["style"] = meta.get("style") or ("scalp" if meta.get("trig") == "scalp" else "copy" if meta.get("trig") == "copy" else "swing")
+                p["exits"] = meta.get("exits")
             else:
                 p["features"] = meta
             p["leaders"] = json.loads(p.get("leaders_json") or "[]")
@@ -221,6 +223,8 @@ class Autopilot:
                 pass
             self.stats["ticks"] += 1
             try:
+                if self._pub_pending:
+                    await self.publish()
                 await self.manage()
                 if self.c["mode"] == "auto":
                     await self.brain.tick("auto")
@@ -371,7 +375,7 @@ class Autopilot:
             if mode == "real":                                          # demo trades pop up on the site; only real money pings your phone
                 await self.alerts.send("buy", f"{tag} Autopilot {mode} BUY ${sym}",
                                        f"{sol_in:.3f} SOL · {trigger}: {detail}", token=mint, dedupe=f"ap:buy:{pid}", ttl=86400)
-            await hub.publish("autopilot", await self.snapshot())
+            await self.publish()
             return p
         except Exception as e:
             await self._order(mode, None, "buy", mint, sym, size, 0, px, None, "failed", str(e)[:200], f"{trigger}: {detail}")
@@ -422,13 +426,22 @@ class Autopilot:
             if p["mode"] == "real":
                 await self.alerts.send("exit", f"{tag} Autopilot {p['mode']} SELL ${p['symbol']} — {reason}", msg,
                                        token=p["mint"], dedupe=f"ap:sell:{p['id']}:{len(p['tp_done'])}:{reason}", ttl=86400)
-            await hub.publish("autopilot", await self.snapshot())
+            await self.publish()
         except Exception as e:  # noqa: BLE001
             self.stats["errors"] += 1
             self.stats["last_error"] = f"sell {p['symbol']}: {e}"[:200]
             await self._order(p["mode"], p["id"], "sell", p["mint"], p["symbol"], 0, 0, None, None, "failed", str(e)[:200], reason)
         finally:
             self.busy.discard(p["mint"])
+
+    async def publish(self, force: bool = False) -> None:
+        """Live snapshot to the browser — at most 3× a second, however fast it's trading (the last change always goes out)."""
+        now = time.time()
+        if not force and now - self._pub_ts < 0.33:
+            self._pub_pending = True
+            return
+        self._pub_ts, self._pub_pending = now, False
+        await hub.publish("autopilot", await self.snapshot())
 
     async def _order(self, mode: str, pid: int | None, side: str, mint: str, sym: str, sol: float, tokens: float, px: float | None,
                      sig: str | None, status: str, error: str | None, reason: str) -> None:

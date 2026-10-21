@@ -174,6 +174,12 @@ Its own algorithm on its own 10 SOL of demo money (and real money only if you pi
   not), with the threshold learned from what coins did after it sold.
 - **Liquidity-aware**: buys are capped at ~4% price impact on the curve; positions too big for the pool get trimmed into
   strength; a learned share is sold into graduation (less if migrations keep running, more if they dump).
+- **✦ Surreal mode (default)**: a sniper-compounder. It snipes brand-new coins in their first ~45 seconds on its own
+  read of the launch window (independent buyers arriving, money flowing in, a sane dev buy, no bundle / cluster /
+  serial dev, timing-model odds), up to 6 buys per tick and 40 open at once; banks quick profits on small caps
+  (snipes ~+15% / −10% / 75 s, scalps ~+10% / −8% / 90 s), re-enters as a scalp, and sizes every trade off the current
+  balance so profit compounds. **Power trades**: when volume, liquidity or holders flood into a coin it bets 2.5×
+  with a wider stop (−15%) and target (+35%), keeps running past the target while the flood lasts, then trails out.
 - **Scalper (hyper / degen)**: many tiny in-and-out trades (~1% of the pot each) on whatever has the best next minute —
   apes arriving, price ticking up, buyers in control, liquidity behind it, and the timing model's UP odds. Take-profit
   ~+12%, stop ~−8%, out on a momentum flip, dump odds, a quiet tape or after ~2.5 min. It re-enters the same coin

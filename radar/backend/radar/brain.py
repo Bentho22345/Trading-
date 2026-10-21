@@ -36,6 +36,11 @@ How it gets discouraged (and confident again)
   Stops           after every stop / trailing exit it keeps watching the coin: shaken out and it ran → stops get more
                   room; it kept dumping → stops tighten. Consistent stop-losses therefore change how it exits.
 
+Surreal mode (v7, default)
+  Snipes          brand-new coins in their first ~45 s on its own read of the launch window; quick profits on small
+                  caps; every size comes off the current balance, so profit compounds. Power trades (volume /
+                  liquidity / holders flooding in) bet 2.5× with a wider stop and target and run while the flood lasts.
+
 Scalper and surges (v7)
   Scalps          hyper / degen also run a scalper: tiny (~1%) immediate trades on the best next minute, banked at
                   ~+12%, cut at ~−8%, out on a momentum flip / dump odds / quiet tape / ~2.5 min; re-enters the same
@@ -155,7 +160,15 @@ AGGRESSION = {   # top-share of what it sees that it will buy, max positions, st
               "cool_s": 90, "burst": 4, "stall_s": 180, "time_s": 900, "ladder": "quick",
               # ~1% of the pot per scalp: small enough to do it all day, big enough that the fixed priority fee isn't the profit
               "scalp": {"bar": 0.42, "size": 0.010, "tp": 1.12, "stop": 0.08, "max_s": 150}},
+    # SURREAL: a sniper-compounder. It snipes brand-new coins in their first seconds on its own read, banks quick profits
+    # on small caps, re-enters, and sizes every trade off the CURRENT balance so profit compounds. Coins with volume,
+    # liquidity or holders flooding in get a bigger bet with a wider stop / target ("power" trades).
+    "surreal": {"top": 0.35, "max_open": 40, "stop": 0.20, "base": 0.015, "floor": 0, "cooldown": 0.1, "copy_rank": 50, "rug_veto": 0.75,
+                "cool_s": 45, "burst": 6, "stall_s": 120, "time_s": 600, "ladder": "quick",
+                "scalp": {"bar": 0.36, "size": 0.012, "tp": 1.10, "stop": 0.08, "max_s": 90},
+                "snipe": {"bar": 0.40, "size": 0.012, "max_age": 45, "tp": 1.15, "stop": 0.10, "max_s": 75}},
 }
+POWER = {"size": 2.5, "tp": 1.35, "stop": 0.15, "time": 3.0, "trail": 0.12}   # a coin with everything pouring in: bet more, give it room
 # scale-out ladders: (multiple, share of what's left to sell, marker). Partial sells as a coin moves = buys AND sells all day.
 LADDERS = {"quick": [(1.25, 0.25, 101), (1.6, 0.30, 102), (2.2, 0.35, 103), (4.0, 0.50, 104)],
            "steady": [(1.4, 0.30, 101), (2.0, 0.35, 102), (3.0, 0.40, 103), (6.0, 0.50, 104)]}
@@ -303,12 +316,14 @@ class Brain:
         self.scalp_hist: deque[float] = deque(maxlen=40)    # last scalps' PnL (fraction)
         self.scalp_streak = 0
         self.scalps = {"n": 0, "wins": 0, "pnl_sol": 0.0}
+        self.snipes = {"n": 0, "wins": 0, "pnl_sol": 0.0, "power": 0}
+        self.fast_ts: deque[float] = deque(maxlen=5000)    # every fast trade (snipe / scalp) close: trades per hour
         self.last_exit: dict[str, tuple[float, int]] = {}  # mint -> (ts, losses in a row on this coin)
         self.skips: dict[str, int] = {}                    # why it didn't trade, this minute
         self.skips_prev: dict[str, int] = {}
         self.skips_ts = 0.0
         self.grad_frac = 0.5                                # learned: how much it sells into a graduation
-        self.aggression = "hyper"
+        self.aggression = "surreal"
         self.narr: dict[str, dict[str, Any]] = {}        # mint -> strongest live narrative it's matched to (social engine)
         self.x_calls: dict[str, int] = {}                # mint -> calls by tracked X accounts (last 2h)
         self.last_ctx = 0.0
@@ -383,9 +398,9 @@ class Brain:
         self.shadow_trained = int(s.get("shadow_trained", 0))
         self.shadow_hits = int(s.get("shadow_hits", 0))
         self.rug_seen = int(s.get("rug_seen", 0))
-        self.aggression = s.get("aggression") if s.get("aggression") in AGGRESSION else "hyper"
-        if ver < 3:
-            self.aggression = "hyper"                   # v3: high risk appetite on demo money by default
+        self.aggression = s.get("aggression") if s.get("aggression") in AGGRESSION else "surreal"
+        if ver < 7:
+            self.aggression = "surreal"                 # v7: the sniper-compounder is the default (pick any level any time)
         self.mood = float(s.get("mood", 1.0))
         self.streak = int(s.get("streak", 0))
         self.peak_equity = float(s.get("peak_equity", 10.0))
@@ -401,6 +416,7 @@ class Brain:
         self.dn_exit = float(s.get("dn_exit", 0.62))
         self.scalp_adj.update(s.get("scalp_adj") or {})
         self.scalps.update(s.get("scalps") or {})
+        self.snipes.update(s.get("snipes") or {})
         self.grad_frac = float(s.get("grad_frac", 0.5))
         self.exit_stats.update(s.get("exit_stats") or {})
         self.rehearsed = int(s.get("rehearsed", 0))
@@ -423,9 +439,9 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "version": 6, "win": self.win.state(), "rug": self.rug.state(),
+            "version": 7, "win": self.win.state(), "rug": self.rug.state(),
             "up": self.up.state(), "dn": self.dn.state(), "dn_exit": round(self.dn_exit, 4), "grad_frac": round(self.grad_frac, 4),
-            "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "trained": self.trained,
+            "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "snipes": self.snipes, "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
             "aggression": self.aggression, "mood": round(self.mood, 4), "streak": self.streak, "peak_equity": self.peak_equity,
             "tags": {k: [round(x, 4) for x in v] for k, v in self.tags.items()}, "base": [round(x, 4) for x in self.base],
@@ -457,6 +473,8 @@ class Brain:
         self.up, self.dn = Logit(UP_PRIORS, -1.6), Logit(DN_PRIORS, -1.6)
         self.dn_exit, self.grad_frac = 0.62, 0.5
         self.scalp_adj, self.scalps, self.scalp_streak = {"bar": 0.0, "tp": 0.0, "stop": 0.0}, {"n": 0, "wins": 0, "pnl_sol": 0.0}, 0
+        self.snipes = {"n": 0, "wins": 0, "pnl_sol": 0.0, "power": 0}
+        self.fast_ts.clear()
         self.scalp_hist.clear()
         self.last_exit.clear()
         self.tsnap.clear()
@@ -705,7 +723,9 @@ class Brain:
             cn, leaders, ranks = self.copy_signal(L.mint)
             hit = self.cache.get(L.mint)
             held = L.mint in holding
-            if hit and ((hit["rid"] == id(r) and hit["cn"] == cn and now - hit["ts"] < (1 if held else 10)) or (budget <= 0 and not held)):
+            newborn = now - L.created < 60                               # snipe candidates are always read fresh
+            if hit and ((hit["rid"] == id(r) and hit["cn"] == cn and now - hit["ts"] < (1 if held or newborn else 10))
+                        or (budget <= 0 and not held and not newborn)):
                 f, v, p_rug = hit["f"], hit["v"], hit["rug"]                # unchanged: reuse (held coins refresh every second)
             else:
                 budget -= 1
@@ -814,6 +834,50 @@ class Brain:
             self.skip("cooling off after losses")
         if bought >= room:
             return
+        # 1b) SURREAL snipes: brand-new coins in their first seconds, on its own read of the launch window
+        sn = agg.get("snipe")
+        if sn and not cooling:
+            fresh = []
+            for L in allL:
+                age = now - L.created
+                if age > sn["max_age"] or not L.result or not L.mcap_sol:
+                    continue
+                hit = self.cache.get(L.mint)
+                if not hit:
+                    continue
+                sc_ = self.snipe_score(L, hit["f"], self.charts.get(L.mint), age)
+                if sc_ > 0:
+                    fresh.append((sc_, L, hit))
+            fresh.sort(key=lambda t: -t[0])
+            for sc_, L, hit in fresh:
+                if bought >= room or bal < 0.06:
+                    break
+                bar = _clip(sn["bar"] + self.scalp_adj["bar"], 0.2, 0.85)
+                if sc_ < bar:
+                    if not bought:
+                        self.skip("no new launch above the snipe bar")
+                    break
+                if self.can_enter(L.mint, mode, "snipe") or (L.deployer and L.deployer in self.bad_devs):
+                    continue
+                hard = self.hard_no(L.result)
+                if hard and not (hard == "too few buyers" and (L.result.get("buyers") or 0) >= 2):
+                    self.skip(f"hard no: {hard}")
+                    continue
+                veto = self.veto(L, now, hit["rug"])
+                if veto:
+                    self.skip("veto: " + veto.split(" (")[0])
+                    continue
+                power = self.power(hit["f"])
+                size = bal * sn["size"] * (0.6 + 0.8 * sc_) * (0.6 + 0.4 * min(1.0, mf)) * (POWER["size"] if power else 1.0)
+                ex = self.fast_exits(sn, power)
+                await self._buy(L.mint, round(max(0.02, size), 4), mode, "snipe",
+                                f"{'💥 POWER ' if power else ''}snipe {sc_ * 100:.0f} at {now - L.created:.0f}s old (bar {bar * 100:.0f}) · "
+                                f"tp +{(ex['tp'] - 1) * 100:.0f}% / stop −{ex['stop'] * 100:.0f}%",
+                                L.result, hit["f"], hit["v"], [], exits=ex)
+                bought += 1
+                bal = await self.balance(mode)
+        if bought >= room:
+            return
         # 2) its own picks: the best coins it can see above its (percentile) bar — several per tick when it's hot
         for c in ([] if cooling else scored):
             if bought >= room or bal < 0.06:
@@ -869,10 +933,12 @@ class Brain:
             if veto:
                 self.skip("veto: " + veto.split(" (")[0])
                 continue
-            size = max(0.02, bal * sc["size"] * (0.6 + 0.8 * c["scalp"]) * (0.6 + 0.4 * min(1.0, mf)))
-            await self._buy(c["mint"], round(size, 4), mode, "scalp", f"scalp {c['scalp'] * 100:.0f} (bar {sc['bar'] * 100:.0f}) · "
-                            f"▲{c['p_up']} ▼{c['p_dn']} · tp +{(sc['tp'] - 1) * 100:.0f}% / stop −{sc['stop'] * 100:.0f}%",
-                            c["r"], c["f"], c["value"], c["leaders"])
+            power = self.power(c["f"])
+            size = max(0.02, bal * sc["size"] * (0.6 + 0.8 * c["scalp"]) * (0.6 + 0.4 * min(1.0, mf)) * (POWER["size"] if power else 1.0))
+            ex = self.fast_exits(sc, power)
+            await self._buy(c["mint"], round(size, 4), mode, "scalp", f"{'💥 POWER ' if power else ''}scalp {c['scalp'] * 100:.0f} (bar {sc['bar'] * 100:.0f}) · "
+                            f"▲{c['p_up']} ▼{c['p_dn']} · tp +{(ex['tp'] - 1) * 100:.0f}% / stop −{ex['stop'] * 100:.0f}%",
+                            c["r"], c["f"], c["value"], c["leaders"], exits=ex)
             bought += 1
             bal = await self.balance(mode)
 
@@ -899,12 +965,45 @@ class Brain:
             h = 0.4 * h + 0.6 * _clip(self.up.p(f) * 1.6 - self.dn.p(f), 0, 1)
         return round(_clip(h, 0, 1), 3)
 
+    def snipe_score(self, L: Any, f: dict[str, float], raw: dict[str, float] | None, age: float) -> float:
+        """A brand-new coin, read in its first seconds: real buyers arriving (not one hand), money flowing in, a sane dev
+        buy, no bundle / cluster / serial dev. Once the timing model knows the tape, its UP / DOWN odds weigh in."""
+        if not raw:
+            return 0.0
+        buyers = len(getattr(L, "buyers", None) or {})
+        if buyers < 2 or raw.get("quiet_s", 99) > 12:
+            return 0.0
+        r = L.result or {}
+        h = (0.25 * min(1.0, buyers / 8) + 0.20 * f.get("ape_wave", 0) + 0.15 * max(0.0, f.get("mom_30s", 0))
+             + 0.15 * _clip(raw.get("net_30s", 0) / 2, 0, 1) + 0.10 * f.get("organic", 0.5) + 0.10 * (1 - f.get("dev_big_buy", 0))
+             + 0.05 * f.get("socials", 0) + 0.05 * f.get("narrative", 0) + 0.05 * f.get("tweet", 0) + 0.05 * f.get("copy", 0))
+        h -= (0.5 * f.get("coordinated", 0) + 0.4 * f.get("bundle", 0) + 0.3 * f.get("dev_serial", 0) + 0.3 * f.get("snipers", 0)
+              + 0.4 * f.get("dump_candle", 0) + 0.3 * f.get("sell_streak", 0) + 0.3 * f.get("dev_dumping", 0) + (0.4 if r.get("bundled") else 0))
+        if self.up.n >= 400:
+            h = 0.45 * h + 0.55 * _clip(self.up.p(f) * 1.6 - self.dn.p(f), 0, 1)
+        return round(_clip(h, 0, 1), 3)
+
+    def power(self, f: dict[str, float]) -> bool:
+        """Volume, liquidity or holders flooding in fast — the coins worth a bigger bet and a wider stop / target."""
+        if f.get("exhaustion", 0) >= 0.3 or f.get("smart_selling", 0) or f.get("coordinated", 0) >= 0.25:
+            return False
+        flood = sum((f.get("holder_growth", 0) >= 0.6, f.get("vol_accel", 0) >= 0.4, f.get("liq_influx", 0) >= 0.3, f.get("ape_wave", 0) >= 0.75))
+        return flood >= 2 or self.surging(f)
+
+    @staticmethod
+    def fast_exits(cfg: dict[str, float], power: bool) -> dict[str, Any]:
+        if power:
+            return {"tp": max(cfg["tp"], POWER["tp"]), "stop": max(cfg["stop"], POWER["stop"]), "max_s": cfg["max_s"] * POWER["time"], "power": True}
+        return {"tp": cfg["tp"], "stop": cfg["stop"], "max_s": cfg["max_s"], "power": False}
+
     def can_enter(self, mint: str, mode: str, style: str) -> str | None:
         """Re-entry is allowed (scalpers trade the same coin again and again) — but not into a coin it's holding, not
         straight after leaving it, and not after it lost twice in a row on it."""
         if mint in self.ap.busy or any(p["mint"] == mint and p["mode"] == mode for p in self.ap.open.values()):
             return "holding"
         ex = self.last_exit.get(mint)
+        if style == "snipe" and ex:
+            return "already sniped"                         # a launch is sniped once; after that it's a scalp candidate
         if ex:
             wait = 20 if style == "scalp" else 120
             if time.time() - ex[0] < wait:
@@ -952,7 +1051,7 @@ class Brain:
         return bool(tok and tok.get("price_usd") and (tok.get("liquidity_usd") or 0) >= 10_000)
 
     async def _buy(self, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
-                   f: dict[str, float] | None, value: float | None, leaders: list[str]) -> None:
+                   f: dict[str, float] | None, value: float | None, leaders: list[str], exits: dict[str, Any] | None = None) -> None:
         ap = self.ap
         L = ap.sniper.launches.get(mint)
         if L is not None and getattr(L, "vsol", None):
@@ -960,7 +1059,7 @@ class Brain:
             if size > cap:
                 size = round(cap, 4)
                 detail += f" · size capped at ◎{cap:.2f} by liquidity"
-        style = "scalp" if trig == "scalp" else "copy" if trig == "copy" else "swing"
+        style = trig if trig in ("scalp", "snipe") else "copy" if trig == "copy" else "swing"
         try:
             p = await ap.buy(mint, "copy" if trig == "copy" else "brain", detail, r, sol=size, mode=mode)
         except Exception as e:  # noqa: BLE001
@@ -970,13 +1069,17 @@ class Brain:
             return
         p["leaders"] = list(leaders or [])
         p["features"], p["score"], p["style"] = f, value, style
-        meta = {"f": f, "leaders0": p["leaders"], "trig": trig, "v": value, "style": style}
+        if exits:
+            p["exits"] = exits
+            if exits.get("power"):
+                self.snipes["power"] += 1
+        meta = {"f": f, "leaders0": p["leaders"], "trig": trig, "v": value, "style": style, "exits": exits}
         p["entry_value"] = value
         await ap.db.exec("UPDATE auto_positions SET features_json=?, score=?, leaders_json=? WHERE id=?",
                          (json.dumps(meta) if f else None, value, json.dumps(p["leaders"]), p["id"]))
         p["leaders0"], p["brain_trig"] = list(p["leaders"]), trig
         self.last_buy_ts = time.time()
-        icon = "🪞" if trig == "copy" else "🧪" if trig == "explore" else "⚡" if trig == "scalp" else "🟢"
+        icon = "🪞" if trig == "copy" else "🧪" if trig == "explore" else "⚡" if trig == "scalp" else "🎯" if trig == "snipe" else "🟢"
         await self.note("buy", f"{icon} {'REAL ' if mode == 'real' else ''}Bought ${p['symbol']} for ◎{p['sol_in']:.3f} — {detail}",
                         mint=mint, value=value, sol=p["sol_in"])
 
@@ -1194,8 +1297,8 @@ class Brain:
         if f and x >= 1.03 and self.surging(f):
             p["ride"] = True
             return (0.25, f"surge: holders, volume and liquidity pouring in — banked 25% at {x:.2f}×, riding the rest until it dies down")
-        if p.get("style") == "scalp":
-            return self.scalp_exit(p, f, raw, hit, x, age)
+        if p.get("style") in ("scalp", "snipe"):
+            return self.scalp_exit(p, f, raw, hit, x, age, peak_x)
         if x <= 1 - stop:
             return self._exit(p, 1.0, f"stop −{stop * 100:.0f}%", "stop")
         L = self.ap.sniper.launches.get(p["mint"])
@@ -1265,13 +1368,18 @@ class Brain:
         return None
 
     def scalp_exit(self, p: dict[str, Any], f: dict[str, float], raw: dict[str, float] | None, hit: dict[str, Any] | None,
-                   x: float, age: float) -> tuple[float, str] | None:
-        """In and out: bank the move, cut the miss, never let a scalp turn into a bag."""
-        sc = self.scalp_cfg() or AGGRESSION["hyper"]["scalp"]
+                   x: float, age: float, peak_x: float = 1.0) -> tuple[float, str] | None:
+        """In and out: bank the move, cut the miss, never let a scalp turn into a bag. Power trades get room to run."""
+        sc = {**(self.scalp_cfg() or AGGRESSION["hyper"]["scalp"]), **(p.get("exits") or {})}
+        name = "snipe" if p.get("style") == "snipe" else "scalp"
         if x <= 1 - sc["stop"]:
-            return self._exit(p, 1.0, f"scalp stop −{(1 - x) * 100:.0f}%", "scalp")
+            return self._exit(p, 1.0, f"{name} stop −{(1 - x) * 100:.0f}%", "scalp")
+        if sc.get("power") and peak_x >= 1.15 and x <= peak_x * (1 - POWER["trail"]):
+            return self._exit(p, 1.0, f"power {name}: trailing stop after {peak_x:.2f}× — banked {x:.2f}×", "scalp")
         if x >= sc["tp"]:
-            return self._exit(p, 1.0, f"scalp take-profit +{(x - 1) * 100:.0f}%", "scalp")
+            if sc.get("power") and self.power(f):                        # still flooding in: let it keep running on the trail
+                return None
+            return self._exit(p, 1.0, f"{name} take-profit +{(x - 1) * 100:.0f}%", "scalp")
         flipped = raw is not None and (raw.get("net_30s", 0) < 0 or f.get("mom_30s", 0) < 0)
         if x >= 1.04 and flipped:
             return self._exit(p, 1.0, f"scalp: momentum flipped — banked +{(x - 1) * 100:.0f}%", "scalp")
@@ -1387,7 +1495,8 @@ class Brain:
         y = 1.0 if mult >= 1.15 else 0.0
         rugged = 1.0 if (mult <= 0.45 or reason.startswith("rug")) else 0.0
         notes = []
-        scalp = (p.get("style") == "scalp") or trig == "scalp"
+        scalp = p.get("style") in ("scalp", "snipe") or trig in ("scalp", "snipe")
+        snipe = p.get("style") == "snipe" or trig == "snipe"
         now = time.time()
         prev = self.last_exit.get(p["mint"]) or (0, 0)
         self.last_exit[p["mint"]] = (now, prev[1] + 1 if mult < 1 else 0)
@@ -1402,9 +1511,11 @@ class Brain:
             self.mood = min(1.3, self.mood + wgt * (0.04 + 0.08 * (r / 1.5)))
         if scalp:
             self.scalp_streak = (min(0, self.scalp_streak) - 1) if mult < 1 else (max(0, self.scalp_streak) + 1)
-            self.scalps["n"] += 1
-            self.scalps["wins"] += int(mult > 1)
-            self.scalps["pnl_sol"] = round(self.scalps["pnl_sol"] + (p["sol_out"] - p["sol_in"]), 6)
+            book = self.snipes if snipe else self.scalps
+            book["n"] += 1
+            book["wins"] += int(mult > 1)
+            book["pnl_sol"] = round(book["pnl_sol"] + (p["sol_out"] - p["sol_in"]), 6)
+            self.fast_ts.append(now)
             self.scalp_hist.append(mult - 1)
             h = list(self.scalp_hist)[-20:]
             if len(h) >= 10:                                              # the scalper tunes its own bar from its results
@@ -1481,14 +1592,15 @@ class Brain:
             notes.extend(self.pattern_lessons(tags))
             self.trained += 1
             self.cache.clear()
-        if scalp and self.scalps["n"] % 20:                      # scalps are many: save every 20th, and the sell note says it all
+        if scalp and (self.scalps["n"] + self.snipes["n"]) % 20:                      # scalps are many: save every 20th, and the sell note says it all
             for n in notes:
                 await self.note("learn", n, mint=p["mint"])
             return
         await self.save()
         if scalp:
-            await self.note("learn", f"⚡ Scalper: {self.scalps['n']} scalps, {self.scalps['wins'] / max(1, self.scalps['n']) * 100:.0f}% won, "
-                                     f"◎{self.scalps['pnl_sol']:+.3f} stacked · bar {(self.scalp_cfg() or {}).get('bar', 0) * 100:.0f}.")
+            await self.note("learn", f"⚡ Fast trades: {self.snipes['n']} snipes ({self.snipes['wins'] / max(1, self.snipes['n']) * 100:.0f}% won, "
+                                     f"◎{self.snipes['pnl_sol']:+.3f}) · {self.scalps['n']} scalps ({self.scalps['wins'] / max(1, self.scalps['n']) * 100:.0f}% won, "
+                                     f"◎{self.scalps['pnl_sol']:+.3f}) · {sum(1 for t in self.fast_ts if t > now - 3600)} in the last hour.")
             for n in notes:
                 await self.note("learn", n, mint=p["mint"])
             return
@@ -1587,6 +1699,11 @@ class Brain:
                              "open": sum(1 for p in self.ap.open.values() if p.get("style") == "scalp"),
                              "riding": sum(1 for p in self.ap.open.values() if p.get("ride")), "streak": self.scalp_streak,
                              "recent_pct": round(sum(self.scalp_hist) / len(self.scalp_hist) * 100, 2) if self.scalp_hist else None}),
+                "snipes": {**self.snipes, "on": bool(AGGRESSION[self.aggression].get("snipe")),
+                           "per_hour": sum(1 for t in self.fast_ts if t > now - 3600),
+                           "open": sum(1 for p in self.ap.open.values() if p.get("style") == "snipe"),
+                           "power_open": sum(1 for p in self.ap.open.values() if (p.get("exits") or {}).get("power"))},
+                "compound": {"start": 10.0, "growth_pct": round(((await self.ap.demo_balance("auto")) / 10.0 - 1) * 100, 2)},
                 "skips": dict(sorted({**self.skips_prev, **self.skips}.items(), key=lambda kv: -kv[1])[:8]),
                 "exits": {"stop_pct": round(self.stop_pct() * 100), "trail_mult": round(self.trail_mult, 2), **self.exit_stats,
                           "watching": len(self.post), "patience": round(self.patience, 2), "smart_follow": round(self.smart_follow, 2),

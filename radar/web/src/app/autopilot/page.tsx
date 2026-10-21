@@ -354,6 +354,8 @@ type Brain = {
   weights: { key: string; label: string; w: number; prior: number }[];
   scalper?: { on: boolean; n: number; wins: number; pnl_sol: number; bar?: number; tp?: number; stop?: number; max_s?: number; open: number; riding: number; streak: number; recent_pct: number | null };
   skips?: Record<string, number>;
+  snipes?: { on: boolean; n: number; wins: number; pnl_sol: number; power: number; per_hour: number; open: number; power_open: number };
+  compound?: { start: number; growth_pct: number };
   timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_exit: number;
     grad_frac: number; active: boolean; up_top: { label: string; w: number }[]; dn_top: { label: string; w: number }[] };
   candidates: { mint: string; symbol?: string; value: number; p_rug?: number; p_up?: number; p_dn?: number; scalp?: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
@@ -418,9 +420,10 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <span>Learned from <b>{b?.trained ?? 0}</b></span>
           <span>Entry bar <b className="text-flash">{b?.threshold?.toFixed(0) ?? '—'}</b></span>
           <span className="flex rounded-full bg-white/[0.06] p-0.5">
-            {['careful', 'aggressive', 'degen', 'hyper'].map((lv) => (
+            {['careful', 'aggressive', 'degen', 'hyper', 'surreal'].map((lv) => (
               <button key={lv} onClick={() => api('/api/autopilot/brain/aggression', { method: 'POST', body: JSON.stringify({ level: lv }) }).then(load)}
-                className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold capitalize ${b?.aggression === lv ? 'bg-flash text-white' : 'text-white/55 hover:text-white'}`}>{lv}</button>
+                title={lv === 'surreal' ? 'Sniper-compounder: snipes brand-new coins in their first seconds, banks quick profits, compounds the pot' : undefined}
+                className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold capitalize ${b?.aggression === lv ? (lv === 'surreal' ? 'bg-gradient-to-r from-accent to-flash text-white' : 'bg-flash text-white') : 'text-white/55 hover:text-white'}`}>{lv === 'surreal' ? '✦ surreal' : lv}</button>
             ))}
           </span>
           {!on && <button onClick={() => onMode('auto')} className="rounded-full bg-flash px-3 py-1 text-[12px] font-bold text-white">Start</button>}
@@ -466,6 +469,15 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <div className="num text-[11px] text-white/50">{(b?.learning?.replay ?? 0).toLocaleString()} remembered · {(b?.learning?.rehearsed ?? 0).toLocaleString()} rehearsals · {b?.learning?.signals ?? 0} signals</div>
         </div>
       </div>
+      {b?.snipes?.on && (
+        <div className="num mx-6 mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 rounded-2xl border border-accent/40 bg-gradient-to-r from-accent/[0.12] to-flash/[0.08] px-4 py-2.5 text-[12px]">
+          <span className="font-extrabold text-accent">✦ Surreal · sniper-compounder</span>
+          <span><b>{b.snipes.n.toLocaleString()}</b> snipes · <b>{b.snipes.n ? Math.round((b.snipes.wins / b.snipes.n) * 100) : 0}%</b> won · <b className={b.snipes.pnl_sol >= 0 ? 'text-up' : 'text-down'}>◎{b.snipes.pnl_sol >= 0 ? '+' : ''}{b.snipes.pnl_sol.toFixed(3)}</b></span>
+          <span><b>{b.snipes.per_hour}</b> fast trades / hour</span>
+          <span>open <b>{b.snipes.open}</b> · 💥 power <b className="text-up">{b.snipes.power_open}</b> <span className="text-white/40">({b.snipes.power} total)</span></span>
+          {b.compound && <span>pot <b className={b.compound.growth_pct >= 0 ? 'text-up' : 'text-down'}>{b.compound.growth_pct >= 0 ? '+' : ''}{b.compound.growth_pct}%</b> compounded</span>}
+        </div>
+      )}
       {b?.scalper?.on && (
         <div className="num mx-6 mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 rounded-2xl border border-flash/25 bg-flash/[0.05] px-4 py-2.5 text-[12px]">
           <span className="font-extrabold text-flash">⚡ Scalper</span>
