@@ -164,7 +164,7 @@ AGGRESSION = {   # top-share of what it sees that it will buy, max positions, st
     # SURREAL: a sniper-compounder. It snipes brand-new coins in their first seconds on its own read, banks quick profits
     # on small caps, re-enters, and sizes every trade off the CURRENT balance so profit compounds. Coins with volume,
     # liquidity or holders flooding in get a bigger bet with a wider stop / target ("power" trades).
-    "surreal": {"top": 0.35, "max_open": 40, "stop": 0.20, "base": 0.015, "floor": 0, "cooldown": 0.1, "copy_rank": 50, "rug_veto": 0.75,
+    "surreal": {"top": 0.35, "max_open": 60, "stop": 0.20, "base": 0.015, "floor": 0, "cooldown": 0.1, "copy_rank": 50, "rug_veto": 0.75,
                 "cool_s": 45, "burst": 6, "stall_s": 120, "time_s": 600, "ladder": "quick",
                 "scalp": {"bar": 0.36, "size": 0.012, "tp": 1.10, "stop": 0.08, "max_s": 90},
                 "snipe": {"bar": 0.40, "size": 0.012, "max_age": 45, "tp": 1.15, "stop": 0.10, "max_s": 75}},
@@ -324,6 +324,8 @@ class Brain:
         self.skips: dict[str, int] = {}                    # why it didn't trade, this minute
         self.skips_prev: dict[str, int] = {}
         self.skips_ts = 0.0
+        self.bars: dict[str, float] = {}
+        self.last_tick_ts = time.time()
         self.grad_frac = 0.5                                # learned: how much it sells into a graduation
         self.aggression = "surreal"
         self.narr: dict[str, dict[str, Any]] = {}        # mint -> strongest live narrative it's matched to (social engine)
@@ -417,6 +419,8 @@ class Brain:
         self.copied_sells = int(s.get("copied_sells", 0))
         self.dn_margin = float(s.get("dn_margin", 0.12))
         self.scalp_adj.update(s.get("scalp_adj") or {})
+        if ver < 8:
+            self.scalp_adj["bar"] = 0.0                 # v8: clear the ratcheted-up bar left behind by older versions
         self.scalps.update(s.get("scalps") or {})
         self.snipes.update(s.get("snipes") or {})
         self.grad_frac = float(s.get("grad_frac", 0.5))
@@ -441,7 +445,7 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "version": 7, "win": self.win.state(), "rug": self.rug.state(),
+            "version": 8, "win": self.win.state(), "rug": self.rug.state(),
             "up": self.up.state(), "dn": self.dn.state(), "dn_margin": round(self.dn_margin, 4), "grad_frac": round(self.grad_frac, 4),
             "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "snipes": self.snipes, "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
@@ -759,6 +763,9 @@ class Brain:
     async def _tick(self, mode: str = "auto") -> None:
         ap = self.ap
         now = time.time()
+        dt, self.last_tick_ts = now - self.last_tick_ts, now
+        if now - self.last_buy_ts > 20 and self.scalp_adj["bar"] > 0:   # idle: its pickiness fades back so it never goes silent
+            self.scalp_adj["bar"] = max(0.0, self.scalp_adj["bar"] * 0.97 ** min(dt, 5))
         self.heal(now)
         await self.refresh_context(now)
         agg = AGGRESSION[self.aggression]
@@ -834,7 +841,7 @@ class Brain:
             return
         mine = [p for p in ap.open.values() if p["mode"] == mode]
         max_open = agg["max_open"] if mode == "auto" else min(agg["max_open"], ap.c["size"]["max_open"])
-        max_open = max(2, round(max_open * min(1.0, 0.4 + 0.6 * mf)))
+        max_open = max(2, round(max_open * min(1.0, (0.85 if agg.get("snipe") else 0.4) + 0.6 * mf)))   # surreal keeps its slots
         if len(mine) >= max_open:
             self.skip("max positions open")
             return
@@ -896,7 +903,7 @@ class Brain:
             return
         # 1b) SURREAL snipes: brand-new coins in their first seconds, on its own read of the launch window
         sn = agg.get("snipe")
-        if sn and not cooling:
+        if sn:
             fresh = []
             for L in allL:
                 age = now - L.created
@@ -909,10 +916,11 @@ class Brain:
                 if sc_ > 0:
                     fresh.append((sc_, L, hit))
             fresh.sort(key=lambda t: -t[0])
+            bar = self.rel_bar(sn["bar"], [t[0] for t in fresh], 0.5)
+            self.bars["snipe"] = bar
             for sc_, L, hit in fresh:
                 if bought >= room or bal < 0.06:
                     break
-                bar = _clip(sn["bar"] + self.scalp_adj["bar"], 0.2, 0.85)
                 if sc_ < bar:
                     if not bought:
                         self.skip("no new launch above the snipe bar")
@@ -979,10 +987,13 @@ class Brain:
         if not sc or bought >= room:
             return
         scalpable = sorted((c for c in scored if c["scalp"] > 0), key=lambda c: -c["scalp"])
+        sbar = self.rel_bar(AGGRESSION[self.aggression]["scalp"]["bar"], [c["scalp"] for c in scalpable], 0.3) * (1.1 if cooling else 1.0)
+        self.bars["scalp"] = sbar
+        sc = {**sc, "bar": sbar}
         for c in scalpable:
             if bought >= room or bal < 0.06:
                 break
-            if c["scalp"] < sc["bar"] * (1.15 if cooling else 1.0):
+            if c["scalp"] < sbar:
                 if not bought:
                     self.skip("no coin above the scalp bar")
                 break
@@ -1001,6 +1012,23 @@ class Brain:
                             c["r"], c["f"], c["value"], c["leaders"], exits=ex)
             bought += 1
             bal = await self.balance(mode)
+        # 4) drought breaker (surreal): nothing bought for 15 s → take the best live coin that still passes the safety checks
+        if agg.get("snipe") and not bought and now - self.last_buy_ts > 15 and bal >= 0.06:
+            for c in sorted(scored, key=lambda c: -(c["scalp"] + (0.3 if c["age_s"] < 60 else 0) + c["value"] / 200)):
+                hard = c["hard"]
+                if hard and hard != "too few buyers":
+                    continue
+                if (c["r"].get("buyers") or 0) < 2 or self.can_enter(c["mint"], mode, "scalp") or (c["deployer"] and c["deployer"] in self.bad_devs):
+                    continue
+                L = launches.get(c["mint"])
+                if L is None or self.veto(L, now, c["p_rug"] / 100):
+                    continue
+                ex = self.fast_exits(sc, False)
+                await self._buy(c["mint"], round(max(0.02, bal * sc["size"] * 0.7), 4), mode, "scalp",
+                                f"drought breaker: best live coin (scalp {c['scalp'] * 100:.0f}, value {c['value']:.0f}) · "
+                                f"tp +{(ex['tp'] - 1) * 100:.0f}% / stop −{ex['stop'] * 100:.0f}%", c["r"], c["f"], c["value"], c["leaders"], exits=ex)
+                self.skip("drought breaker fired")
+                break
 
     # ---------------- scalper: immediate in-and-out trades ----------------
     def scalp_cfg(self) -> dict[str, float] | None:
@@ -1024,6 +1052,17 @@ class Brain:
         if self.up.n >= 400:
             h = 0.4 * h + 0.6 * self.edge_rank(self.up.p(f), self.dn.p(f))
         return round(_clip(h, 0, 1), 3)
+
+    def rel_bar(self, base: float, scores: list[float], share: float) -> float:
+        """The entry bar is never stricter than 'the best `share` of what's live right now'. Its learned pickiness shrinks
+        that share instead of pushing an absolute bar out of reach — the old absolute bar could ratchet up after a bad run
+        and then never come down, because with no trades there was nothing to learn from (the bot just went silent)."""
+        adj = self.scalp_adj["bar"]
+        share = _clip(share - adj * 1.5, 0.15, 0.8)
+        absolute = _clip(base + adj, 0.15, 0.85)
+        if len(scores) < 3:
+            return absolute
+        return round(max(0.12, min(absolute, percentile(scores, 1 - share))), 3)
 
     def snipe_score(self, L: Any, f: dict[str, float], raw: dict[str, float] | None, age: float) -> float:
         """A brand-new coin, read in its first seconds: real buyers arriving (not one hand), money flowing in, a sane dev
@@ -1346,6 +1385,8 @@ class Brain:
         f = (hit or {}).get("f") or {}
         # riding a real surge — holders, volume and liquidity all pouring in: hold it until it dies down
         if p.get("ride"):
+            if not hit or age > 1800:                                    # lost its live read, or held 30 min: bank it
+                return self._exit(p, 1.0, f"ride closed at {x:.2f}× ({'no live read' if not hit else '30-min cap'})", "trail")
             if x <= 0.9:
                 return self._exit(p, 1.0, f"ride failed — back below entry ({x:.2f}×)", "stop")
             if self.dying(f) or (hit and self.dn_hot(hit["dn"])) or self.smart_selling(p["mint"]) >= 2:
@@ -1760,6 +1801,7 @@ class Brain:
                              "open": sum(1 for p in self.ap.open.values() if p.get("style") == "scalp"),
                              "riding": sum(1 for p in self.ap.open.values() if p.get("ride")), "streak": self.scalp_streak,
                              "recent_pct": round(sum(self.scalp_hist) / len(self.scalp_hist) * 100, 2) if self.scalp_hist else None}),
+                "bars": {k: round(v * 100) for k, v in self.bars.items()}, "idle_s": round(now - self.last_buy_ts) if self.last_buy_ts else None,
                 "snipes": {**self.snipes, "on": bool(AGGRESSION[self.aggression].get("snipe")),
                            "per_hour": sum(1 for t in self.fast_ts if t > now - 3600),
                            "open": sum(1 for p in self.ap.open.values() if p.get("style") == "snipe"),

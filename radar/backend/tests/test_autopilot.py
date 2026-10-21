@@ -724,3 +724,27 @@ def test_brain_errors_never_silently_stop_it_and_an_empty_demo_pot_refills(tmp_p
         assert any("refilled" in e["text"] for e in b.log) and b.refills == 1
         await db.close()
     asyncio.run(run())
+
+
+def test_surreal_never_goes_silent_after_its_bar_ratchets_up(tmp_path):
+    """Regression: a losing run pushed the learned bar to the max (+0.3); with no trades nothing could bring it back down,
+    so the bot sat silent forever. The bar is now capped at 'the best slice of what's live' and fades while idle."""
+    async def run():
+        now = time.time()
+        coins = [_newborn(f"RT{i:02d}mint" + str(i % 10) * 30, now) for i in range(8)]
+        ap, db = await make(tmp_path, coins)
+        b = ap.brain
+        await b.set_aggression("surreal")
+        b.scalp_adj["bar"] = 0.3                                          # the poisoned state
+        await ap.set_mode("auto")
+        await b.tick("auto")
+        assert [p for p in ap.open.values() if p["mode"] == "auto"], (b.skips, b.bars)
+        assert b.bars["snipe"] <= 0.7
+        # idle, it relaxes back toward normal
+        b.last_buy_ts = time.time() - 60
+        b.last_tick_ts = time.time() - 5
+        a0 = b.scalp_adj["bar"]
+        await b.tick("auto")
+        assert b.scalp_adj["bar"] < a0
+        await db.close()
+    asyncio.run(run())

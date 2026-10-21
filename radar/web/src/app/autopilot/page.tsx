@@ -356,6 +356,7 @@ type Brain = {
   skips?: Record<string, number>;
   snipes?: { on: boolean; n: number; wins: number; pnl_sol: number; power: number; per_hour: number; open: number; power_open: number };
   compound?: { start: number; growth_pct: number };
+  bars?: Record<string, number>; idle_s?: number | null;
   last_error?: { ts: number; error: string; where?: string } | null; engine_error?: string | null; refills?: number;
   timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_margin: number;
     market?: { coins: number; dn_med: number; up_med: number } | null;
@@ -478,6 +479,9 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <span><b>{b.snipes.per_hour}</b> fast trades / hour</span>
           <span>open <b>{b.snipes.open}</b> · 💥 power <b className="text-up">{b.snipes.power_open}</b> <span className="text-white/40">({b.snipes.power} total)</span></span>
           {b.compound && <span>pot <b className={b.compound.growth_pct >= 0 ? 'text-up' : 'text-down'}>{b.compound.growth_pct >= 0 ? '+' : ''}{b.compound.growth_pct}%</b> compounded</span>}
+          <span className="text-white/50">last buy <b className={b.idle_s != null && b.idle_s > 60 ? 'text-warn' : 'text-white'}>{b.idle_s != null ? `${b.idle_s}s ago` : 'never'}</b>
+            {b.bars?.snipe != null ? ` · snipe bar ${b.bars.snipe}` : ''}{b.bars?.scalp != null ? ` · scalp bar ${b.bars.scalp}` : ''}</span>
+          {b.mode !== 'auto' && <span className="font-bold text-warn">Self-driving is off — press Start</span>}
         </div>
       )}
       {b?.scalper?.on && (
