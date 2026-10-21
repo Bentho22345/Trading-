@@ -477,7 +477,10 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
         <div className={`mx-6 mt-3 flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3 text-[13px] ${b.verdict.state === 'trading' ? 'border-up/30 bg-up/[0.07] text-up' : 'border-warn/40 bg-warn/[0.08] text-warn'}`}>
           <b className="uppercase tracking-wide">{b.verdict.state === 'trading' ? '● Trading' : '● Not trading'}</b>
           <span className="flex-1 text-white/85">{b.verdict.text}</span>
-          <span className="num text-[11px] text-white/45">launches/min {b.verdict.launches_60s ?? '—'} · new coins trading {b.verdict.newborn_traded ?? '—'}/{b.verdict.newborn ?? '—'} · live tapes {b.verdict.live_tapes ?? '—'} · trade subs {b.verdict.trade_subs ?? '—'}</span>
+          <span className="num text-[11px] text-white/45">launches/min {b.verdict.launches_60s ?? '—'} · new coins trading {b.verdict.newborn_traded ?? '—'}/{b.verdict.newborn ?? '—'} · live tapes {b.verdict.live_tapes ?? '—'} · trade subs {b.verdict.trade_subs ?? '—'}
+            {b.verdict.trade_feed && <> · trade feed: {b.verdict.trade_feed.chain_running
+              ? `on-chain ${b.verdict.trade_feed.chain?.connected ? '●' : '○'} ${b.verdict.trade_feed.chain?.per_min ?? 0}/min`
+              : `PumpPortal${b.verdict.trade_feed.pumpportal_key ? ' (key)' : ''} ${b.verdict.trade_feed.pumpportal_trades_90s ?? 0}/90s`}</>}</span>
           <button onClick={() => { const txt = JSON.stringify({ verdict: b.verdict, skips: b.skips, bars: b.bars, idle_s: b.idle_s, diag: b.diag, mood: b.mood,
               scalper: b.scalper, snipes: b.snipes, last_error: b.last_error, engine_error: b.engine_error, aggression: b.aggression, mode: b.mode,
               timing: b.timing && { up: b.timing.up, down: b.timing.down, market: b.timing.market }, log: (b.log || []).slice(0, 12).map((e) => e.text) }, null, 1);

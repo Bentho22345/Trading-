@@ -1775,7 +1775,8 @@ class Brain:
         subs = len(getattr(getattr(ap.tracker, "pump", None), "token_subs", ()) or ())
         idle = now - self.last_buy_ts if self.last_buy_ts else None
         top_skip = max((self.skips or self.skips_prev or {"": 0}).items(), key=lambda kv: kv[1])[0]
-        info = {"mode": mode, "pumpportal_connected": None if pump == "n/a" else pump is not None,
+        fs = ap.tracker.feed_status() if hasattr(ap.tracker, "feed_status") else {}
+        info = {"mode": mode, "pumpportal_connected": None if pump == "n/a" else pump is not None, "trade_feed": fs,
                 "trade_subs": subs, "idle_s": round(idle) if idle is not None else None, "top_skip": top_skip, **p}
         def out(state: str, text: str) -> dict[str, Any]:
             return {"state": state, "text": text, **info}
@@ -1788,8 +1789,19 @@ class Brain:
         if not p.get("launches_60s"):
             return out("feed", "No new pump.fun launches reached the server in the last minute (PumpPortal). Check the Health page.")
         if p.get("newborn") and not p.get("newborn_traded"):
-            return out("feed", f"{p['newborn']} new launches arrived but none of their trades did — the trade subscriptions aren't "
-                               f"delivering ({subs} active). Without trades there's nothing to snipe.")
+            ch = fs.get("chain") or {}
+            if not fs.get("pumpportal_key") and fs.get("chain_running"):
+                how = (f"PumpPortal's trade stream needs an API key since May 2026, so Radar switched to the free on-chain trade feed "
+                       f"({ch.get('endpoint')}: {'connected' if ch.get('connected') else 'connecting…'}, {ch.get('decoded', 0)} trades decoded). "
+                       f"If it stays at 0, connect Helius on Connectors (its websocket is far more reliable than the public RPC) or add a "
+                       f"PumpPortal API key.")
+            elif not fs.get("pumpportal_key"):
+                how = ("PumpPortal only streams trades to connections with an API key since May 2026. Radar starts its free on-chain trade "
+                       "feed within a minute — or add a PumpPortal API key on Connectors (its wallet needs ≥ 0.02 SOL).")
+            else:
+                how = ("A PumpPortal key is set but no trades arrive — check that its linked wallet holds ≥ 0.02 SOL (PumpPortal bills "
+                       "0.01 SOL per 10,000 trades).")
+            return out("feed", f"{p['newborn']} new launches arrived but none of their trades did ({subs} subscribed). {how}")
         if p.get("blocked"):
             return out("blocked", f"Not buying: {p['blocked']}.")
         if idle is not None and idle < 60:

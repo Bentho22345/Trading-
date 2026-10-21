@@ -159,6 +159,15 @@ async def t_neynar(v: dict[str, str]) -> str:
     return _need(r, "Neynar key valid")
 
 
+async def t_pumpportal(v: dict[str, str]) -> str:
+    k = (v.get("api_key") or "").strip()
+    if not k:
+        return "No key: launches stay live; trades come from the on-chain feed (free)"
+    if len(k) < 20:
+        raise ValueError("That doesn't look like a PumpPortal API key")
+    return "Key saved — PumpPortal's trade stream reconnects with it (its linked wallet needs ≥ 0.02 SOL)"
+
+
 async def t_helius(v: dict[str, str]) -> str:
     r = await _post(os.environ.get("HELIUS_RPC_URL") or f"https://mainnet.helius-rpc.com/?api-key={v['api_key']}",
                     json={"jsonrpc": "2.0", "id": 1, "method": "getHealth"})
@@ -200,8 +209,13 @@ async def t_wallet(v: dict[str, str]) -> str:
 
 CATALOG: list[Connector] = [
     # ---- running automatically (no key) ----
-    Connector("pumpportal", "PumpPortal", "On-chain", "keyless", "Real-time pump.fun launches, trades and migrations over one WebSocket.",
-              "New launches feed, graduation feed, live trades", 1, "https://pumpportal.fun/data-api/real-time", health_name="pumpportal"),
+    Connector("pumpportal", "PumpPortal", "On-chain", "key", "Real-time pump.fun launches, trades and migrations over one WebSocket. "
+              "Launches and graduations are free; since May 2026 the TRADE stream needs a PumpPortal API key whose linked wallet holds "
+              "≥ 0.02 SOL (billed 0.01 SOL per 10,000 trades streamed). Without a key Radar reads trades from the chain instead (free).",
+              "New launches feed, graduation feed, live trades (sniper, Autopilot)", 1, "https://pumpportal.fun/data-api/real-time",
+              "pumpportal.fun → Data API → create an API key (it comes with a linked wallet) → send ≥ 0.02 SOL to that wallet → paste the key here.",
+              "free launches · trades 0.01 SOL / 10k", [Field("api_key", "API key (optional — enables PumpPortal's trade stream)", env="PUMPPORTAL_API_KEY",
+                                                              optional=True)], t_pumpportal, "pumpportal"),
     Connector("dexscreener", "DexScreener", "On-chain", "keyless", "Pairs, prices, volume, liquidity, txns, token profiles and paid boosts across 80+ chains.",
               "Hot tokens table, price ticks, boost risk flag", 1, "https://docs.dexscreener.com/api/reference", health_name="dexscreener"),
     Connector("geckoterminal", "GeckoTerminal", "On-chain", "keyless", "Trending pools, new pools and OHLCV candles.",
@@ -278,7 +292,7 @@ CATALOG: list[Connector] = [
     Connector("discord", "Discord webhook", "Alerts", "key", "Posts alerts into a Discord channel.",
               "Alerts", 2, "https://support.discord.com/hc/en-us/articles/228383668", "Channel settings → Integrations → Webhooks → New → Copy URL.",
               "free", [Field("webhook_url", "Webhook URL", env="DISCORD_WEBHOOK_URL")], t_discord),
-    Connector("helius", "Helius (Solana RPC)", "On-chain", "key", "Holder lists, wallet & deployer history, account webhooks.",
+    Connector("helius", "Helius (Solana RPC)", "On-chain", "key", "Holder lists, wallet & deployer history, account webhooks — and the free on-chain pump.fun trade feed.",
               "Top Traders: 1-year swap history backfill per wallet; deployer reputation", 2, "https://dashboard.helius.dev/signup",
               "Sign up → Dashboard → API Keys → copy.", "free tier", [Field("api_key", "API key", env="HELIUS_API_KEY")], t_helius, "helius"),
     Connector("birdeye", "Birdeye", "On-chain", "key", "Token overview, top traders, holders.",

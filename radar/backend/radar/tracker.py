@@ -17,6 +17,7 @@ from .adapters.dexscreener import DexScreener
 from .adapters.extra import Extra
 from .adapters.geckoterminal import GeckoTerminal
 from .adapters.market import Market
+from .adapters.chaintrades import ChainTrades
 from .adapters.pumpportal import PumpPortal
 from .adapters.rugcheck import RugCheck
 from .config import settings
@@ -82,6 +83,12 @@ class Tracker:
         self.rug = RugCheck()
         self.market = Market()
         self.pump = PumpPortal(self.on_create, self.on_trade, self.on_migrate)
+        # free fallback when PumpPortal's trade stream is silent (it needs an API key since May 2026)
+        self.chain = ChainTrades(self.on_trade, lambda: self.pump.token_subs)
+        self.chain_task: asyncio.Task | None = None
+        self.chain_since = 0.0
+        self._sigs: set[str] = set()
+        self._sig_q: list[str] = []
         self.coinbase = Coinbase(self.on_tick)
         self.sol_usd: float | None = None
         self.trending_set: set[str] = set()
@@ -108,7 +115,7 @@ class Tracker:
 
     # ---------- lifecycle ----------
     def start(self) -> None:
-        jobs = [self.pump.run(), self.coinbase.run(), self.scheduler(), self.rug_worker(), self.trade_subs_loop(),
+        jobs = [self.pump.run(), self.coinbase.run(), self.scheduler(), self.rug_worker(), self.trade_subs_loop(), self.trade_feed_loop(),
                 self.every(settings.gecko_trending_every, self.poll_gecko_trending),
                 self.every(settings.gecko_new_every, self.poll_gecko_new, delay=7),
                 self.every(settings.dex_profiles_every, self.poll_dex_profiles, delay=3),
@@ -191,6 +198,16 @@ class Tracker:
     async def on_trade(self, m: dict[str, Any]) -> None:
         now = time.time()
         mint = m.get("mint")
+        sig = m.get("signature")
+        if sig:                                          # the same trade can arrive from PumpPortal AND the chain feed
+            if sig in self._sigs:
+                return
+            self._sigs.add(sig)
+            self._sig_q.append(sig)
+            if len(self._sig_q) > 40000:
+                for old in self._sig_q[:20000]:
+                    self._sigs.discard(old)
+                del self._sig_q[:20000]
         if HIDE_MAYHEM and mint in self.mayhem:
             return
         trade = {"mint": mint, "ts": now, "side": m.get("txType"), "sol": m.get("solAmount"),
@@ -570,6 +587,46 @@ class Tracker:
                 await asyncio.wait_for(self.subs_kick.wait(), timeout=10)
             except asyncio.TimeoutError:
                 pass
+
+    async def trade_feed_loop(self) -> None:
+        """Keep a live trade feed no matter what: if PumpPortal delivers no trades while launches keep arriving, run the
+        on-chain feed (Helius / Solana RPC logs); once PumpPortal trades flow again, stop it to save CPU."""
+        started = time.time()
+        while True:
+            await asyncio.sleep(15)
+            try:
+                await self.feed_check(time.time(), started)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                log.warning("trade feed loop: %s", e)
+
+    async def feed_check(self, now: float, started: float) -> str:
+        import os
+        mode = os.environ.get("CHAIN_TRADES", "auto")      # auto | on | off
+        pp = self.pump.trade_rate(90)
+        launches = sum(1 for t in self.born.values() if now - t < 90)
+        running = self.chain_task is not None and not self.chain_task.done()
+        need = mode == "on" or (mode == "auto" and now - started > 40 and pp == 0 and launches > 0)
+        if need and not running:
+            log.warning("trade feed: PumpPortal delivered %d trades in 90s for %d new launches — starting the on-chain "
+                        "trade feed (%s)", pp, launches, self.chain.url.split("?")[0])
+            self.chain._stop = False
+            self.chain_task = asyncio.get_running_loop().create_task(self.chain.run())
+            self.chain_since = now
+            return "started"
+        if running and mode != "on" and (mode == "off" or (pp > 30 and now - self.chain_since > 300)):
+            log.warning("trade feed: PumpPortal trades are flowing — stopping the on-chain feed")
+            self.chain.stop()
+            if self.chain.ws is not None:
+                await self.chain.ws.close()
+            return "stopped"
+        return "running" if running else "idle"
+
+    def feed_status(self) -> dict[str, Any]:
+        running = self.chain_task is not None and not self.chain_task.done()
+        return {"pumpportal_key": self.pump.has_key, "pumpportal_trades_90s": self.pump.trade_rate(90),
+                "pumpportal_est_cost_sol_today": self.pump.est_cost_sol_today(), "chain_running": running, "chain": self.chain.snapshot()}
 
     async def prune(self) -> None:
         cut = time.time() - settings.retention_hours * 3600

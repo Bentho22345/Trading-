@@ -37,6 +37,30 @@ class PumpPortal(Stream):
         self.on_create, self.on_trade, self.on_migrate = on_create, on_trade, on_migrate
         self.token_subs: set[str] = set()
         self.account_subs: set[str] = set()
+        self.base_url = settings.pumpportal_ws
+        self.has_key = False
+        self.trades_seen: list[float] = []               # recent trade arrivals (is the trade feed actually flowing?)
+        self.trades_day = (0, 0)                          # (utc day, trades) — PumpPortal bills 0.01 SOL per 10,000 streamed
+
+    def set_key(self, key: str | None) -> None:
+        """Since May 2026 trade / account streams need a PumpPortal API key (new launches stay free). The key rides on
+        the URL; changing it reconnects."""
+        key = (key or "").strip()
+        sep = "&" if "?" in self.base_url else "?"
+        url = f"{self.base_url}{sep}api-key={key}" if key else self.base_url
+        self.has_key = bool(key)
+        if url != self.url:
+            self.url = url
+            if self.ws is not None:
+                __import__("asyncio").get_running_loop().create_task(self.ws.close())
+
+    def trade_rate(self, window: float = 90) -> int:
+        cut = __import__("time").time() - window
+        self.trades_seen = [t for t in self.trades_seen[-5000:] if t >= cut]
+        return len(self.trades_seen)
+
+    def est_cost_sol_today(self) -> float:
+        return round(self.trades_day[1] / 10_000 * 0.01, 4)
 
     async def on_open(self) -> None:
         await self.send({"method": "subscribeNewToken"})
@@ -52,6 +76,10 @@ class PumpPortal(Stream):
         if kind == "create":
             await self.on_create(msg)
         elif kind == "trade":
+            now = __import__("time").time()
+            self.trades_seen.append(now)
+            day = int(now // 86400)
+            self.trades_day = (day, (self.trades_day[1] if self.trades_day[0] == day else 0) + 1)
             await self.on_trade(msg)
         elif kind == "migrate":
             await self.on_migrate(msg)

@@ -196,6 +196,19 @@ Its own algorithm on its own 10 SOL of demo money (and real money only if you pi
 
 Not financial advice. Most memecoins go to zero.
 
+## Trade feed (important since May 2026)
+
+PumpPortal's new-launch feed is free, but since **May 1, 2026 its trade stream only flows to connections with a
+PumpPortal API key** whose linked wallet holds ≥ 0.02 SOL (billed 0.01 SOL per 10,000 trades). Without trades every
+coin looks buyer-less and the sniper / Autopilot can't act. Radar handles this two ways:
+
+- **Free, automatic**: if PumpPortal delivers no trades while launches arrive, Radar starts an on-chain trade feed —
+  one `logsSubscribe` on the pump.fun program, decoding its `TradeEvent` (side, SOL, tokens, trader, curve reserves).
+  It uses your Helius websocket when Helius is connected (recommended), else `SOLANA_WS_URL` / the public RPC.
+  It stops itself if PumpPortal trades come back. `CHAIN_TRADES=on|off|auto` overrides.
+- **PumpPortal key**: Connectors → PumpPortal → paste the key. The Health page and the Autopilot status box show which
+  feed is live, trades per minute and PumpPortal's estimated cost today.
+
 ## Free trend sources
 
 Bluesky trending topics, Mastodon trending tags, Wikipedia most-read and Hacker News (official keyless APIs). A launch named

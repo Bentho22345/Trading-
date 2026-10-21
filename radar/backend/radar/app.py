@@ -205,8 +205,11 @@ async def lifespan(app: FastAPI):
         elif cid == "helius":
             S.tracker.extra.set_helius(vals.get("api_key"))
             S.helius.set_key(vals.get("api_key"))
+            S.tracker.chain.set_helius(vals.get("api_key"))   # the on-chain trade feed prefers Helius' websocket
+        elif cid == "pumpportal":
+            S.tracker.pump.set_key(vals.get("api_key"))     # trade streams need a PumpPortal key since May 2026
     S.connectors.listeners.append(on_change)
-    for cid in ("coingecko", "anthropic", "helius"):
+    for cid in ("coingecko", "anthropic", "helius", "pumpportal"):
         await on_change(cid, await S.connectors.values(cid))
 
     S.tracker.hooks["social"].append(S.social.ingest)
@@ -366,6 +369,7 @@ async def healthz() -> dict[str, Any]:
                         "avg_eval_ms": round(st["eval_ms"] / st["evals"], 2) if st["evals"] else None, "last_tick_ms": st["last_tick_ms"]}
     tr = getattr(S, "tracker", None)
     if tr is not None:
+        out["trade_feed"] = tr.feed_status()
         out["pumpportal"] = {"connected": tr.pump.ws is not None, "trade_subs": len(tr.pump.token_subs),
                              "account_subs": len(tr.pump.account_subs)}
         out["sol_usd_known"] = tr.sol_usd is not None
