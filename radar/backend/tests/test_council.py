@@ -138,3 +138,33 @@ def test_the_skeptic_learns_from_plug_pulls_that_were_wrong(tmp_path):
         assert c.plug_margin < m0 + 0.03
         await db.close()
     asyncio.run(run())
+
+
+def test_the_brains_judge_a_top_wallet_influx_and_say_why(tmp_path):
+    async def run():
+        fresh = launch("FRSHmint" + "1" * 32, upside=40, risk=15, buyers=30, deployer="D1")
+        late = launch("LATEmint" + "2" * 32, upside=40, risk=15, buyers=30, deployer="D2")
+        ap, db = await make(tmp_path, [fresh, late])
+        b = ap.brain
+        W = {f"T{i}" + "q" * 39: {"rank": r} for i, r in enumerate((4, 9, 22, 35))}
+        ap.traders.ranked = W
+        await ap.set_mode("auto")
+        late_px0 = late.mcap_sol
+        for w in W:
+            await b.on_trade({"trader": w, "mint": fresh.mint, "side": "buy"})
+            await b.on_trade({"trader": w, "mint": late.mint, "side": "buy"})
+        late.mcap_sol = late_px0 * 3.2                                   # the late one already ran 3× since the first wallet bought
+        q_fresh, q_late = b.influx_quality(fresh.mint, fresh), b.influx_quality(late.mint, late)
+        assert q_fresh["influx_rank"] > 0.6 and q_fresh["influx_late"] == 0 and q_late["influx_late"] == 1.0
+        b.council.decide = (lambda orig: (lambda style, f, exec_conf, sym, mint: {**orig(style, f, exec_conf, sym, mint),
+                                                                                   **({"go": False} if mint == late.mint else {})}))(b.council.decide)
+        b.council.rng.random = lambda: 0.99                              # a non-copy rejection would NOT be ghosted at this draw
+        await b.tick("auto")
+        copies = [p for p in ap.open.values() if p.get("strat") == "copy"]
+        assert any(p["mint"] == fresh.mint for p in copies) and not any(p["mint"] == late.mint for p in copies)
+        texts = [e["text"] for e in b.log if e["kind"] == "copy"]
+        assert any("the Nebula is in" in t and "⚙️" in t for t in texts)
+        assert any("the Nebula passed" in t and "already +220%" in t for t in texts), (texts, b.skips)
+        assert any(k.startswith(f"g:{late.mint}") for k in b.council.track)  # a passed influx is always followed as a ghost
+        await db.close()
+    asyncio.run(run())

@@ -97,6 +97,8 @@ PRIORS: dict[str, float] = {
     # v6 — the apes, the tape and the curve: who's piling in, who's leaving, and where the coin is in its life
     "ape_wave": 0.8, "ape_accel": 0.7, "exhaustion": -1.0, "early_exit": -1.2, "turnover": 0.3, "breakout": 0.6,
     "dip_reclaim": 0.5, "near_grad": 0.4, "pro_share": 0.8,
+    # influx quality — when several top wallets pile into one coin, the brains judge the pile-in itself
+    "influx_rank": 0.6, "influx_speed": 0.5, "influx_late": -0.9, "leader_record": 0.8,
 }
 RUG_PRIORS: dict[str, float] = {k: 0.0 for k in PRIORS} | {
     "risk": 1.6, "insiders": 1.6, "bundle": 1.2, "snipers": 0.8, "top10": 1.0, "fresh": 0.6, "bots": 0.5, "dev_sold": 0.4,
@@ -142,7 +144,9 @@ LABELS = {"upside": "Upside score", "risk": "Risk score", "alpha": "Top wallets 
           "mom_2m": "Momentum (2m)", "quiet": "Trading gone quiet",
           "ape_wave": "Ape wave (new buyers / 10s)", "ape_accel": "Apes accelerating", "exhaustion": "Exhausted at the highs",
           "early_exit": "First buyers sold out", "turnover": "Volume vs liquidity", "breakout": "Breakout", "dip_reclaim": "Dip being bought",
-          "near_grad": "About to graduate", "pro_share": "Pros among holders"}
+          "near_grad": "About to graduate", "pro_share": "Pros among holders",
+          "influx_rank": "Influx wallets' rank", "influx_speed": "Influx speed", "influx_late": "Price already ran since the influx began",
+          "leader_record": "These wallets' copy record"}
 KEYS = list(PRIORS)                       # fixed order for the compact replay vectors
 KEYS_VER = "v6:" + str(len(KEYS))
 BIAS0, RUG_BIAS0 = -3.0, -1.6
@@ -236,6 +240,7 @@ def features(r: dict[str, Any], copy_n: float = 0.0, ctx: dict[str, Any] | None 
         "x_calls": min(1.0, xc / 2),
         "hype_bots": min(1.0, (n.get("bot_share") or 0) * 1.5),
         "influx": min(1.0, ((ctx or {}).get("influx") or 0) / 4),
+        **((ctx or {}).get("influx_q") or {}),
         "smart_selling": min(1.0, ((ctx or {}).get("smart_sells") or 0) / 2),
     }
     ch = (ctx or {}).get("chart")
@@ -346,6 +351,7 @@ class Brain:
         self.shadow: dict[str, dict[str, Any]] = {}
         self.sampled: dict[str, tuple[int, float]] = {}      # mint -> (snapshots taken, last ts)
         self.copy_buys: dict[str, dict[str, Any]] = {}         # mint -> {wallets: {w: (rank, ts)}, ...}
+        self._influx_seen: dict[str, float] = {}               # mint -> when its influx verdict was last logged
         self.smart_sells: dict[str, dict[str, tuple[int, float]]] = {}   # mint -> {wallet: (rank, ts)}: top wallets getting out
         self.smart_follow = 1.0                                         # how hard it follows their sells (learned)
         self.patience = 1.0                                             # how long it lets a flat position breathe (learned)
@@ -620,6 +626,28 @@ class Brain:
             return 50
         return None
 
+    async def influx_note(self, mint: str, L: Any, desc: str, verdict: str, d: dict[str, Any] | None = None) -> None:
+        """Every pile-in gets a visible verdict (once per coin per 10 min) — the brains' call, and why."""
+        now = time.time()
+        seen = self._influx_seen.get(mint, 0)
+        if now - seen < 600:
+            return
+        self._influx_seen[mint] = now
+        if len(self._influx_seen) > 3000:
+            self._influx_seen = {m: t for m, t in self._influx_seen.items() if t > now - 3600}
+        sym = (getattr(L, "symbol", None) if L is not None else None) or mint[:6]
+        votes = ""
+        if d:
+            v = d["votes"]
+            votes = (f" · ⚙️{v['executor']:.2f} 🛡{v['skeptic']:.2f} 🚀{v['optimist']:.2f}"
+                     + (f" · skeptic: {d['why'].get('skeptic')}" if d.get("why", {}).get("skeptic") else "")
+                     + (f" · optimist: {d['why'].get('optimist')}" if d.get("why", {}).get("optimist") else ""))
+        e = self.copy_buys.get(mint) or {}
+        px0 = e.get("px0")
+        late = ((L.mcap_sol / px0) - 1) if (L is not None and px0 and getattr(L, "mcap_sol", None)) else 0.0
+        await self.note("copy", f"🐋 {desc} into ${sym} — {verdict}{votes}" + (f" · price already +{late * 100:.0f}% since they started" if late >= 0.1 else ""),
+                        mint=mint)
+
     def benched(self, w: str) -> bool:
         return (self.leaders.get(w) or {}).get("bench_until", 0) > time.time()
 
@@ -635,6 +663,9 @@ class Brain:
             if self.benched(w):
                 return
             e = self.copy_buys.setdefault(mint, {"wallets": {}, "first": now})
+            if "px0" not in e:
+                L0 = self.ap.sniper.launches.get(mint)
+                e["px0"] = L0.mcap_sol if L0 is not None and L0.mcap_sol else None
             e["wallets"][w] = (rank, now)
             self.ap.kick.set()
             if len(self.copy_buys) > 3000:
@@ -714,6 +745,26 @@ class Brain:
         ok = ((k >= 3 and weight >= 3.0) or len(fast_top) >= 2) and not self.smart_selling(mint)
         return ok, k, f"{k} top wallets in 5 min ({', '.join(f'#{r}' for r, _ in sorted(live.values())[:4])})"
 
+    def influx_quality(self, mint: str, L: Any = None) -> dict[str, float]:
+        """What the council needs to judge a pile-in: how good the wallets are, how fast they came, whether the price
+        already ran since the first one bought (late = exit liquidity), and how copying these wallets has gone before."""
+        e = self.copy_buys.get(mint)
+        if not e:
+            return {}
+        now = time.time()
+        live = {w: (r, ts) for w, (r, ts) in e["wallets"].items() if ts >= now - 300 and not self.benched(w)}
+        if not live:
+            return {}
+        ranks = [r for r, _ in live.values()]
+        span = max(30.0, max(ts for _, ts in live.values()) - min(ts for _, ts in live.values()))
+        px0 = e.get("px0")
+        late = ((L.mcap_sol / px0) - 1) if (L is not None and px0 and getattr(L, "mcap_sol", None)) else 0.0
+        recs = [(self.leaders[w]["w"] / self.leaders[w]["n"]) for w in live if w in self.leaders and self.leaders[w].get("n", 0) >= 2]
+        return {"influx_rank": _clip(sum(max(0.0, 1 - r / 100) for r in ranks) / len(ranks), 0, 1),
+                "influx_speed": _clip(len(live) / (span / 60) / 6, 0, 1),
+                "influx_late": _clip(late / 1.0, 0, 1),
+                "leader_record": _clip((sum(recs) / len(recs) - 0.5) * 2, -1, 1) if recs else 0.0}
+
     # ---------------- narrative context (refreshed every 15 s, off the per-coin path) ----------------
     async def refresh_context(self, now: float) -> None:
         if now - self.last_ctx < 15:
@@ -746,8 +797,9 @@ class Brain:
             ch = None
         e = self.copy_buys.get(L.mint)
         infl = sum(1 for _, ts in e["wallets"].values() if ts >= now - 300) if e else 0
+        iq = self.influx_quality(L.mint, L) if infl >= 2 else None
         f = features({**r, "age_s": age}, cn, {"narr": self.narr.get(L.mint), "x_calls": self.x_calls.get(L.mint, 0), "chart": ch,
-                                               "influx": infl, "smart_sells": self.smart_selling(L.mint)})
+                                               "influx": infl, "smart_sells": self.smart_selling(L.mint), "influx_q": iq})
         v, p_win, p_rug, worst = self.read(f)
         return f, v, p_win, p_rug, worst
 
@@ -929,17 +981,28 @@ class Brain:
             L = launches.get(mint)
             f, v = None, None
             if L is not None and L.result:
-                if self.hard_no(L.result) or self.veto(L, now):
+                why_not = self.hard_no(L.result) or self.veto(L, now)
+                if why_not:
+                    await self.influx_note(mint, L, desc, f"skipped — {why_not}")
                     continue
                 f, v, _, p_rug, _ = self._score(L, now, n)
-                if v < self.threshold * 0.5 or self.veto(L, now, p_rug):          # its own read still has to agree
+                why_not = self.veto(L, now, p_rug)
+                if why_not:
+                    await self.influx_note(mint, L, desc, f"skipped — {why_not}")
                     continue
             elif k < 4 or not await self._tradeable(mint):
                 continue
+            else:
+                f = {"influx": min(1.0, k / 4), **self.influx_quality(mint)}
             size = self.size(bal, 0.8, mode, copy=True)
-            if not await self._council_buy("copy", mint, size, mode, "copy", f"influx: {desc}", L.result if L else None, f, v, leaders,
-                                           _clip(0.6 + 0.05 * k, 0, 0.95), L, strat="copy"):
+            iq = self.influx_quality(mint, L)
+            exec_conf = _clip(0.45 + 0.04 * k + 0.2 * iq.get("influx_rank", 0) + 0.15 * iq.get("leader_record", 0)
+                              - 0.4 * iq.get("influx_late", 0), 0.05, 0.95)
+            if not await self._council_buy("copy", mint, size, mode, "copy", f"🐋 influx: {desc}", L.result if L else None, f, v, leaders,
+                                           exec_conf, L, strat="copy"):
+                await self.influx_note(mint, L, desc, "the Nebula passed", self.council.debate[0] if self.council.debate else None)
                 continue
+            await self.influx_note(mint, L, desc, "the Nebula is in", self.council.debate[0] if self.council.debate else None)
             bought += 1
             copies_open += 1
             bal = await self.balance(mode)

@@ -156,6 +156,11 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
   explore, drought breaker — books its real results after fees. A strategy that keeps losing (≥ 12 trades, average
   < −1% and confidently below zero) is benched for 20+ min, probed with small trades, and un-benched when the probes
   pay; winners get up to 1.8× size. It's how the bot "takes out what isn't working" from live results.
+- **Top-wallet influxes are judged, not copied**: when several top wallets pile into one coin, the brains see the
+  pile-in itself — how good the wallets are, how fast they came, whether the price already ran since the first one
+  bought (late = exit liquidity), and how copying these wallets has gone before — and vote. Every influx gets a
+  visible verdict in the log ("🐋 4 top wallets into $X — the Nebula is in / passed" with each brain's vote), and
+  every influx it passes on is followed as a ghost so it learns whether passing was right.
 - **Second wave**: research shows devs and their bundles took $579M+ vs snipers' $31.5M and 65% of devs sell inside a
   minute (Bitquery, Oct 2026) — a bot seeing trades seconds late is often exit liquidity. So it also waits out the
   first-minute flush and buys coins that survived it (dip bought back, holders growing, dev and snipers out).

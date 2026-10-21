@@ -371,7 +371,7 @@ type Brain = {
 };
 type Pat = { tag: string; text: string; n: number; win_pct: number; avg_pnl_pct: number };
 const MOOD_TONE: Record<string, string> = { 'on fire': 'text-up', confident: 'text-up', cautious: 'text-warn', discouraged: 'text-down', shaken: 'text-down', 'cooling off': 'text-flash' };
-const LOG_TONE: Record<string, string> = { buy: 'text-up', sell: 'text-warn', learn: 'text-accent', skip: 'text-white/55', error: 'text-down', mode: 'text-flash', reset: 'text-flash' };
+const LOG_TONE: Record<string, string> = { copy: 'text-accent', buy: 'text-up', sell: 'text-warn', learn: 'text-accent', skip: 'text-white/55', error: 'text-down', mode: 'text-flash', reset: 'text-flash' };
 
 function Equity({ pts, start }: { pts: { ts: number; equity: number }[]; start: number }) {
   if (pts.length < 2) return <div className="flex h-[120px] items-center justify-center text-[12px] text-white/35">The equity curve draws itself as it trades.</div>;

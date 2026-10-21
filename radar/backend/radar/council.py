@@ -213,8 +213,10 @@ class Council:
                            "st": {n: [False, 1.0, None] for n in ORDER if not (style in FAST and n == "moon")}}
 
     def ghost(self, mint: str, f: dict[str, float], L: Any, d: dict[str, Any], size: float) -> None:
-        """A trade the council turned down — follow it anyway, so it learns whether saying no was right."""
-        if L is None or not getattr(L, "mcap_sol", None) or self.rng.random() > GHOST_RATE:
+        """A trade the council turned down — follow it anyway, so it learns whether saying no was right. A rejected top-wallet
+        influx is ALWAYS followed (rare, and exactly the call it most needs to get right)."""
+        rate = 1.0 if d.get("style") == "copy" else GHOST_RATE
+        if L is None or not getattr(L, "mcap_sol", None) or self.rng.random() > rate:
             return
         self.open_track(f"g:{mint}:{int(time.time())}", mint, f, L.mcap_sol, size, getattr(L, "vsol", None), d, real=False, sol=size)
 
