@@ -356,7 +356,9 @@ type Brain = {
   skips?: Record<string, number>;
   snipes?: { on: boolean; n: number; wins: number; pnl_sol: number; power: number; per_hour: number; open: number; power_open: number };
   compound?: { start: number; growth_pct: number };
-  timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_exit: number;
+  last_error?: { ts: number; error: string; where?: string } | null; engine_error?: string | null; refills?: number;
+  timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_margin: number;
+    market?: { coins: number; dn_med: number; up_med: number } | null;
     grad_frac: number; active: boolean; up_top: { label: string; w: number }[]; dn_top: { label: string; w: number }[] };
   candidates: { mint: string; symbol?: string; value: number; p_rug?: number; p_up?: number; p_dn?: number; scalp?: number; hard?: string | null; why: string; mcap_usd?: number; age_s?: number; tier?: string; copy_ranks?: string }[];
   log: { ts: number; kind: string; text: string; mint?: string }[]; equity: { ts: number; equity: number }[]; open: Pos[];
@@ -461,7 +463,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <div className="eyebrow">Timing · next 3 min</div>
           <div className="display text-[24px]">{b?.timing?.down?.accuracy != null ? `${b.timing.down.accuracy}%` : '—'} <span className="text-[12px] text-white/45">{b?.timing?.active ? 'live' : 'warming up'}</span></div>
           <div className="num truncate text-[11px] text-white/50" title={`Up: ${(b?.timing?.up_top || []).map((t) => t.label).join(', ')} · Dump: ${(b?.timing?.dn_top || []).map((t) => t.label).join(', ')}`}>
-            {(b?.timing?.down?.trained ?? 0).toLocaleString()} tape lessons · sells at {b?.timing?.dn_exit ?? 62}% dump odds · {b?.timing?.grad_frac ?? 50}% into graduation</div>
+            {(b?.timing?.down?.trained ?? 0).toLocaleString()} tape lessons · sells when dump odds beat the market by +{b?.timing?.dn_margin ?? 12} pts{b?.timing?.market ? ` (typical coin ${b.timing.market.dn_med}%)` : ''} · {b?.timing?.grad_frac ?? 50}% into graduation</div>
         </div>
         <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3">
           <div className="eyebrow">Always learning</div>
@@ -486,6 +488,11 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           {b.scalper.recent_pct != null && <span>last 40 avg <b className={b.scalper.recent_pct >= 0 ? 'text-up' : 'text-down'}>{b.scalper.recent_pct > 0 ? '+' : ''}{b.scalper.recent_pct}%</b></span>}
           <span>open <b>{b.scalper.open}</b> · riding <b className="text-up">{b.scalper.riding}</b></span>
           <span className="text-white/50">bar {Math.round((b.scalper.bar ?? 0) * 100)} · take +{Math.round(((b.scalper.tp ?? 1) - 1) * 100)}% · stop −{Math.round((b.scalper.stop ?? 0) * 100)}% · max {b.scalper.max_s}s</span>
+        </div>
+      )}
+      {b?.last_error && now - b.last_error.ts < 600 && (
+        <div className="mx-6 mt-2 rounded-xl border border-down/30 bg-down/10 px-3 py-2 text-[11.5px] text-down">
+          ⚠️ Last brain error {ago(b.last_error.ts, now)} ago (it keeps trading): {b.last_error.error}{b.last_error.where ? ` — ${b.last_error.where}` : ''}
         </div>
       )}
       {!!b?.skips && Object.keys(b.skips).length > 0 && (

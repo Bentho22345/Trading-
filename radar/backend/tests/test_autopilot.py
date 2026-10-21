@@ -507,12 +507,14 @@ def test_brain_v6_timing_models_learn_the_tape_and_drive_exits(tmp_path):
         await b.tick("auto")
         p = next(p for p in ap.open.values() if p["mode"] == "auto")
         b.dn.n = 500
-        b.cache[coin.mint]["dn"] = 0.7
+        b.market_stats = lambda scored: None                         # a market where the typical coin's dump odds are ~40%
+        b.mkt = {"dn_med": 0.4, "dn_hi": 0.55, "up_med": 0.2, "rug_hi": 0.9, "rug_top": 0.95, "edges": [-0.2, 0.0, 0.2], "n": 10}
+        b.cache[coin.mint]["dn"] = 0.6
         coin.mcap_sol = 40 * 1.1
         ex = b.exit_for(p, coin.result, 1.1, 1.1)
         assert ex and ex[0] == 0.5 and "timing model" in ex[1]
         p["_dn_ts"] = 0
-        b.cache[coin.mint]["dn"] = 0.9
+        b.cache[coin.mint]["dn"] = 0.75
         ex = b.exit_for(p, coin.result, 1.1, 1.1)
         assert ex[0] == 1.0 and p["_exit_kind"] == "model"
         # the timing model also blocks new entries into coins it thinks are about to dump
@@ -674,5 +676,51 @@ def test_power_trades_bet_bigger_with_wider_stops_when_a_coin_floods(tmp_path):
         assert b.scalp_exit(p, flood, {"net_30s": 2, "quiet_s": 1}, None, 1.4, 20, 1.4) is None
         ex = b.scalp_exit(p, calm, {"net_30s": 2, "quiet_s": 1}, None, 1.2, 25, 1.45)
         assert ex and ex[0] == 1.0 and "trailing" in ex[1]
+        await db.close()
+    asyncio.run(run())
+
+
+def test_surreal_still_trades_when_models_calibrate_to_memecoin_base_rates(tmp_path):
+    """Regression: v6 used fixed odds cut-offs. Most memecoins dump, so once the timing / rug models calibrated, almost
+    every coin read 'dump likely' / 'rug likely' and the bot stopped trading. Everything is relative to the market now."""
+    async def run():
+        now = time.time()
+        coins = [_newborn(f"BR{i:02d}mint" + str(i % 10) * 30, now) for i in range(10)]
+        ap, db = await make(tmp_path, coins)
+        b = ap.brain
+        for m, bias in ((b.dn, 0.85), (b.rug, 0.85), (b.up, -1.7)):          # ~70% dump / rug odds, 15% up odds, everywhere
+            m.n = 1000
+            m.w = {k: 0.0 for k in m.w}
+            m.b = bias
+        b.win.b = -6.0
+        assert b.dn.p({}) > 0.65 and b.rug.p({}) > 0.65
+        await b.set_aggression("surreal")
+        await ap.set_mode("auto")
+        await b.tick("auto")
+        assert b.mkt and b.mkt["n"] >= 8, (b.last_error, b.skips, b.diag)
+        bought = [p for p in ap.open.values() if p["mode"] == "auto"]
+        assert len(bought) >= 3, (b.skips, b.last_error)
+        assert b.last_error is None
+        # …but a coin that's clearly worse than the market still gets avoided
+        b.mkt = {**b.mkt, "dn_med": 0.7, "dn_hi": 0.72}
+        assert b.dn_hot(0.9) and not b.dn_hot(0.7)
+        await db.close()
+    asyncio.run(run())
+
+
+def test_brain_errors_never_silently_stop_it_and_an_empty_demo_pot_refills(tmp_path):
+    async def run():
+        coin = launch("ERRRmint" + "1" * 32, upside=60, risk=10, buyers=40)
+        ap, db = await make(tmp_path, [coin])
+        b = ap.brain
+        await ap.set_mode("auto")
+        boom = b._score
+        b._score = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("kaboom"))
+        await b.tick("auto")                                              # doesn't raise
+        assert b.last_error and "kaboom" in b.last_error["error"] and any("error" in k for k in b.skips)
+        b._score = boom
+        await ap._demo_add(-(await ap.demo_balance("auto")) + 0.01, "auto")  # pot drained, nothing open
+        await b.tick("auto")
+        assert any("refilled" in e["text"] for e in b.log) and b.refills == 1
         await db.close()
     asyncio.run(run())

@@ -72,6 +72,7 @@ import math
 import random
 import time
 from array import array
+from bisect import bisect_left
 from collections import deque
 from typing import Any
 
@@ -311,7 +312,8 @@ class Brain:
         self.tsnap: dict[str, dict[str, Any]] = {}          # timing snapshots waiting 3 min for their answer
         self.tlast: dict[str, float] = {}
         self.replay_t: deque[tuple[array, float, float]] = deque(maxlen=4000)
-        self.dn_exit = 0.62                                 # learned: how sure the DOWN model must be before it sells
+        self.dn_margin = 0.12                               # learned: how far above the market's typical dump odds before it sells
+        self.mkt: dict[str, Any] | None = None              # the live market's spread of model odds (everything is judged against it)
         self.scalp_adj = {"bar": 0.0, "tp": 0.0, "stop": 0.0}   # learned offsets on the scalper's entry bar / take-profit / stop
         self.scalp_hist: deque[float] = deque(maxlen=40)    # last scalps' PnL (fraction)
         self.scalp_streak = 0
@@ -413,7 +415,7 @@ class Brain:
         self.smart_follow = float(s.get("smart_follow", 1.0))
         self.patience = float(s.get("patience", 1.0))
         self.copied_sells = int(s.get("copied_sells", 0))
-        self.dn_exit = float(s.get("dn_exit", 0.62))
+        self.dn_margin = float(s.get("dn_margin", 0.12))
         self.scalp_adj.update(s.get("scalp_adj") or {})
         self.scalps.update(s.get("scalps") or {})
         self.snipes.update(s.get("snipes") or {})
@@ -440,7 +442,7 @@ class Brain:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
             "version": 7, "win": self.win.state(), "rug": self.rug.state(),
-            "up": self.up.state(), "dn": self.dn.state(), "dn_exit": round(self.dn_exit, 4), "grad_frac": round(self.grad_frac, 4),
+            "up": self.up.state(), "dn": self.dn.state(), "dn_margin": round(self.dn_margin, 4), "grad_frac": round(self.grad_frac, 4),
             "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "snipes": self.snipes, "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
             "aggression": self.aggression, "mood": round(self.mood, 4), "streak": self.streak, "peak_equity": self.peak_equity,
@@ -471,7 +473,7 @@ class Brain:
     async def reset(self) -> None:
         self.win, self.rug = Logit(PRIORS, BIAS0), Logit(RUG_PRIORS, RUG_BIAS0)
         self.up, self.dn = Logit(UP_PRIORS, -1.6), Logit(DN_PRIORS, -1.6)
-        self.dn_exit, self.grad_frac = 0.62, 0.5
+        self.dn_margin, self.grad_frac = 0.12, 0.5
         self.scalp_adj, self.scalps, self.scalp_streak = {"bar": 0.0, "tp": 0.0, "stop": 0.0}, {"n": 0, "wins": 0, "pnl_sol": 0.0}, 0
         self.snipes = {"n": 0, "wins": 0, "pnl_sol": 0.0, "power": 0}
         self.fast_ts.clear()
@@ -528,6 +530,38 @@ class Brain:
 
     def timing(self, f: dict[str, float]) -> tuple[float, float]:
         return self.up.p(f), self.dn.p(f)
+
+    # Model odds are calibrated to the real base rates — and most memecoins dump and die, so a coin's absolute dump / rug
+    # odds are high almost everywhere. Fixed cut-offs (v6) ended up vetoing nearly every coin and the bot stopped trading.
+    # Everything is judged RELATIVE to the live market instead: avoid the worst slice, buy the best slice.
+    def market_stats(self, scored: list[dict[str, Any]]) -> None:
+        rows = [self.cache[c["mint"]] for c in scored if c["mint"] in self.cache]
+        if len(rows) < 8:
+            self.mkt = None
+            return
+        ups, dns, rugs = [r["up"] for r in rows], [r["dn"] for r in rows], [r["rug"] for r in rows]
+        self.mkt = {"up_med": percentile(ups, 0.5), "dn_med": percentile(dns, 0.5), "dn_hi": percentile(dns, 0.85),
+                    "rug_hi": percentile(rugs, 0.8), "rug_top": percentile(rugs, 0.95), "edges": sorted(u - d for u, d in zip(ups, dns)),
+                    "n": len(rows)}
+
+    def edge_rank(self, up: float, dn: float) -> float:
+        """Where this coin's UP-minus-DOWN odds rank in the live market, 0 (worst) … 1 (best)."""
+        m = self.mkt
+        if not m:
+            return _clip(0.5 + (up - dn), 0, 1)
+        e = m["edges"]
+        return bisect_left(e, up - dn) / max(1, len(e) - 1) if len(e) > 1 else 0.5
+
+    def dn_hot(self, dn: float) -> bool:
+        """Dump odds in the worst slice of the market AND clearly above its typical coin."""
+        m = self.mkt
+        return bool(self.dn.n >= 400 and m and dn >= max(m["dn_hi"], m["dn_med"] + self.dn_margin))
+
+    def rug_hot(self, rug: float, lim: float, top: bool = False) -> bool:
+        if rug < lim:
+            return False
+        m = self.mkt
+        return True if not m else rug >= (m["rug_top"] if top else m["rug_hi"])
 
     def why(self, f: dict[str, float], n: int = 3) -> str:
         contrib = sorted(((self.win.w[k] * f.get(k, 0.0), k) for k in self.win.w), reverse=True)
@@ -705,6 +739,24 @@ class Brain:
 
     # ---------------- main step ----------------
     async def tick(self, mode: str = "auto") -> None:
+        """One step. An error here never silently stops trading: it's counted, shown on the Autopilot page and logged."""
+        try:
+            await self._tick(mode)
+        except Exception as e:  # noqa: BLE001
+            import logging
+            import traceback
+            why = f"{type(e).__name__}: {e}"[:160]
+            self.skip("error: " + why[:60])
+            self.last_error = {"ts": time.time(), "error": why, "where": traceback.format_exc().strip().splitlines()[-2][:200]}
+            logging.getLogger("radar.brain").warning("brain tick: %s", traceback.format_exc())
+            if time.time() - self.last_err_note > 60:
+                self.last_err_note = time.time()
+                await self.note("error", f"⚠️ Brain error (it keeps going): {why}")
+
+    last_error: dict[str, Any] | None = None
+    last_err_note = 0.0
+
+    async def _tick(self, mode: str = "auto") -> None:
         ap = self.ap
         now = time.time()
         self.heal(now)
@@ -748,6 +800,7 @@ class Brain:
                            "why": self.why(f), "f": f, "mcap_usd": r.get("mcap_usd"), "age_s": round(now - L.created), "tier": r.get("tier"),
                            "deployer": L.deployer, "leaders": leaders, "copy_ranks": ranks, "mcap_sol": L.mcap_sol, "r": r})
             self.sample(L, f, v, now)
+        self.market_stats(scored)
         await self.shadow_step(now)
         self.timing_step(now)
         for mint, lesson in self.post_mortem(now):
@@ -786,6 +839,13 @@ class Brain:
             self.skip("max positions open")
             return
         bal = await self.balance(mode)
+        if bal < 0.06 and mode == "auto" and not mine:
+            # demo money only: an empty pot with nothing open would stop it forever — refill it and say so
+            await ap._demo_add(10.0 - bal, "auto")                      # top the balance up; trade history is kept
+            self.peak_equity, self.drawdown = 10.0, 0.0
+            self.refills = getattr(self, "refills", 0) + 1
+            await self.note("mode", f"💸 The demo pot ran dry — refilled to ◎10 (refill #{self.refills}). Real money is never refilled.")
+            bal = await self.balance(mode)
         if bal < 0.06:
             self.skip("out of money")
             if now - self.last_skip_note > 600:
@@ -962,7 +1022,7 @@ class Brain:
         h -= (0.40 * f.get("exhaustion", 0) + 0.40 * f.get("smart_selling", 0) + 0.30 * f.get("dump_candle", 0)
               + 0.20 * f.get("sell_streak", 0) + 0.20 * f.get("liq_drain", 0) + (0.25 * f.get("early_exit", 0) if f.get("mom_30s", 0) < 0.1 else 0))
         if self.up.n >= 400:
-            h = 0.4 * h + 0.6 * _clip(self.up.p(f) * 1.6 - self.dn.p(f), 0, 1)
+            h = 0.4 * h + 0.6 * self.edge_rank(self.up.p(f), self.dn.p(f))
         return round(_clip(h, 0, 1), 3)
 
     def snipe_score(self, L: Any, f: dict[str, float], raw: dict[str, float] | None, age: float) -> float:
@@ -980,7 +1040,7 @@ class Brain:
         h -= (0.5 * f.get("coordinated", 0) + 0.4 * f.get("bundle", 0) + 0.3 * f.get("dev_serial", 0) + 0.3 * f.get("snipers", 0)
               + 0.4 * f.get("dump_candle", 0) + 0.3 * f.get("sell_streak", 0) + 0.3 * f.get("dev_dumping", 0) + (0.4 if r.get("bundled") else 0))
         if self.up.n >= 400:
-            h = 0.45 * h + 0.55 * _clip(self.up.p(f) * 1.6 - self.dn.p(f), 0, 1)
+            h = 0.45 * h + 0.55 * self.edge_rank(self.up.p(f), self.dn.p(f))
         return round(_clip(h, 0, 1), 3)
 
     def power(self, f: dict[str, float]) -> bool:
@@ -1039,10 +1099,10 @@ class Brain:
             return a
         if p_rug is not None:
             lim = AGGRESSION[self.aggression]["rug_veto"] if self.rug.n >= 150 else max(0.8, AGGRESSION[self.aggression]["rug_veto"])
-            if p_rug >= lim:
+            if self.rug_hot(p_rug, lim):
                 return f"rug model {p_rug * 100:.0f}%"
         c = self.cache.get(L.mint)
-        if c and self.dn.n >= 400 and c["dn"] >= self.dn_exit:
+        if c and self.dn_hot(c["dn"]):
             return f"timing model sees a dump ({c['dn'] * 100:.0f}%)"
         return None
 
@@ -1280,7 +1340,7 @@ class Brain:
         if alarm:
             return self._exit(p, 1.0, f"rug pattern: {alarm}", "rug")
         hit = self.cache.get(p["mint"])
-        if hit and self.rug.n >= 300 and hit["rug"] >= 0.85 and x < 2:
+        if hit and self.rug.n >= 300 and self.rug_hot(hit["rug"], 0.85, top=True) and x < 2:
             return self._exit(p, 1.0, f"rug model {hit['rug'] * 100:.0f}% — getting out", "rug")
         stop = self.stop_pct()
         f = (hit or {}).get("f") or {}
@@ -1288,7 +1348,7 @@ class Brain:
         if p.get("ride"):
             if x <= 0.9:
                 return self._exit(p, 1.0, f"ride failed — back below entry ({x:.2f}×)", "stop")
-            if self.dying(f) or (hit and self.dn.n >= 400 and hit["dn"] >= self.dn_exit) or self.smart_selling(p["mint"]) >= 2:
+            if self.dying(f) or (hit and self.dn_hot(hit["dn"])) or self.smart_selling(p["mint"]) >= 2:
                 return self._exit(p, 1.0, f"surge died down — sold the ride at {x:.2f}× (peak {peak_x:.2f}×)", "trail")
             trail = _clip((0.30 if peak_x < 3 else 0.22) * self.trail_mult, 0.12, 0.45)
             if x <= peak_x * (1 - trail):
@@ -1309,9 +1369,9 @@ class Brain:
                                              "exit": L.mcap_sol or 1, "max": L.mcap_sol or 1, "min": L.mcap_sol or 1}
             return self.grad_frac, f"graduated — sold {self.grad_frac * 100:.0f}% into the migration"
         # the timing model sees the next 3 minutes going −15% first
-        if hit and self.dn.n >= 400 and hit["dn"] >= self.dn_exit and now - p.get("_dn_ts", 0) > 30:
+        if hit and self.dn_hot(hit["dn"]) and now - p.get("_dn_ts", 0) > 30:
             p["_dn_ts"] = now
-            if hit["dn"] >= self.dn_exit + 0.15 or x < 1.0:
+            if hit["dn"] >= (self.mkt or {}).get("dn_hi", 0) + 0.1 or x < 1.0:
                 return self._exit(p, 1.0, f"timing model: dump likely ({hit['dn'] * 100:.0f}%) — out", "model")
             return 0.5, f"timing model: dump likely ({hit['dn'] * 100:.0f}%) — took half off"
         if raw and x >= 1.15 and now - p.get("_ape_ts", 0) > 45:
@@ -1383,7 +1443,7 @@ class Brain:
         flipped = raw is not None and (raw.get("net_30s", 0) < 0 or f.get("mom_30s", 0) < 0)
         if x >= 1.04 and flipped:
             return self._exit(p, 1.0, f"scalp: momentum flipped — banked +{(x - 1) * 100:.0f}%", "scalp")
-        if hit and self.dn.n >= 400 and hit["dn"] >= 0.5:
+        if hit and self.dn_hot(hit["dn"]):
             return self._exit(p, 1.0, f"scalp: dump odds {hit['dn'] * 100:.0f}% — out at {x:.2f}×", "scalp")
         if raw and raw.get("quiet_s", 0) > 25 and x < 1.03:
             return self._exit(p, 1.0, "scalp: the tape went quiet", "scalp")
@@ -1450,11 +1510,11 @@ class Brain:
                     a["tp"] = max(-0.04, a["tp"] - 0.002)                # the move was over: bank sooner
             elif w["kind"] == "model":                                # the timing model called a dump
                 if w["max"] >= w["exit"] * 1.3:
-                    self.dn_exit = min(0.85, self.dn_exit + 0.02)
+                    self.dn_margin = min(0.35, self.dn_margin + 0.02)
                     self.exit_stats["model_wrong"] = self.exit_stats.get("model_wrong", 0) + 1
-                    w["lesson"] = f"🤔 The timing model sold ${w['symbol']} and it ran {w['max'] / w['exit']:.1f}× — it needs more certainty now ({self.dn_exit * 100:.0f}%)."
+                    w["lesson"] = f"🤔 The timing model sold ${w['symbol']} and it ran {w['max'] / w['exit']:.1f}× — it needs a clearer signal now (+{self.dn_margin * 100:.0f} pts)."
                 elif dumped or w["min"] <= w["exit"] * 0.85:
-                    self.dn_exit = max(0.5, self.dn_exit - 0.01)
+                    self.dn_margin = max(0.04, self.dn_margin - 0.01)
                     self.exit_stats["model_right"] = self.exit_stats.get("model_right", 0) + 1
             elif w["kind"] == "grad":                                 # sold part into a graduation
                 if w["max"] >= w["exit"] * 1.5:
@@ -1690,7 +1750,8 @@ class Brain:
                                       sorted(self.rug.w.items(), key=lambda kv: -kv[1])[:6]]},
                 "learning": {"lessons_per_hour": per_hour, "replay": len(self.replay) + len(self.replay_t), "rehearsed": self.rehearsed,
                              "models": 4, "signals": len(KEYS)},
-                "timing": {"up": self.up.stats(), "down": self.dn.stats(), "pending": len(self.tsnap), "dn_exit": round(self.dn_exit * 100),
+                "timing": {"up": self.up.stats(), "down": self.dn.stats(), "pending": len(self.tsnap), "dn_margin": round(self.dn_margin * 100), "market": ({"coins": self.mkt["n"], "dn_med": round(self.mkt["dn_med"] * 100),
+                                                                          "up_med": round(self.mkt["up_med"] * 100)} if self.mkt else None),
                            "grad_frac": round(self.grad_frac * 100), "active": self.up.n >= 400,
                            "up_top": [{"key": k, "label": LABELS[k], "w": round(v, 2)} for k, v in sorted(self.up.w.items(), key=lambda kv: -kv[1])[:5]],
                            "dn_top": [{"key": k, "label": LABELS[k], "w": round(v, 2)} for k, v in sorted(self.dn.w.items(), key=lambda kv: -kv[1])[:5]]},
@@ -1714,5 +1775,6 @@ class Brain:
                 "weights": [{"key": k, "label": LABELS[k], "w": round(v, 3), "prior": PRIORS[k]} for k, v in
                             sorted(self.win.w.items(), key=lambda kv: -abs(kv[1]))],
                 "candidates": self.public_candidates(), "log": list(self.log)[:150], "equity": eq[::-1], "copies": copies,
-                "diag": self.diag, "sizing": self.stats_cache,
+                "diag": self.diag, "sizing": self.stats_cache, "last_error": self.last_error, "refills": getattr(self, "refills", 0),
+                "engine_error": (self.ap.stats or {}).get("last_error"),
                 "balance": await self.ap.demo_balance("auto"), "summary": await self.ap.summary("auto")}

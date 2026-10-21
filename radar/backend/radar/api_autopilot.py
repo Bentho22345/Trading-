@@ -57,6 +57,8 @@ class AggBody(BaseModel):
 @router.post("/brain/aggression")
 async def brain_aggression(b: AggBody) -> dict[str, Any]:
     await S.autopilot.brain.set_aggression(b.level)
+    if S.autopilot.c["mode"] == "off":                       # picking a level means "go": start self-driving (demo money)
+        await S.autopilot.set_mode("auto")
     return await S.autopilot.brain.snapshot()
 
 
