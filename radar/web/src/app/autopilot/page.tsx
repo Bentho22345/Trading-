@@ -357,6 +357,7 @@ type Brain = {
   snipes?: { on: boolean; n: number; wins: number; pnl_sol: number; power: number; per_hour: number; open: number; power_open: number };
   compound?: { start: number; growth_pct: number };
   bars?: Record<string, number>; idle_s?: number | null;
+  verdict?: { state: string; text: string; [k: string]: any };
   last_error?: { ts: number; error: string; where?: string } | null; engine_error?: string | null; refills?: number;
   timing?: { up: { trained: number; accuracy: number | null }; down: { trained: number; accuracy: number | null }; pending: number; dn_margin: number;
     market?: { coins: number; dn_med: number; up_med: number } | null;
@@ -472,6 +473,18 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <div className="num text-[11px] text-white/50">{(b?.learning?.replay ?? 0).toLocaleString()} remembered · {(b?.learning?.rehearsed ?? 0).toLocaleString()} rehearsals · {b?.learning?.signals ?? 0} signals</div>
         </div>
       </div>
+      {b?.verdict && (
+        <div className={`mx-6 mt-3 flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3 text-[13px] ${b.verdict.state === 'trading' ? 'border-up/30 bg-up/[0.07] text-up' : 'border-warn/40 bg-warn/[0.08] text-warn'}`}>
+          <b className="uppercase tracking-wide">{b.verdict.state === 'trading' ? '● Trading' : '● Not trading'}</b>
+          <span className="flex-1 text-white/85">{b.verdict.text}</span>
+          <span className="num text-[11px] text-white/45">launches/min {b.verdict.launches_60s ?? '—'} · new coins trading {b.verdict.newborn_traded ?? '—'}/{b.verdict.newborn ?? '—'} · live tapes {b.verdict.live_tapes ?? '—'} · trade subs {b.verdict.trade_subs ?? '—'}</span>
+          <button onClick={() => { const txt = JSON.stringify({ verdict: b.verdict, skips: b.skips, bars: b.bars, idle_s: b.idle_s, diag: b.diag, mood: b.mood,
+              scalper: b.scalper, snipes: b.snipes, last_error: b.last_error, engine_error: b.engine_error, aggression: b.aggression, mode: b.mode,
+              timing: b.timing && { up: b.timing.up, down: b.timing.down, market: b.timing.market }, log: (b.log || []).slice(0, 12).map((e) => e.text) }, null, 1);
+            navigator.clipboard?.writeText(txt).then(() => alert('Diagnostics copied — paste them to Claude.')).catch(() => prompt('Copy this:', txt)); }}
+            className="rounded-full border border-white/20 px-3 py-1 text-[11.5px] font-bold text-white/80 hover:text-white">Copy diagnostics</button>
+        </div>
+      )}
       {b?.snipes?.on && (
         <div className="num mx-6 mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 rounded-2xl border border-accent/40 bg-gradient-to-r from-accent/[0.12] to-flash/[0.08] px-4 py-2.5 text-[12px]">
           <span className="font-extrabold text-accent">✦ Surreal · sniper-compounder</span>

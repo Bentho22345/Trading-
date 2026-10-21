@@ -91,7 +91,8 @@ class Tracker:
         self.tasks: list[asyncio.Task] = []
         self.extra = Extra()
         self.flash_tokens: dict[str, float] = {}
-        self.launch_watch: dict[str, float] = {}       # mint -> until (first-90s trade capture)       # address -> until (max refresh rate during FLASH)
+        self.launch_watch: dict[str, float] = {}       # mint -> until (first-90s trade capture)
+        self.born: dict[str, float] = {}               # mint -> launch time: newborns always get a trade subscription first
         # hooks wired by the app: trade(t), tokens(rows), safety(rep), social(event), custom(item)
         self.hooks: dict[str, list] = {"trade": [], "tokens": [], "safety": [], "social": [], "new_token": [], "news": [],
                                          "launch": [], "graduated": [], "trending_first": []}
@@ -180,6 +181,7 @@ class Tracker:
                                     "vsol": m.get("vSolInBondingCurve"), "signature": m.get("signature")})
         # watch every launch's first 90s of trades (sniper / bundle detection), on the one shared socket
         self.launch_watch[mint] = now + 90
+        self.born[mint] = now
         if self.pump.ws is not None and mint not in self.pump.token_subs:
             self.pump.token_subs.add(mint)
             await self.pump.send({"method": "subscribeTokenTrade", "keys": [mint]})
@@ -545,7 +547,13 @@ class Tracker:
                 now = time.time()
                 self.launch_watch = {k: v for k, v in self.launch_watch.items() if v > now}
                 want: list[str] = list(hub.viewed_tokens()) + list(self.flash_tokens)
-                want += sorted(self.launch_watch, key=lambda k: -self.launch_watch[k])
+                # brand-new launches first (their first 90 s is what the sniper and Surreal trade on), then the rest by
+                # how long they're watched — before, 6-hour holds and called coins pushed newborns past the cap
+                self.born = {k: t for k, t in self.born.items() if now - t < 120}
+                newborn = sorted(self.born, key=lambda k: -self.born[k])
+                want += newborn
+                nb = set(newborn)
+                want += sorted((k for k in self.launch_watch if k not in nb), key=lambda k: -self.launch_watch[k])
                 want += [r["address"] for r in await self.db.all("SELECT address FROM watchlist")]
                 want += [r["address"] for r in await self.db.all(
                     "SELECT t.address FROM tokens t LEFT JOIN pairs p ON p.pair_address=t.best_pair "

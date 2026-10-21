@@ -748,3 +748,27 @@ def test_surreal_never_goes_silent_after_its_bar_ratchets_up(tmp_path):
         assert b.scalp_adj["bar"] < a0
         await db.close()
     asyncio.run(run())
+
+
+def test_verdict_names_the_empty_stage_of_the_pipeline(tmp_path):
+    async def run():
+        now = time.time()
+        born = launch("NBRNmint" + "1" * 32, upside=20, risk=10, buyers=0)
+        born.created = now - 5
+        born.trades = []                                                 # a launch arrived but none of its trades did
+        ap, db = await make(tmp_path, [born])
+        b = ap.brain
+        assert b.verdict()["state"] == "off"                             # self-driving not started
+        await ap.set_mode("auto")
+        await b.tick("auto")
+        v = b.verdict()
+        assert v["state"] == "feed" and "trades" in v["text"], v
+        coins = [_newborn(f"VD{i:02d}mint" + str(i % 10) * 30, now) for i in range(6)]
+        for L in coins:
+            ap.sniper.launches[L.mint] = L
+        ap.sniper.launches.pop(born.mint)
+        b.last_buy_ts = 0
+        await b.tick("auto")
+        assert b.verdict()["state"] == "trading", b.verdict()
+        await db.close()
+    asyncio.run(run())

@@ -325,6 +325,7 @@ class Brain:
         self.skips_prev: dict[str, int] = {}
         self.skips_ts = 0.0
         self.bars: dict[str, float] = {}
+        self.pipe: dict[str, Any] = {}
         self.last_tick_ts = time.time()
         self.grad_frac = 0.5                                # learned: how much it sells into a graduation
         self.aggression = "surreal"
@@ -808,6 +809,12 @@ class Brain:
                            "deployer": L.deployer, "leaders": leaders, "copy_ranks": ranks, "mcap_sol": L.mcap_sol, "r": r})
             self.sample(L, f, v, now)
         self.market_stats(scored)
+        nb = [L for L in allL if now - L.created < 45]
+        self.pipe = {"ts": now, "launches": len(launches), "launches_60s": sum(1 for L in allL if now - L.created < 60),
+                     "newborn": len(nb), "newborn_traded": sum(1 for L in nb if getattr(L, "trades", None)),
+                     "newborn_2buyers": sum(1 for L in nb if len(getattr(L, "buyers", None) or {}) >= 2),
+                     "live_tapes": sum(1 for L in allL if getattr(L, "trades", None) and L.trades[-1][0] > now - 30),
+                     "scored": len(scored), "blocked": None}
         await self.shadow_step(now)
         self.timing_step(now)
         for mint, lesson in self.post_mortem(now):
@@ -842,8 +849,10 @@ class Brain:
         mine = [p for p in ap.open.values() if p["mode"] == mode]
         max_open = agg["max_open"] if mode == "auto" else min(agg["max_open"], ap.c["size"]["max_open"])
         max_open = max(2, round(max_open * min(1.0, (0.85 if agg.get("snipe") else 0.4) + 0.6 * mf)))   # surreal keeps its slots
+        self.pipe.update(open=len(mine), slots=max_open)
         if len(mine) >= max_open:
             self.skip("max positions open")
+            self.pipe["blocked"] = f"all {max_open} position slots are full"
             return
         bal = await self.balance(mode)
         if bal < 0.06 and mode == "auto" and not mine:
@@ -853,8 +862,10 @@ class Brain:
             self.refills = getattr(self, "refills", 0) + 1
             await self.note("mode", f"💸 The demo pot ran dry — refilled to ◎10 (refill #{self.refills}). Real money is never refilled.")
             bal = await self.balance(mode)
+        self.pipe["balance"] = round(bal, 4)
         if bal < 0.06:
             self.skip("out of money")
+            self.pipe["blocked"] = f"out of money (◎{bal:.3f})"
             if now - self.last_skip_note > 600:
                 self.last_skip_note = now
                 await self.note("skip", "💸 Out of money — reset the brain (demo) or top up the trading wallet (real).")
@@ -918,6 +929,7 @@ class Brain:
             fresh.sort(key=lambda t: -t[0])
             bar = self.rel_bar(sn["bar"], [t[0] for t in fresh], 0.5)
             self.bars["snipe"] = bar
+            self.pipe.update(snipe_candidates=len(fresh), best_snipe=round(fresh[0][0], 3) if fresh else None)
             for sc_, L, hit in fresh:
                 if bought >= room or bal < 0.06:
                     break
@@ -989,6 +1001,7 @@ class Brain:
         scalpable = sorted((c for c in scored if c["scalp"] > 0), key=lambda c: -c["scalp"])
         sbar = self.rel_bar(AGGRESSION[self.aggression]["scalp"]["bar"], [c["scalp"] for c in scalpable], 0.3) * (1.1 if cooling else 1.0)
         self.bars["scalp"] = sbar
+        self.pipe.update(scalpable=len(scalpable), best_scalp=round(scalpable[0]["scalp"], 3) if scalpable else None)
         sc = {**sc, "bar": sbar}
         for c in scalpable:
             if bought >= room or bal < 0.06:
@@ -1754,6 +1767,45 @@ class Brain:
         return [{k: c.get(k) for k in ("mint", "symbol", "value", "p_rug", "p_up", "p_dn", "scalp", "hard", "why", "mcap_usd", "age_s", "tier", "copy_ranks")}
                 for c in self.candidates]
 
+    def verdict(self) -> dict[str, Any]:
+        """Plain-English: is it trading, and if not, exactly which stage of the pipeline is empty."""
+        ap, p, now = self.ap, self.pipe, time.time()
+        mode = ap.c.get("mode")
+        pump = getattr(getattr(ap.tracker, "pump", None), "ws", "n/a")
+        subs = len(getattr(getattr(ap.tracker, "pump", None), "token_subs", ()) or ())
+        idle = now - self.last_buy_ts if self.last_buy_ts else None
+        top_skip = max((self.skips or self.skips_prev or {"": 0}).items(), key=lambda kv: kv[1])[0]
+        info = {"mode": mode, "pumpportal_connected": None if pump == "n/a" else pump is not None,
+                "trade_subs": subs, "idle_s": round(idle) if idle is not None else None, "top_skip": top_skip, **p}
+        def out(state: str, text: str) -> dict[str, Any]:
+            return {"state": state, "text": text, **info}
+        if mode != "auto" and not (mode == "real" and ap.c.get("real_engine") == "brain"):
+            return out("off", f"Self-driving isn't running (Autopilot mode is '{mode}'). Press Start or pick a level.")
+        if not p or now - p.get("ts", 0) > 15:
+            return out("stalled", "The brain hasn't run for a while — the Autopilot loop is stuck. See the engine error below.")
+        if pump is None:
+            return out("feed", "Not connected to PumpPortal — no launches or trades can arrive. Check the Health page.")
+        if not p.get("launches_60s"):
+            return out("feed", "No new pump.fun launches reached the server in the last minute (PumpPortal). Check the Health page.")
+        if p.get("newborn") and not p.get("newborn_traded"):
+            return out("feed", f"{p['newborn']} new launches arrived but none of their trades did — the trade subscriptions aren't "
+                               f"delivering ({subs} active). Without trades there's nothing to snipe.")
+        if p.get("blocked"):
+            return out("blocked", f"Not buying: {p['blocked']}.")
+        if idle is not None and idle < 60:
+            return out("trading", f"Trading — last buy {idle:.0f}s ago.")
+        if p.get("snipe_candidates") == 0 and not p.get("scalpable"):
+            return out("nothing", f"Launches and trades are arriving ({p.get('newborn_traded', 0)} new coins trading), but none pass the "
+                                  f"snipe / scalp read yet. Most common reason: {top_skip or 'n/a'}.")
+        return out("waiting", f"Candidates are there (best snipe {p.get('best_snipe')}, bar {self.bars.get('snipe')}) but every one was "
+                              f"blocked — most common reason: {top_skip or 'n/a'}.")
+
+    def _safe_verdict(self) -> dict[str, Any]:
+        try:
+            return self.verdict()
+        except Exception as e:  # noqa: BLE001
+            return {"state": "unknown", "text": f"diagnostics failed: {e}"}
+
     def mood_public(self) -> dict[str, Any]:
         now = time.time()
         return {"value": round(self.mood_factor(), 2), "word": self.mood_word(), "streak": self.streak,
@@ -1801,6 +1853,7 @@ class Brain:
                              "open": sum(1 for p in self.ap.open.values() if p.get("style") == "scalp"),
                              "riding": sum(1 for p in self.ap.open.values() if p.get("ride")), "streak": self.scalp_streak,
                              "recent_pct": round(sum(self.scalp_hist) / len(self.scalp_hist) * 100, 2) if self.scalp_hist else None}),
+                "verdict": self._safe_verdict(),
                 "bars": {k: round(v * 100) for k, v in self.bars.items()}, "idle_s": round(now - self.last_buy_ts) if self.last_buy_ts else None,
                 "snipes": {**self.snipes, "on": bool(AGGRESSION[self.aggression].get("snipe")),
                            "per_hour": sum(1 for t in self.fast_ts if t > now - 3600),
