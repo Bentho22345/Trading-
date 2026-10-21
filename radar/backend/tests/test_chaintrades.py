@@ -137,7 +137,9 @@ def test_feed_supervisor_starts_the_chain_feed_when_pumpportal_trades_are_silent
         now = _t.time()
         assert await tr.feed_check(now, now - 100) == "idle"            # no launches yet: nothing to do
         tr.born = {"A": now - 5, "B": now - 20}                         # launches arriving, PumpPortal trades silent
-        assert await tr.feed_check(now, now - 10) == "idle"             # give PumpPortal 40 s after startup first
+        tr.pump.has_key = True
+        assert await tr.feed_check(now, now - 10) == "idle"             # with a key, give PumpPortal 40 s after startup first
+        tr.pump.has_key = False
         assert await tr.feed_check(now, now - 100) == "started"
         await asyncio.sleep(0)
         assert runs == [1] and await tr.feed_check(now, now - 100) == "running"

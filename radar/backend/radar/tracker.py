@@ -18,7 +18,7 @@ from .adapters.extra import Extra
 from .adapters.geckoterminal import GeckoTerminal
 from .adapters.market import Market
 from .adapters.chaintrades import ChainTrades
-from .adapters.pumpportal import PumpPortal
+from .adapters.pumpportal import AltTrades, PumpPortal
 from .adapters.rugcheck import RugCheck
 from .config import settings
 from .db import DB
@@ -84,8 +84,11 @@ class Tracker:
         self.market = Market()
         self.pump = PumpPortal(self.on_create, self.on_trade, self.on_migrate)
         # free fallback when PumpPortal's trade stream is silent (it needs an API key since May 2026)
-        self.chain = ChainTrades(self.on_trade, lambda: self.pump.token_subs)
+        self.chain = ChainTrades(self.on_trade, lambda: self.pump.token_subs, wallets=lambda: self.pump.account_subs)
         self.chain_task: asyncio.Task | None = None
+        import os as _os
+        self.alt = AltTrades(self.on_trade, _os.environ.get("PUMP_ALT_WS_URL", "wss://pumpdev.io/ws"))
+        self.alt_task: asyncio.Task | None = None
         self.chain_since = 0.0
         self._sigs: set[str] = set()
         self._sig_q: list[str] = []
@@ -578,6 +581,10 @@ class Tracker:
                     "ORDER BY COALESCE(p.vol_m5,0) DESC LIMIT ?", (time.time() - 3600, time.time() - 600,
                                                                   settings.max_trade_subscriptions))]
                 await self.pump.set_token_trades(list(dict.fromkeys(want)))
+                if self.alt_task is not None and not self.alt_task.done():       # mirror onto the fallback trade feed
+                    await self.alt.set_token_trades(list(dict.fromkeys(want)))
+                    if self.alt.account_subs != self.pump.account_subs:
+                        await self.alt.set_account_trades(set(self.pump.account_subs))
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -593,7 +600,7 @@ class Tracker:
         on-chain feed (Helius / Solana RPC logs); once PumpPortal trades flow again, stop it to save CPU."""
         started = time.time()
         while True:
-            await asyncio.sleep(15)
+            await asyncio.sleep(5)
             try:
                 await self.feed_check(time.time(), started)
             except asyncio.CancelledError:
@@ -607,26 +614,36 @@ class Tracker:
         pp = self.pump.trade_rate(90)
         launches = sum(1 for t in self.born.values() if now - t < 90)
         running = self.chain_task is not None and not self.chain_task.done()
-        need = mode == "on" or (mode == "auto" and now - started > 40 and pp == 0 and launches > 0)
+        # no PumpPortal key = PumpPortal will never stream trades: start the chain feed as soon as launches arrive
+        grace = 0 if not self.pump.has_key else 40
+        need = mode == "on" or (mode == "auto" and now - started > grace and pp == 0 and launches > 0)
         if need and not running:
             log.warning("trade feed: PumpPortal delivered %d trades in 90s for %d new launches — starting the on-chain "
-                        "trade feed (%s)", pp, launches, self.chain.url.split("?")[0])
+                        "trade feed (%s) and the alternate feed (%s)", pp, launches, self.chain.url.split("?")[0], self.alt.url)
             self.chain._stop = False
             self.chain_task = asyncio.get_running_loop().create_task(self.chain.run())
+            if os.environ.get("PUMP_ALT_WS_URL", "x") and (self.alt_task is None or self.alt_task.done()):
+                self.alt._stop = False
+                self.alt.token_subs, self.alt.account_subs = set(self.pump.token_subs), set(self.pump.account_subs)
+                self.alt_task = asyncio.get_running_loop().create_task(self.alt.run())
             self.chain_since = now
             return "started"
         if running and mode != "on" and (mode == "off" or (pp > 30 and now - self.chain_since > 300)):
-            log.warning("trade feed: PumpPortal trades are flowing — stopping the on-chain feed")
-            self.chain.stop()
-            if self.chain.ws is not None:
-                await self.chain.ws.close()
+            log.warning("trade feed: PumpPortal trades are flowing — stopping the fallback feeds")
+            for feed in (self.chain, self.alt):
+                feed.stop()
+                if feed.ws is not None:
+                    await feed.ws.close()
             return "stopped"
         return "running" if running else "idle"
 
     def feed_status(self) -> dict[str, Any]:
         running = self.chain_task is not None and not self.chain_task.done()
+        alt_running = self.alt_task is not None and not self.alt_task.done()
         return {"pumpportal_key": self.pump.has_key, "pumpportal_trades_90s": self.pump.trade_rate(90),
-                "pumpportal_est_cost_sol_today": self.pump.est_cost_sol_today(), "chain_running": running, "chain": self.chain.snapshot()}
+                "pumpportal_est_cost_sol_today": self.pump.est_cost_sol_today(), "chain_running": running, "chain": self.chain.snapshot(),
+                "alt_running": alt_running, "alt": {"endpoint": self.alt.url, "connected": self.alt.ws is not None,
+                                                    "trades_90s": self.alt.trade_rate(90)}}
 
     async def prune(self) -> None:
         cut = time.time() - settings.retention_hours * 3600

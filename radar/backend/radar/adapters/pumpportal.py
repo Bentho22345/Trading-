@@ -111,3 +111,24 @@ class PumpPortal(Stream):
             await self.send({"method": "unsubscribeTokenTrade", "keys": sorted(drop)})
         if add:
             await self.send({"method": "subscribeTokenTrade", "keys": sorted(add)})
+
+
+alt_health = register(Health("pumpalt", "stream", "Alternate PumpPortal-compatible trade feed (free fallback, e.g. pumpdev.io)"))
+alt_health.stale_after = 120
+
+
+class AltTrades(PumpPortal):
+    """A second, PumpPortal-protocol websocket used ONLY for trades (token + account subscriptions) while PumpPortal's own
+    trade stream is silent. New launches keep coming from PumpPortal (free there), so creates here are ignored."""
+
+    def __init__(self, on_trade: Handler, url: str):
+        async def _noop(_m: dict[str, Any]) -> None:
+            return None
+        super().__init__(_noop, on_trade, _noop)
+        self.health = alt_health
+        self.url = self.base_url = url
+
+    async def on_open(self) -> None:
+        if self.token_subs:
+            await self.send({"method": "subscribeTokenTrade", "keys": sorted(self.token_subs)})
+        await self._chunked("subscribeAccountTrade", self.account_subs)

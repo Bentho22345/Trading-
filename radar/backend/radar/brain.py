@@ -164,8 +164,8 @@ AGGRESSION = {   # top-share of what it sees that it will buy, max positions, st
     # SURREAL: a sniper-compounder. It snipes brand-new coins in their first seconds on its own read, banks quick profits
     # on small caps, re-enters, and sizes every trade off the CURRENT balance so profit compounds. Coins with volume,
     # liquidity or holders flooding in get a bigger bet with a wider stop / target ("power" trades).
-    "surreal": {"top": 0.35, "max_open": 60, "stop": 0.20, "base": 0.015, "floor": 0, "cooldown": 0.1, "copy_rank": 50, "rug_veto": 0.75,
-                "cool_s": 45, "burst": 6, "stall_s": 120, "time_s": 600, "ladder": "quick",
+    "surreal": {"top": 0.35, "max_open": 80, "stop": 0.20, "base": 0.015, "floor": 0, "cooldown": 0.1, "copy_rank": 50, "rug_veto": 0.75,
+                "cool_s": 45, "burst": 8, "stall_s": 120, "time_s": 600, "ladder": "quick",
                 "scalp": {"bar": 0.36, "size": 0.012, "tp": 1.10, "stop": 0.08, "max_s": 90},
                 "snipe": {"bar": 0.40, "size": 0.012, "max_age": 45, "tp": 1.15, "stop": 0.10, "max_s": 75}},
 }
@@ -422,6 +422,24 @@ class Brain:
         self.scalp_adj.update(s.get("scalp_adj") or {})
         if ver < 8:
             self.scalp_adj["bar"] = 0.0                 # v8: clear the ratcheted-up bar left behind by older versions
+        if ver < 9:
+            # v9: PumpPortal stopped streaming trades without an API key (May 2026), so everything learned since was learned
+            # from coins whose price never moved — noise. Start the models and pattern memory fresh on a live feed.
+            self.win, self.rug = Logit(PRIORS, BIAS0), Logit(RUG_PRIORS, RUG_BIAS0)
+            self.up, self.dn = Logit(UP_PRIORS, -1.6), Logit(DN_PRIORS, -1.6)
+            self.shadow_trained = self.shadow_hits = self.rug_seen = self.rehearsed = 0
+            self.tags, self.base = {}, [0.0, 0.0, 0.0]
+            self.scalp_adj = {"bar": 0.0, "tp": 0.0, "stop": 0.0}
+            self.stop_mult = self.trail_mult = self.patience = self.smart_follow = 1.0
+            self.dn_margin, self.grad_frac, self.mood, self.streak = 0.12, 0.5, 1.0, 0
+            self.replay.clear()
+            self.replay_t.clear()
+            self.fresh_start = True
+            try:
+                await self.ap.db.exec("DELETE FROM brain_examples")
+            except Exception:  # noqa: BLE001
+                pass
+            return
         self.scalps.update(s.get("scalps") or {})
         self.snipes.update(s.get("snipes") or {})
         self.grad_frac = float(s.get("grad_frac", 0.5))
@@ -446,7 +464,7 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "version": 8, "win": self.win.state(), "rug": self.rug.state(),
+            "version": 9, "win": self.win.state(), "rug": self.rug.state(),
             "up": self.up.state(), "dn": self.dn.state(), "dn_margin": round(self.dn_margin, 4), "grad_frac": round(self.grad_frac, 4),
             "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "snipes": self.snipes, "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
@@ -765,6 +783,11 @@ class Brain:
         ap = self.ap
         now = time.time()
         dt, self.last_tick_ts = now - self.last_tick_ts, now
+        if getattr(self, "fresh_start", False):
+            self.fresh_start = False
+            await self.save()
+            await self.note("reset", "🧠 Fresh brain: the trade feed was down (PumpPortal needs an API key for trades since May 2026), so "
+                                     "everything it learned came from coins that never moved. Models reset — it relearns from live trades now.")
         if now - self.last_buy_ts > 20 and self.scalp_adj["bar"] > 0:   # idle: its pickiness fades back so it never goes silent
             self.scalp_adj["bar"] = max(0.0, self.scalp_adj["bar"] * 0.97 ** min(dt, 5))
         self.heal(now)
@@ -1288,6 +1311,9 @@ class Brain:
 
     # ---------------- shadow learning: every coin it scored is a lesson ----------------
     def sample(self, L: Any, f: dict[str, float], v: float, now: float) -> None:
+        tape = getattr(L, "trades", None)
+        if tape is not None and not tape:
+            return                                          # no trades seen = no information: never learn "nothing happened"
         k, last = self.sampled.get(L.mint, (0, 0.0))
         if k >= 4 or not L.mcap_sol or len(self.shadow) >= 2500 or (k and now - last < 180):
             return
@@ -1342,6 +1368,9 @@ class Brain:
 
     # ---------------- timing models: the tape's next 3 minutes ----------------
     def timing_sample(self, L: Any, f: dict[str, float], now: float) -> None:
+        tape = getattr(L, "trades", None)
+        if tape is not None and not tape:
+            return
         if not L.mcap_sol or now - self.tlast.get(L.mint, 0) < 30 or len(self.tsnap) >= 3000:
             return
         self.tlast[L.mint] = now

@@ -772,3 +772,28 @@ def test_verdict_names_the_empty_stage_of_the_pipeline(tmp_path):
         assert b.verdict()["state"] == "trading", b.verdict()
         await db.close()
     asyncio.run(run())
+
+
+def test_v9_resets_models_learned_on_a_dead_feed_and_never_learns_from_empty_tapes(tmp_path):
+    from radar.brain import BIAS0, Brain
+
+    async def run():
+        from collections import deque
+        now = time.time()
+        quiet = launch("QUIEmint" + "1" * 32, upside=40, risk=10, buyers=0)
+        quiet.trades = deque()                                           # a coin whose trades never arrived
+        ap, db = await make(tmp_path, [quiet])
+        await ap.cfg.kv_set("brain:state", {"version": 8, "win": {"w": {"upside": -5.0}, "b": -7.9, "n": 9000},
+                                            "up": {"w": {}, "b": -7.5, "n": 2070}, "dn": {"w": {}, "b": -7.5, "n": 2070},
+                                            "shadow_trained": 5000, "scalp_adj": {"bar": 0.3, "tp": 0, "stop": 0}, "aggression": "surreal"})
+        b = Brain(ap)
+        await b.load()
+        assert b.win.b == BIAS0 and b.win.n == 0 and b.up.n == 0 and b.shadow_trained == 0 and b.scalp_adj["bar"] == 0
+        assert b.aggression == "surreal" and b.fresh_start
+        ap.brain = b
+        await ap.set_mode("auto")
+        await b.tick("auto")
+        assert any("Fresh brain" in e["text"] for e in b.log) and not b.fresh_start
+        assert quiet.mint not in b.shadow and not b.tsnap                # nothing learned from a coin with no trades
+        await db.close()
+    asyncio.run(run())

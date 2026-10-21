@@ -55,14 +55,19 @@ def ws_url(helius_key: str | None) -> str:
 
 
 class ChainTrades(Stream):
-    def __init__(self, on_trade: Callable[[dict[str, Any]], Awaitable[None]], wanted: Callable[[], set[str]], helius_key: str | None = None):
+    def __init__(self, on_trade: Callable[[dict[str, Any]], Awaitable[None]], wanted: Callable[[], set[str]], helius_key: str | None = None,
+                 wallets: Callable[[], set[str]] | None = None):
         super().__init__(ws_url(helius_key), health)
         self.on_trade, self.wanted = on_trade, wanted
+        self.wallets = wallets or (lambda: set())          # top / smart / followed wallets: their trades on ANY coin (copy-trading)
+        self.helius_key = helius_key
+        self.fails = 0
         self.decoded = 0
         self.forwarded = 0
         self.recent: deque[float] = deque(maxlen=20000)
 
     def set_helius(self, key: str | None) -> None:
+        self.helius_key = key
         url = ws_url(key)
         if url != self.url:
             self.url = url
@@ -70,6 +75,7 @@ class ChainTrades(Stream):
                 __import__("asyncio").get_running_loop().create_task(self.ws.close())
 
     async def on_open(self) -> None:
+        self.fails = 0
         await self.send({"jsonrpc": "2.0", "id": 1, "method": "logsSubscribe",
                          "params": [{"mentions": [PUMP_PROGRAM]}, {"commitment": "processed"}]})
 
@@ -79,7 +85,7 @@ class ChainTrades(Stream):
         v = ((msg.get("params") or {}).get("result") or {}).get("value") or {}
         if v.get("err"):
             return
-        want = None
+        want = wal = None
         k = 0
         for line in v.get("logs") or ():
             if not line.startswith("Program data: "):
@@ -96,12 +102,54 @@ class ChainTrades(Stream):
             self.decoded += 1
             want = want if want is not None else self.wanted()
             if t["mint"] not in want:
-                continue
+                wal = wal if wal is not None else self.wallets()
+                if t["traderPublicKey"] not in wal:
+                    continue
             t["signature"] = v.get("signature") if not k else f"{v.get('signature')}:{k}"   # same id PumpPortal uses → no double count
             k += 1
             self.forwarded += 1
             self.recent.append(time.time())
             await self.on_trade(t)
+
+    async def run(self) -> None:
+        """Like Stream.run, but fails over between Helius and the public RPC if one keeps refusing the connection."""
+        import asyncio
+        import random
+
+        import websockets
+        backoff = 1.0
+        while not self._stop:
+            try:
+                async with websockets.connect(self.url, ping_interval=20, ping_timeout=20, open_timeout=15, max_size=2**23) as ws:
+                    self.ws = ws
+                    self.health.connected = True
+                    self.health.ok()
+                    backoff = 1.0
+                    await self.on_open()
+                    async for raw in ws:
+                        self.health.messages += 1
+                        self.health.last_ok = time.time()
+                        try:
+                            await self.on_message(__import__("json").loads(raw))
+                        except Exception:  # noqa: BLE001 - one bad message must not kill the stream
+                            log.exception("chaintrades: handler error")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                self.health.fail(f"{type(e).__name__}: {e}")
+                self.fails += 1
+                if self.fails >= 3 and not os.environ.get("SOLANA_WS_URL"):
+                    helius = ws_url(self.helius_key)
+                    self.url = "wss://api.mainnet-beta.solana.com" if self.url == helius and self.helius_key else helius
+                    self.fails = 0
+                    log.warning("chaintrades: switching endpoint to %s", self.url.split("?")[0])
+            finally:
+                self.ws = None
+                self.health.connected = False
+            if self._stop:
+                break
+            await asyncio.sleep(backoff + random.random())
+            backoff = min(backoff * 2, 30)
 
     def rate(self, window: float = 60) -> int:
         cut = time.time() - window

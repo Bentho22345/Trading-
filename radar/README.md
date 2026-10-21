@@ -205,7 +205,10 @@ coin looks buyer-less and the sniper / Autopilot can't act. Radar handles this t
 - **Free, automatic**: if PumpPortal delivers no trades while launches arrive, Radar starts an on-chain trade feed —
   one `logsSubscribe` on the pump.fun program, decoding its `TradeEvent` (side, SOL, tokens, trader, curve reserves).
   It uses your Helius websocket when Helius is connected (recommended), else `SOLANA_WS_URL` / the public RPC.
-  It stops itself if PumpPortal trades come back. `CHAIN_TRADES=on|off|auto` overrides.
+  It starts within seconds when no PumpPortal key is set, also forwards trades by your top / smart / followed wallets
+  (copy-trading), fails over between Helius and the public RPC, and stops itself if PumpPortal trades come back.
+  A second PumpPortal-compatible feed (`PUMP_ALT_WS_URL`, default pumpdev.io; empty disables) runs alongside it.
+  `CHAIN_TRADES=on|off|auto` overrides. The brain never learns from coins whose trades it can't see.
 - **PumpPortal key**: Connectors → PumpPortal → paste the key. The Health page and the Autopilot status box show which
   feed is live, trades per minute and PumpPortal's estimated cost today.
 
