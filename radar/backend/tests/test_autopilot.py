@@ -52,7 +52,7 @@ class Sniper:
         return L.result if L else None
 
 
-async def make(tmp_path, launches, **cfg):
+async def make(tmp_path, launches, pot=None, **cfg):
     db = DB(tmp_path / "ap.db")
     await db.open()
     kv = KV()
@@ -61,6 +61,10 @@ async def make(tmp_path, launches, **cfg):
     await ap.load()
     if cfg:
         await ap.save(cfg)
+    if pot is not None:                                                  # size-sensitive tests run on a small pot
+        for mode in ("demo", "auto"):
+            await kv.kv_set(f"autopilot:{mode}", {"balance": float(pot), "started": 0})
+        ap.brain.peak_equity = float(pot)
     return ap, db
 
 
@@ -80,7 +84,7 @@ def test_demo_buys_on_signal_then_takes_profit_and_stops_out(tmp_path):
         assert len(ap.open) == 1                                             # the bundled one is filtered out
         p = next(iter(ap.open.values()))
         assert p["mint"] == a.mint and p["trigger"] == "snipe" and p["mode"] == "demo"
-        assert await ap.demo_balance() == pytest.approx(10 - 0.1 - 0.0005)
+        assert await ap.demo_balance() == pytest.approx(100 - 0.1 - 0.0005)
         a.mcap_sol = 40.0 * 2.2                                              # 2× → first take-profit sells half
         await ap.manage()
         assert p["tp_done"] == [0] and p["tokens_left"] == pytest.approx(p["tokens"] / 2) and p["sol_out"] > 0.09
@@ -231,7 +235,7 @@ def test_brain_v2_buys_the_best_it_sees_exits_and_learns(tmp_path):
         await b.tick("auto")
         auto = [p for p in ap.open.values() if p["mode"] == "auto"]
         assert len(auto) == 1 and auto[0]["mint"] == great.mint and auto[0]["trigger"] == "brain"   # the bar adapts: it trades the best it sees
-        assert await ap.demo_balance("auto") < 10 and await ap.demo_balance("demo") == 10
+        assert await ap.demo_balance("auto") < 100 and await ap.demo_balance("demo") == 100
         p = auto[0]
         assert 0.2 < p["sol_in"] < 2.6
         great.mcap_sol = 40 * 2.6
@@ -292,7 +296,7 @@ def features_of_selling(b, L):
 def test_brain_sells_fast_as_coins_move_and_never_gets_stuck(tmp_path):
     async def run():
         coin = launch("FASTmint" + "5" * 32, upside=60, risk=10, buyers=40)
-        ap, db = await make(tmp_path, [coin])
+        ap, db = await make(tmp_path, [coin], pot=10)
         await ap.set_mode("auto")
         b = ap.brain
         await b.tick("auto")
@@ -561,7 +565,7 @@ def test_hyper_keeps_trading_when_the_models_calibrate_low_and_scalps_in_and_out
         now = time.time()
         coin = _live_coin("SCALmint" + "1" * 32, now)
         dull = launch("DULLmint" + "2" * 32, upside=5, risk=50, buyers=8)
-        ap, db = await make(tmp_path, [coin, dull])
+        ap, db = await make(tmp_path, [coin, dull], pot=10)
         b = ap.brain
         b.council.choose_play = lambda style, v: "quick"
         b.win.b = -7.0                                                   # calibrated to a ~1% base rate: every value is tiny
@@ -635,7 +639,7 @@ def test_surreal_snipes_new_launches_fast_and_compounds(tmp_path):
         coins = [_newborn(f"SN{i:02d}mint" + str(i % 10) * 30, now) for i in range(5)]
         old = launch("OLDDmint" + "9" * 32, upside=50, risk=10, buyers=40)
         old.created = now - 900
-        ap, db = await make(tmp_path, coins + [old])
+        ap, db = await make(tmp_path, coins + [old], pot=10)
         b = ap.brain
         b.council.choose_play = lambda style, v: "quick"                 # pin the playbook: this test is about the snipe path
         await b.set_aggression("surreal")
@@ -798,4 +802,22 @@ def test_v9_resets_models_learned_on_a_dead_feed_and_never_learns_from_empty_tap
         assert any("Fresh brain" in e["text"] for e in b.log) and not b.fresh_start
         assert quiet.mint not in b.shadow and not b.tsnap                # nothing learned from a coin with no trades
         await db.close()
+    asyncio.run(run())
+
+
+def test_old_ten_sol_demo_pots_are_topped_up_to_a_hundred_once(tmp_path):
+    async def run():
+        db = DB(tmp_path / "ap.db")
+        await db.open()
+        kv = KV()
+        await kv.kv_set("autopilot:cfg", {"demo": {"start_sol": 10.0}})
+        await kv.kv_set("autopilot:demo", {"balance": 12.5, "started": 0})
+        tracker = SimpleNamespace(sol_usd=150.0, launch_watch={}, token_summary=lambda m: asyncio.sleep(0, None))
+        ap = Autopilot(db, kv, Sniper([]), tracker, SimpleNamespace(ranked={}, followed=set()), None, Alerts(), None)
+        await ap.load()
+        assert ap.c["demo"]["start_sol"] == 100 and await ap.demo_balance("demo") == pytest.approx(102.5)
+        await ap.load()                                                  # restarts don't add it again
+        assert await ap.demo_balance("demo") == pytest.approx(102.5)
+        await ap.reset_demo("demo")
+        assert await ap.demo_balance("demo") == 100
     asyncio.run(run())
