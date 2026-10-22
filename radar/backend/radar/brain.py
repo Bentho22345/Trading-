@@ -1319,6 +1319,27 @@ class Brain:
         tok = await self.ap.tracker.token_summary(mint)
         return bool(tok and tok.get("price_usd") and (tok.get("liquidity_usd") or 0) >= 10_000)
 
+    async def compound(self) -> dict[str, Any]:
+        """Growth of the WHOLE pot — cash plus open positions at their live price (cash alone dips whenever money is in trades)."""
+        cash = await self.ap.demo_balance("auto")
+        held = sum(p["tokens_left"] * p["last_price_sol"] for p in self.ap.open.values() if p["mode"] == "auto")
+        eq = cash + held
+        return {"start": self.start_sol, "equity": round(eq, 4), "cash": round(cash, 4), "in_trades": round(held, 4),
+                "growth_pct": round((eq / self.start_sol - 1) * 100, 2)}
+
+    def conviction(self, d: dict[str, Any], ev: float, evidence: float, amult: float, exits: dict[str, Any] | None) -> float:
+        """How much the Nebula believes in this trade, 0…1. Barely-yes ≈ 0 → ~0.5% of the pot; everything lined up → 1 → ~20%."""
+        margin = _clip((d["score"] - d["bar"]) / 0.3, 0, 1)                # how far past its bar the council voted
+        opt = d["votes"].get("optimist", 0.5)
+        skep = d["votes"].get("skeptic", 0.5)
+        evn = _clip(ev / 0.10, -1, 1) if evidence >= 15 else 0.0          # +10% expected value = full marks
+        record = _clip((amult - 1) / 0.8, -1, 1)                           # the allocator's view of this strategy's record
+        c = 0.35 * margin + 0.20 * opt + 0.15 * skep + 0.20 * max(0.0, evn) + 0.10 * max(0.0, record)
+        c -= 0.25 * max(0.0, -evn) + 0.15 * max(0.0, -record)
+        if exits and exits.get("power"):
+            c += 0.10                                                       # volume / holders / liquidity flooding in
+        return round(_clip(c, 0, 1), 3)
+
     def breaker(self) -> str | None:
         """Circuit breakers: a bad stretch can't drain the pot. Daily −15% → 30-min pause; −8% in the last hour → 10-min pause."""
         now = time.time()
@@ -1367,19 +1388,28 @@ class Brain:
             self.skip("negative expected value")
             self.council.ghost(mint, f or {}, L, {**d, "go": False}, size)
             return False
-        amult *= _clip(1 + 4 * ev, 0.5, 1.6) if evidence >= 15 else 1.0      # lean into the best positive-EV trades
         exposure = sum(p["sol_in"] - p["sol_out"] for p in self.ap.open.values() if p["mode"] == mode and p["tokens_left"] > 0)
         bal = await self.balance(mode)
-        if exposure + size > 0.6 * (bal + exposure):
+        # CONVICTION SIZING: how much it puts in is how much it believes — the council's margin over its bar, the
+        # optimist's read, the trade's expected value and the strategy's proven record, rolled into one 0…1 number.
+        conv = self.conviction(d, ev, evidence, amult, exits)
+        frac = (0.005 + 0.20 * conv * conv) * (0.6 if self.council.regime == "defensive" else 1.0)
+        size = max(0.02, bal * frac * self.heat_mult() * (0.3 if why == "probe" else 1.0))
+        room = 0.6 * (bal + exposure) - exposure
+        if room < 0.02:
             self.skip("exposure cap (60% of the pot deployed)")
             return False
+        size = min(size, room)                                             # never more than 60% of the pot deployed at once
+        d["conviction"], d["pot_pct"] = round(conv, 3), round(size / max(1e-9, bal) * 100, 1)
+        if self.council.debate and self.council.debate[0].get("mint") == mint:
+            self.council.debate[0].update(conviction=d["conviction"], pot_pct=d["pot_pct"])
         ex = dict(d["exits"])
         if exits and exits.get("power"):                          # a flood of volume / holders: keep the wider leash of the two
             ex.update(tp=max(ex["tp"], exits["tp"]), stop=max(ex["stop"], exits["stop"]), max_s=max(ex["max_s"], exits["max_s"]), power=True)
-        heat = self.heat_mult()
-        p = await self._buy(mint, round(max(0.02, size * d["size_mult"] * amult * heat), 4), mode, trig,
-                            f"{detail} · {d['summary']} · EV {ev * 100:+.1f}%{' · probe' if why == 'probe' else ''}", r, f, value, leaders,
-                            exits=ex, council=d)
+        p = await self._buy(mint, round(size, 4), mode, trig,
+                            f"{detail} · {d['summary']} · EV {ev * 100:+.1f}% · conviction {conv:.2f} → {d['pot_pct']}% of the pot"
+                            f"{' · probe' if why == 'probe' else ''}", r, f, value, leaders, exits=ex, council=d,
+                            impact_cap=IMPACT_CAP + 0.04 * conv)
         if p is not None:
             p["strat"], p["probe"] = strat, why == "probe"
             await self.ap.db.exec("UPDATE auto_positions SET features_json=json_set(COALESCE(features_json,'{}'), '$.strat', ?, '$.probe', ?) WHERE id=?",
@@ -1388,14 +1418,14 @@ class Brain:
 
     async def _buy(self, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
                    f: dict[str, float] | None, value: float | None, leaders: list[str], exits: dict[str, Any] | None = None,
-                   council: dict[str, Any] | None = None) -> dict[str, Any] | None:
+                   council: dict[str, Any] | None = None, impact_cap: float = IMPACT_CAP) -> dict[str, Any] | None:
         ap = self.ap
         L = ap.sniper.launches.get(mint)
         if L is not None and getattr(L, "vsol", None):
-            cap = max(0.02, IMPACT_CAP * L.vsol)                       # don't pay more than ~4% price impact on the curve
+            cap = max(0.02, impact_cap * L.vsol)                       # don't pay more than ~4% price impact (8% at max conviction)
             if size > cap:
                 size = round(cap, 4)
-                detail += f" · size capped at ◎{cap:.2f} by liquidity"
+                detail += f" · size capped at ◎{cap:.2f} by the coin's liquidity"
         style = trig if trig in ("scalp", "snipe") else "copy" if trig == "copy" else "swing"
         try:
             p = await ap.buy(mint, "copy" if trig == "copy" else "brain", detail, r, sol=size, mode=mode)
@@ -2179,7 +2209,7 @@ class Brain:
                            "per_hour": sum(1 for t in self.fast_ts if t > now - 3600),
                            "open": sum(1 for p in self.ap.open.values() if p.get("style") == "snipe"),
                            "power_open": sum(1 for p in self.ap.open.values() if (p.get("exits") or {}).get("power"))},
-                "compound": {"start": self.start_sol, "growth_pct": round(((await self.ap.demo_balance("auto")) / self.start_sol - 1) * 100, 2)},
+                "compound": await self.compound(),
                 "start_sol": self.start_sol,
                 "skips": dict(sorted({**self.skips_prev, **self.skips}.items(), key=lambda kv: -kv[1])[:8]),
                 "exits": {"stop_pct": round(self.stop_pct() * 100), "trail_mult": round(self.trail_mult, 2), **self.exit_stats,

@@ -356,7 +356,7 @@ type Brain = {
   scalper?: { on: boolean; n: number; wins: number; pnl_sol: number; bar?: number; tp?: number; stop?: number; max_s?: number; open: number; riding: number; streak: number; recent_pct: number | null };
   skips?: Record<string, number>;
   snipes?: { on: boolean; n: number; wins: number; pnl_sol: number; power: number; per_hour: number; open: number; power_open: number };
-  compound?: { start: number; growth_pct: number };
+  compound?: { start: number; growth_pct: number; equity?: number; cash?: number; in_trades?: number };
   bars?: Record<string, number>; idle_s?: number | null;
   verdict?: { state: string; text: string; [k: string]: any };
   nebula?: Nebula;
@@ -504,7 +504,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
           <span><b>{b.snipes.n.toLocaleString()}</b> snipes · <b>{b.snipes.n ? Math.round((b.snipes.wins / b.snipes.n) * 100) : 0}%</b> won · <b className={b.snipes.pnl_sol >= 0 ? 'text-up' : 'text-down'}>◎{b.snipes.pnl_sol >= 0 ? '+' : ''}{b.snipes.pnl_sol.toFixed(3)}</b></span>
           <span><b>{b.snipes.per_hour}</b> fast trades / hour</span>
           <span>open <b>{b.snipes.open}</b> · 💥 power <b className="text-up">{b.snipes.power_open}</b> <span className="text-white/40">({b.snipes.power} total)</span></span>
-          {b.compound && <span>pot <b className={b.compound.growth_pct >= 0 ? 'text-up' : 'text-down'}>{b.compound.growth_pct >= 0 ? '+' : ''}{b.compound.growth_pct}%</b> compounded</span>}
+          {b.compound && <span>pot <b className={b.compound.growth_pct >= 0 ? 'text-up' : 'text-down'}>{b.compound.growth_pct >= 0 ? '+' : ''}{b.compound.growth_pct}%</b> compounded{b.compound.equity != null ? ` · ◎${b.compound.equity.toFixed(2)} (◎${(b.compound.in_trades ?? 0).toFixed(2)} in trades)` : ''}</span>}
           <span className="text-white/50">last buy <b className={b.idle_s != null && b.idle_s > 60 ? 'text-warn' : 'text-white'}>{b.idle_s != null ? `${b.idle_s}s ago` : 'never'}</b>
             {b.bars?.snipe != null ? ` · snipe bar ${b.bars.snipe}` : ''}{b.bars?.scalp != null ? ` · scalp bar ${b.bars.scalp}` : ''}</span>
           {b.mode !== 'auto' && <span className="font-bold text-warn">Self-driving is off — press Start</span>}
@@ -653,7 +653,7 @@ type Nebula = {
   stats: Record<string, number>; recent_avg_pct: number | null;
   exit_audit?: { rule: string; n: number; vs_playbook_pct: number; muted: boolean }[]; audit_notes?: string[];
   debate: { ts: number; symbol: string; mint: string; go: boolean; veto: boolean; score: number; bar: number; votes: Vote; play: string; style: string;
-    size_mult: number; why: { skeptic: string; optimist: string } }[];
+    size_mult: number; why: { skeptic: string; optimist: string }; conviction?: number; pot_pct?: number }[];
 };
 const BRAIN_META: Record<string, { icon: string; name: string; tone: string; role: string }> = {
   executor: { icon: '⚙️', name: 'Executor', tone: 'text-flash', role: 'finds the trade' },
@@ -699,7 +699,8 @@ function NebulaPanel({ n, now }: { n: Nebula; now: number }) {
                 <span className="text-flash">⚙️{d.votes.executor.toFixed(2)}</span>
                 <span className="text-down">🛡{d.votes.skeptic.toFixed(2)}</span>
                 <span className="text-up">🚀{d.votes.optimist.toFixed(2)}</span>
-                <b className={d.veto ? 'text-down' : d.go ? 'text-up' : 'text-white/45'}>{d.veto ? 'VETO' : d.go ? `GO ×${d.size_mult.toFixed(2)}` : 'no'}</b>
+                <b className={d.veto ? 'text-down' : d.go ? 'text-up' : 'text-white/45'}>{d.veto ? 'VETO' : d.go ? (d.pot_pct != null ? `GO ${d.pot_pct}% of pot` : 'GO') : 'no'}</b>
+                {d.conviction != null && <span className="text-white/45" title="conviction 0–1: how much the Nebula believes in this trade">conv {d.conviction.toFixed(2)}</span>}
                 <span className="text-white/45">{d.style} · {d.play}</span>
               </li>
             ))}

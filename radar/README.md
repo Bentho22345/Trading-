@@ -167,6 +167,10 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - **Market brain**: sizes scale with how hot pump.fun is right now (share of coins going +12% first, fast vs slow).
 - **Fee-aware exits**: it no longer "banks" +3–4% moves that are break-even after the ~2% it costs to sell; the
   skeptic learns from its own plug-pulls (a coin that ran after it sold makes it demand more next time).
+- **Conviction sizing**: how much it puts in is how much it believes — the council's margin over its bar, the
+  optimist's and skeptic's reads, the trade's expected value and the strategy's record roll into one 0…1 conviction:
+  barely-yes ≈ 0.5% of the pot, everything lined up ≈ 20% in one buy. The coin's liquidity (≤ 4–8% price impact),
+  the 60% exposure cap and the breakers still bound it; real money stays under your hard caps.
 - **Expected-value gate**: before any buy, the skeptic's loss odds are calibrated against what actually happened at
   those odds, then combined with that strategy's real average win and loss: a negative-EV trade is not taken, and
   the best positive-EV trades get more size.

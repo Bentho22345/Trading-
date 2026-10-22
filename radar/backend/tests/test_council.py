@@ -186,3 +186,19 @@ def test_exit_auditor_mutes_rules_that_lose_to_the_playbook(tmp_path):
         assert snap["exit_audit"][0]["rule"] == "quiet" and snap["exit_audit"][0]["muted"]
         await db.close()
     asyncio.run(run())
+
+
+def test_conviction_sizing_bets_big_when_everything_lines_up(tmp_path):
+    async def run():
+        ap, db = await make(tmp_path, [])
+        b = ap.brain
+        weak = {"score": 0.49, "bar": 0.48, "votes": {"optimist": 0.4, "skeptic": 0.4}}
+        strong = {"score": 0.85, "bar": 0.48, "votes": {"optimist": 0.95, "skeptic": 0.9}}
+        cw = b.conviction(weak, 0.0, 0, 1.0, None)
+        cs = b.conviction(strong, 0.12, 30, 1.6, {"power": True})
+        assert cw < 0.35 and cs > 0.9
+        frac = lambda c: 0.005 + 0.20 * c * c
+        assert frac(cw) < 0.03 and frac(cs) > 0.15                        # ~1–2% of the pot vs ~20%
+        assert b.conviction(strong, -0.08, 30, 0.5, None) < cs - 0.3      # a strategy that's losing money talks it down
+        await db.close()
+    asyncio.run(run())

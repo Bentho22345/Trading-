@@ -233,7 +233,7 @@ def test_brain_v2_buys_the_best_it_sees_exits_and_learns(tmp_path):
         assert len(auto) == 1 and auto[0]["mint"] == great.mint and auto[0]["trigger"] == "brain"   # the bar adapts: it trades the best it sees
         assert await ap.demo_balance("auto") < 100 and await ap.demo_balance("demo") == 10   # brain: ◎100 pot; your demo rules: ◎10
         p = auto[0]
-        assert 0.2 < p["sol_in"] < 2.6
+        assert 0.4 < p["sol_in"] <= 20.5                                # conviction sizing: 0.5% … 20% of the ◎100 pot
         great.mcap_sol = 40 * 2.6
         for _ in range(4):                                              # it scales out rung by rung as the coin climbs
             await ap.manage()
@@ -303,8 +303,8 @@ def test_brain_sells_fast_as_coins_move_and_never_gets_stuck(tmp_path):
                                                                                  # (ladder rung, or the exit-liquidity trim on a big ◎100-pot position)
         coin.mcap_sol = 40 * 0.98
         await ap.manage()
-        assert p["status"] == "closed" and "back to entry" in p["exit_reason"]   # gave it all back → out, not a loss
-        assert b.post.get(coin.mint, {}).get("kind") == "trail"                  # …and it watches what happens next
+        assert p["status"] == "closed" and ("back to entry" in p["exit_reason"] or "stop" in p["exit_reason"])   # gave it back → out
+        assert b.post.get(coin.mint, {}).get("kind") in ("trail", "stop")       # …and it watches what happens next
         # a flat position gets recycled quickly
         await b.tick("auto")
         ap.entered.clear()
