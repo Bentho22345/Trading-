@@ -281,7 +281,12 @@ def test_top_wallet_trade_reaches_ui_and_chart(stack):
     data = asyncio.run(run())
     assert data and data["rank"] == 4 and data["side"] == "buy" and data["is_fixture"]
     assert any(t["signature"] == data["signature"] for t in httpx.get(f"http://{stack}/api/top-trades").json())
-    smart = httpx.get(f"http://{stack}/api/token/{MINT}").json()["smart_trades"]
+    smart = []
+    for _ in range(25):                                # the live event can beat the database write by a moment
+        smart = httpx.get(f"http://{stack}/api/token/{MINT}").json()["smart_trades"]
+        if any(t["wallet"] == "TopW1" for t in smart):
+            break
+        time.sleep(0.2)
     assert any(t["wallet"] == "TopW1" for t in smart)  # drawn as a chart marker on the token page
 
 
@@ -585,7 +590,7 @@ def test_self_driving_mode_watches_values_and_streams(stack):
             break
         time.sleep(0.5)
     assert b["mode"] == "auto" and b["candidates"] and all(0 <= c["value"] <= 100 for c in b["candidates"])
-    assert any(e["kind"] == "mode" for e in b["log"]) and len(b["weights"]) >= 20 and b["balance"] <= 10
+    assert any(e["kind"] == "mode" for e in b["log"]) and len(b["weights"]) >= 20 and b["balance"] <= 100
     bought = False
     for _ in range(60):                                                   # it must actually trade on its own now
         b = httpx.get(f"{base}/brain").json()
@@ -600,7 +605,7 @@ def test_self_driving_mode_watches_values_and_streams(stack):
     if q.status_code == 200:
         assert q.json()["position"]["mode"] == "demo"                    # your quick-buys never land in the brain's pot
     r = httpx.post(f"{base}/brain/reset").json()
-    assert r["trained"] == 0 and r["balance"] == 10
+    assert r["trained"] == 0 and r["balance"] == 100
     assert httpx.post(f"{base}/mode", json={"mode": "off"}).json()["mode"] == "off"
 
 

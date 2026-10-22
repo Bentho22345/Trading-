@@ -99,6 +99,6 @@ def test_the_ev_gate_breakers_and_exposure_cap_in_the_executor(tmp_path):
         held = [p for p in ap.open.values() if p["mode"] == "auto"]
         assert held and "EV" in held[0]["detail"]
         deployed = sum(p["sol_in"] for p in held)
-        assert deployed <= 0.6 * 10 + 0.5                                # never more than ~60% of the pot at once
+        assert deployed <= 0.6 * 100 + 5                                 # never more than ~60% of the pot at once
         await db.close()
     asyncio.run(run())

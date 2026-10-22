@@ -231,7 +231,7 @@ def test_brain_v2_buys_the_best_it_sees_exits_and_learns(tmp_path):
         await b.tick("auto")
         auto = [p for p in ap.open.values() if p["mode"] == "auto"]
         assert len(auto) == 1 and auto[0]["mint"] == great.mint and auto[0]["trigger"] == "brain"   # the bar adapts: it trades the best it sees
-        assert await ap.demo_balance("auto") < 10 and await ap.demo_balance("demo") == 10
+        assert await ap.demo_balance("auto") < 100 and await ap.demo_balance("demo") == 10   # brain: ◎100 pot; your demo rules: ◎10
         p = auto[0]
         assert 0.2 < p["sol_in"] < 2.6
         great.mcap_sol = 40 * 2.6
@@ -297,9 +297,10 @@ def test_brain_sells_fast_as_coins_move_and_never_gets_stuck(tmp_path):
         b = ap.brain
         await b.tick("auto")
         p = next(p for p in ap.open.values() if p["mode"] == "auto")
-        coin.mcap_sol = 40 * 1.3
+        coin.mcap_sol = 40 * 1.35                                                 # bigger ◎100-pot sizes pay more curve impact
         await ap.manage()
-        assert 101 in p["tp_done"] and p["status"] == "open"                     # first rung: a quick partial sell at +25%
+        assert p["status"] == "open" and p["sol_out"] > 0 and p["tokens_left"] < p["tokens"]   # a quick partial sell into the move
+                                                                                 # (ladder rung, or the exit-liquidity trim on a big ◎100-pot position)
         coin.mcap_sol = 40 * 0.98
         await ap.manage()
         assert p["status"] == "closed" and "back to entry" in p["exit_reason"]   # gave it all back → out, not a loss
@@ -577,7 +578,7 @@ def test_hyper_keeps_trading_when_the_models_calibrate_low_and_scalps_in_and_out
             b.last_buy_ts = 0
             await b.tick("auto")
             sc = next(p for p in ap.open.values() if p.get("style") == "scalp")
-        assert sc["sol_in"] < 0.5 and "scalp" in sc["detail"]           # small size (power trades are 2.5× a normal scalp)
+        assert sc["sol_in"] < 5 and "scalp" in sc["detail"]             # ~1% of a ◎100 pot (power trades are 2.5× a normal scalp)
         b.cache[coin.mint]["f"] = {"mom_30s": 0.5}                       # moving up, but not a surge (that would be ridden)
         coin.mcap_sol *= 1.15 if not (sc.get("exits") or {}).get("power") else 1.5   # past its target after fees and impact
         await ap.manage()
@@ -645,7 +646,7 @@ def test_surreal_snipes_new_launches_fast_and_compounds(tmp_path):
         assert len(snipes) >= 3, b.skips                                  # several brand-new coins sniped in ONE tick
         assert all(p["mint"] != old.mint or p.get("style") != "snipe" for p in ap.open.values())
         s0 = snipes[0]
-        assert s0["sol_in"] < 0.8 and "snipe" in s0["detail"] and s0["exits"]["tp"] >= 1.1
+        assert s0["sol_in"] < 8 and "snipe" in s0["detail"] and s0["exits"]["tp"] >= 1.1
         # take profit fast, then it can't re-snipe the same launch (it becomes a scalp candidate)
         L = ap.sniper.launches[s0["mint"]]
         b.cache[L.mint]["f"] = {"mom_30s": 0.4}
@@ -797,5 +798,25 @@ def test_v9_resets_models_learned_on_a_dead_feed_and_never_learns_from_empty_tap
         await b.tick("auto")
         assert any("Fresh brain" in e["text"] for e in b.log) and not b.fresh_start
         assert quiet.mint not in b.shadow and not b.tsnap                # nothing learned from a coin with no trades
+        await db.close()
+    asyncio.run(run())
+
+
+def test_auto_pot_is_100_and_old_pots_get_topped_up(tmp_path):
+    async def run():
+        ap, db = await make(tmp_path, [])
+        assert await ap.demo_balance("auto") == 100 and await ap.demo_balance("demo") == 10
+        await ap.cfg.kv_set("autopilot:auto", {"balance": 7.5, "started": 1})       # an old ◎10 pot that's down to ◎7.5
+        assert await ap.upgrade_auto_pot() == 90 and await ap.demo_balance("auto") == 97.5
+        assert await ap.upgrade_auto_pot() == 0                                      # one-time
+        await ap.reset_demo("auto")
+        assert await ap.demo_balance("auto") == 100
+        # the self-driving demo pot isn't held to the real-money hard cap (◎1); your manual demo rules still are
+        coin = launch("BIGGmint" + "1" * 32)
+        ap.sniper.launches[coin.mint] = coin
+        p = await ap.buy(coin.mint, "brain", "test", coin.result, sol=3.0, mode="auto")
+        assert p["sol_in"] > 2.9
+        q = await ap.buy("BIGGmint" + "1" * 32, "manual", "test", coin.result, sol=3.0, mode="demo")
+        assert q["sol_in"] <= 1.01
         await db.close()
     asyncio.run(run())

@@ -378,7 +378,8 @@ class Brain:
         self.mood = 1.0
         self.streak = 0                                   # +wins / −losses in a row
         self.cool_until = 0.0
-        self.peak_equity = 10.0
+        self.peak_equity = float(getattr(ap, "auto_start", 100.0))
+        self.pending_notes: list[str] = []                   # notes queued before the first tick (e.g. the pot upgrade)
         self.drawdown = 0.0
         self.last_mood_ts = time.time()
         # pattern memory
@@ -394,6 +395,10 @@ class Brain:
         self.exit_stats = {"shaken": 0, "stop_right": 0, "sold_early": 0, "trail_right": 0, "early_right": 0, "too_early": 0,
                            "smart_right": 0, "smart_wrong": 0}
         self.recent_exits: deque[str] = deque(maxlen=12)
+
+    @property
+    def start_sol(self) -> float:
+        return float(getattr(self.ap, "auto_start", 100.0))
 
     # ---------------- compat ----------------
     @property
@@ -424,7 +429,7 @@ class Brain:
             self.aggression = "surreal"                 # v7: the sniper-compounder is the default (pick any level any time)
         self.mood = float(s.get("mood", 1.0))
         self.streak = int(s.get("streak", 0))
-        self.peak_equity = float(s.get("peak_equity", 10.0))
+        self.peak_equity = float(s.get("peak_equity", self.start_sol))
         self.tags = {k: list(v) for k, v in (s.get("tags") or {}).items()}
         self.base = list(s.get("base") or [0.0, 0.0, 0.0])
         self.leaders = s.get("leaders") or {}
@@ -523,7 +528,7 @@ class Brain:
         self.tsnap.clear()
         self.replay_t.clear()
         self.trained = self.shadow_trained = self.shadow_hits = self.rug_seen = self.rehearsed = 0
-        self.mood, self.streak, self.cool_until, self.peak_equity, self.drawdown = 1.0, 0, 0.0, 10.0, 0.0
+        self.mood, self.streak, self.cool_until, self.peak_equity, self.drawdown = 1.0, 0, 0.0, self.start_sol, 0.0
         self.tags, self.base, self.told, self.leaders, self.bad_devs = {}, [0.0, 0.0, 0.0], {}, {}, {}
         self.stop_mult = self.trail_mult = 1.0
         self.smart_follow = self.patience = 1.0
@@ -536,7 +541,7 @@ class Brain:
         await self.save()
         await self.ap.reset_demo("auto")
         await self.ap.db.exec("DELETE FROM auto_equity WHERE mode='auto'")
-        await self.note("reset", "🧠 Fresh start: both models back to their priors, no pattern memory, 10 SOL of demo money.")
+        await self.note("reset", f"🧠 Fresh start: models back to their priors, no pattern memory, ◎{self.start_sol:.0f} of demo money.")
 
     # ---------------- scoring ----------------
     def tag_adj(self, tags: list[str]) -> tuple[float, list[str]]:
@@ -847,6 +852,8 @@ class Brain:
         ap = self.ap
         now = time.time()
         dt, self.last_tick_ts = now - self.last_tick_ts, now
+        while self.pending_notes:
+            await self.note("mode", self.pending_notes.pop(0))
         if getattr(self, "fresh_start", False):
             self.fresh_start = False
             await self.save()
@@ -946,10 +953,10 @@ class Brain:
         bal = await self.balance(mode)
         if bal < 0.06 and mode == "auto" and not mine:
             # demo money only: an empty pot with nothing open would stop it forever — refill it and say so
-            await ap._demo_add(10.0 - bal, "auto")                      # top the balance up; trade history is kept
-            self.peak_equity, self.drawdown = 10.0, 0.0
+            await ap._demo_add(self.start_sol - bal, "auto")            # top the balance up; trade history is kept
+            self.peak_equity, self.drawdown = self.start_sol, 0.0
             self.refills = getattr(self, "refills", 0) + 1
-            await self.note("mode", f"💸 The demo pot ran dry — refilled to ◎10 (refill #{self.refills}). Real money is never refilled.")
+            await self.note("mode", f"💸 The demo pot ran dry — refilled to ◎{self.start_sol:.0f} (refill #{self.refills}). Real money is never refilled.")
             bal = await self.balance(mode)
         self.pipe["balance"] = round(bal, 4)
         if bal < 0.06:
@@ -2172,7 +2179,8 @@ class Brain:
                            "per_hour": sum(1 for t in self.fast_ts if t > now - 3600),
                            "open": sum(1 for p in self.ap.open.values() if p.get("style") == "snipe"),
                            "power_open": sum(1 for p in self.ap.open.values() if (p.get("exits") or {}).get("power"))},
-                "compound": {"start": 10.0, "growth_pct": round(((await self.ap.demo_balance("auto")) / 10.0 - 1) * 100, 2)},
+                "compound": {"start": self.start_sol, "growth_pct": round(((await self.ap.demo_balance("auto")) / self.start_sol - 1) * 100, 2)},
+                "start_sol": self.start_sol,
                 "skips": dict(sorted({**self.skips_prev, **self.skips}.items(), key=lambda kv: -kv[1])[:8]),
                 "exits": {"stop_pct": round(self.stop_pct() * 100), "trail_mult": round(self.trail_mult, 2), **self.exit_stats,
                           "watching": len(self.post), "patience": round(self.patience, 2), "smart_follow": round(self.smart_follow, 2),

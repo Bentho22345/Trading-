@@ -338,6 +338,7 @@ function RealModal({ d, onClose, onDone }: { d: any; onClose: () => void; onDone
 }
 
 type Brain = {
+  start_sol?: number;
   threshold: number; trained: number; balance: number; summary: any; mode: string; aggression: string; levels: Record<string, any>;
   shadow: { trained: number; hit_rate: number | null; pending: number; brier: number | null; accuracy?: number | null };
   diag: { launches?: number; scored?: number; copy_watch?: number; shadow_pending?: number; mood?: number; top_pct?: number; influx?: number; smart_selling?: number };
@@ -412,7 +413,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
     if (data.event && ['buy', 'sell', 'learn'].includes(data.event.kind)) load();
   });
   const sm = b?.summary;
-  const start = 10;
+  const start = b?.start_sol ?? 100;
   const eq = b?.equity?.length ? b.equity[b.equity.length - 1].equity : b?.balance ?? start;
   const maxW = Math.max(1, ...(b?.weights || []).map((w) => Math.max(Math.abs(w.w), Math.abs(w.prior))));
   const [allW, setAllW] = useState(false);

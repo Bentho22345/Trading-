@@ -51,6 +51,7 @@ DEFAULT: dict[str, Any] = {
     "real_engine": "rules",          # what drives REAL money: "rules" (the settings below) or "brain" (self-driving, under the same caps)
 }
 REAL_PHRASE = "I UNDERSTAND THIS USES REAL MONEY"
+AUTO_START_SOL = float(__import__("os").environ.get("AUTO_START_SOL", "100"))   # the self-driving brain's demo pot
 
 
 def merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
@@ -106,6 +107,11 @@ class Autopilot:
     async def load(self) -> None:
         self.c = validate(merge(DEFAULT, await self.cfg.kv_get("autopilot:cfg") or {}))
         await self.brain.load()
+        added = await self.upgrade_auto_pot()
+        if added:
+            self.brain.peak_equity, self.brain.drawdown, self.brain.day_start = AUTO_START_SOL, 0.0, (0, 0.0)
+            self.brain.pending_notes.append(f"💰 Demo pot upgraded to ◎{AUTO_START_SOL:.0f} (+◎{added:.0f}). Trade history kept; sizes scale with "
+                                            f"the pot, so every trade is ~{AUTO_START_SOL / max(1.0, AUTO_START_SOL - added):.0f}× bigger now.")
         await self.brain.refresh_stats()
         for p in await self.db.all("SELECT * FROM auto_positions WHERE status IN ('open','closing')"):
             p = dict(p)
@@ -154,9 +160,27 @@ class Autopilot:
         key = f"autopilot:{'auto' if mode == 'auto' else 'demo'}"
         d = await self.cfg.kv_get(key) or {}
         if "balance" not in d:
-            d = {"balance": float(self.c["demo"]["start_sol"]), "started": time.time()}
+            start = AUTO_START_SOL if mode == "auto" else float(self.c["demo"]["start_sol"])
+            d = {"balance": start, "started": time.time(), "start": start}
             await self.cfg.kv_set(key, d)
         return float(d["balance"])
+
+    @property
+    def auto_start(self) -> float:
+        return AUTO_START_SOL
+
+    async def upgrade_auto_pot(self) -> float:
+        """One-time top-up: a pot that started at the old ◎10 gets the difference, so it starts from ◎100 (history kept)."""
+        d = await self.cfg.kv_get("autopilot:auto") or {}
+        if "balance" not in d:
+            return 0.0
+        start = float(d.get("start", 10.0))
+        if start >= AUTO_START_SOL:
+            return 0.0
+        add = AUTO_START_SOL - start
+        d["balance"], d["start"] = round(float(d["balance"]) + add, 9), AUTO_START_SOL
+        await self.cfg.kv_set("autopilot:auto", d)
+        return add
 
     async def _demo_add(self, delta: float, mode: str = "demo") -> None:
         key = f"autopilot:{'auto' if mode == 'auto' else 'demo'}"
@@ -169,7 +193,8 @@ class Autopilot:
         mode = "auto" if mode == "auto" else "demo"
         await self.db.exec("DELETE FROM auto_positions WHERE mode=?", (mode,))
         self.open = {k: p for k, p in self.open.items() if p["mode"] != mode}
-        await self.cfg.kv_set(f"autopilot:{mode}", {"balance": float(self.c["demo"]["start_sol"]), "started": time.time()})
+        start = AUTO_START_SOL if mode == "auto" else float(self.c["demo"]["start_sol"])
+        await self.cfg.kv_set(f"autopilot:{mode}", {"balance": start, "started": time.time(), "start": start})
 
     # ---------------- price ----------------
     async def price(self, mint: str) -> tuple[float | None, Any]:
@@ -334,7 +359,9 @@ class Autopilot:
     async def buy(self, mint: str, trigger: str, detail: str, r: dict[str, Any] | None = None, sol: float | None = None,
                   mode: str | None = None) -> dict[str, Any]:
         mode = mode or (self.c["mode"] if self.c["mode"] != "off" else "demo")
-        size = min(sol or self.c["size"]["buy_sol"], self.c["size"]["max_buy_sol_hard"])
+        size = sol or self.c["size"]["buy_sol"]
+        if mode != "auto":                         # the hard cap protects REAL money (and your manual demo rules); the
+            size = min(size, self.c["size"]["max_buy_sol_hard"])   # self-driving demo pot has its own impact / exposure caps
         px, L = await self.price(mint)
         if not px:
             raise TradeError("no live price for this coin yet")
