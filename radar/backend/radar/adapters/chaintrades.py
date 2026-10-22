@@ -54,10 +54,21 @@ def ws_url(helius_key: str | None) -> str:
     return "wss://api.mainnet-beta.solana.com"
 
 
+def extra_urls() -> list[str]:
+    """More free public RPC websockets, run side by side with the main one when there's no Helius key. A public node
+    drops a big share of a busy program's log notifications; several of them together see far more of the tape (the
+    tracker drops duplicates by signature). CHAIN_WS_EXTRA="" turns this off."""
+    raw = os.environ.get("CHAIN_WS_EXTRA", "wss://solana-rpc.publicnode.com")
+    return [u.strip() for u in raw.split(",") if u.strip()]
+
+
 class ChainTrades(Stream):
     def __init__(self, on_trade: Callable[[dict[str, Any]], Awaitable[None]], wanted: Callable[[], set[str]], helius_key: str | None = None,
-                 wallets: Callable[[], set[str]] | None = None):
-        super().__init__(ws_url(helius_key), health)
+                 wallets: Callable[[], set[str]] | None = None, url: str | None = None, name: str | None = None):
+        h = health if not name else register(Health(name, "stream", f"pump.fun trades decoded from Solana logs ({(url or '').split('?')[0]})"))
+        h.stale_after = 120
+        super().__init__(url or ws_url(helius_key), h)
+        self.fixed = url is not None                       # an extra public endpoint: never fails over to another URL
         self.on_trade, self.wanted = on_trade, wanted
         self.wallets = wallets or (lambda: set())          # top / smart / followed wallets: their trades on ANY coin (copy-trading)
         self.helius_key = helius_key
@@ -65,8 +76,11 @@ class ChainTrades(Stream):
         self.decoded = 0
         self.forwarded = 0
         self.recent: deque[float] = deque(maxlen=20000)
+        self.recent_dec: deque[float] = deque(maxlen=50000)
 
     def set_helius(self, key: str | None) -> None:
+        if self.fixed:
+            return
         self.helius_key = key
         url = ws_url(key)
         if url != self.url:
@@ -100,6 +114,7 @@ class ChainTrades(Stream):
             if not t:
                 continue
             self.decoded += 1
+            self.recent_dec.append(time.time())
             want = want if want is not None else self.wanted()
             if t["mint"] not in want:
                 wal = wal if wal is not None else self.wallets()
@@ -138,7 +153,7 @@ class ChainTrades(Stream):
             except Exception as e:  # noqa: BLE001
                 self.health.fail(f"{type(e).__name__}: {e}")
                 self.fails += 1
-                if self.fails >= 3 and not os.environ.get("SOLANA_WS_URL"):
+                if self.fails >= 3 and not self.fixed and not os.environ.get("SOLANA_WS_URL"):
                     helius = ws_url(self.helius_key)
                     self.url = "wss://api.mainnet-beta.solana.com" if self.url == helius and self.helius_key else helius
                     self.fails = 0
@@ -151,10 +166,10 @@ class ChainTrades(Stream):
             await asyncio.sleep(backoff + random.random())
             backoff = min(backoff * 2, 30)
 
-    def rate(self, window: float = 60) -> int:
+    def rate(self, window: float = 60, q: deque[float] | None = None) -> int:
         cut = time.time() - window
-        return sum(1 for t in self.recent if t >= cut)
+        return sum(1 for t in (self.recent if q is None else q) if t >= cut)
 
     def snapshot(self) -> dict[str, Any]:
         return {"connected": self.ws is not None, "endpoint": self.url.split("?")[0], "decoded": self.decoded,
-                "forwarded": self.forwarded, "per_min": self.rate()}
+                "forwarded": self.forwarded, "per_min": self.rate(), "decoded_per_min": self.rate(60, self.recent_dec)}

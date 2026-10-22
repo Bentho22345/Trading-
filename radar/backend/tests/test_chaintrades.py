@@ -134,6 +134,14 @@ def test_feed_supervisor_starts_the_chain_feed_when_pumpportal_trades_are_silent
             runs.append(1)
             await asyncio.sleep(3600)
         tr.chain.run = fake_run
+        extra_runs = []
+
+        async def fake_extra():
+            extra_runs.append(1)
+            await asyncio.sleep(3600)
+        assert tr.extras and tr.extras[0].fixed                        # a second public RPC rides alongside by default
+        for f in tr.extras:
+            f.run = fake_extra
         now = _t.time()
         assert await tr.feed_check(now, now - 100) == "idle"            # no launches yet: nothing to do
         tr.born = {"A": now - 5, "B": now - 20}                         # launches arriving, PumpPortal trades silent
@@ -142,10 +150,23 @@ def test_feed_supervisor_starts_the_chain_feed_when_pumpportal_trades_are_silent
         tr.pump.has_key = False
         assert await tr.feed_check(now, now - 100) == "started"
         await asyncio.sleep(0)
-        assert runs == [1] and await tr.feed_check(now, now - 100) == "running"
+        assert runs == [1] and extra_runs == [1] * len(tr.extras) and await tr.feed_check(now, now - 100) == "running"
+        assert extra_runs == [1] * len(tr.extras)                       # not started twice
         tr.pump.trades_seen = [now - 1] * 50                            # PumpPortal trades come back (a key was added)
         assert await tr.feed_check(now + 400, now - 100) == "stopped"
         assert tr.feed_status()["pumpportal_trades_90s"] >= 0
         tr.chain_task.cancel()
         await db.close()
     asyncio.run(run())
+
+
+def test_buyer_gate_trusts_the_curve_when_the_feed_misses_trades():
+    from radar.brain import Brain
+    thin = {"buyers": 2, "net_in_sol": 0.3, "metrics": {"coverage_pct": 100}}
+    assert Brain.hard_no(thin) == "too few buyers"
+    seen_little = {"buyers": 2, "net_in_sol": 0.3, "metrics": {"coverage_pct": 25}}   # saw a quarter of the tape: ~8 buyers
+    assert Brain.hard_no(seen_little) is None and Brain.demand(seen_little)[0] == 8
+    money_in = {"buyers": 0, "net_in_sol": 3.5, "metrics": {"coverage_pct": 5}}         # trades missed, but 3.5 SOL is in the curve
+    assert Brain.hard_no(money_in) is None
+    newborn = {"buyers": 1, "net_in_sol": 1.2, "metrics": {"coverage_pct": 100}}
+    assert Brain.hard_no(newborn) == "too few buyers" and Brain.hard_no(newborn, lenient=True) is None

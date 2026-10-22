@@ -17,7 +17,7 @@ from .adapters.dexscreener import DexScreener
 from .adapters.extra import Extra
 from .adapters.geckoterminal import GeckoTerminal
 from .adapters.market import Market
-from .adapters.chaintrades import ChainTrades
+from .adapters.chaintrades import ChainTrades, extra_urls
 from .adapters.pumpportal import AltTrades, PumpPortal
 from .adapters.rugcheck import RugCheck
 from .config import settings
@@ -86,6 +86,10 @@ class Tracker:
         # free fallback when PumpPortal's trade stream is silent (it needs an API key since May 2026)
         self.chain = ChainTrades(self.on_trade, lambda: self.pump.token_subs, wallets=lambda: self.pump.account_subs)
         self.chain_task: asyncio.Task | None = None
+        # more free public RPC websockets alongside it: each public node drops part of the tape, together they see more
+        self.extras = [ChainTrades(self.on_trade, lambda: self.pump.token_subs, wallets=lambda: self.pump.account_subs, url=u,
+                                   name=f"chaintrades{i + 2}") for i, u in enumerate(extra_urls())]
+        self.extra_tasks: dict[int, asyncio.Task] = {}
         import os as _os
         self.alt = AltTrades(self.on_trade, _os.environ.get("PUMP_ALT_WS_URL", "wss://pumpdev.io/ws"))
         self.alt_task: asyncio.Task | None = None
@@ -626,15 +630,27 @@ class Tracker:
                 self.alt._stop = False
                 self.alt.token_subs, self.alt.account_subs = set(self.pump.token_subs), set(self.pump.account_subs)
                 self.alt_task = asyncio.get_running_loop().create_task(self.alt.run())
+            if not self.chain.helius_key and not os.environ.get("SOLANA_WS_URL"):
+                for i, feed in enumerate(self.extras):
+                    if i not in self.extra_tasks or self.extra_tasks[i].done():
+                        feed._stop = False
+                        self.extra_tasks[i] = asyncio.get_running_loop().create_task(feed.run())
             self.chain_since = now
             return "started"
         if running and mode != "on" and (mode == "off" or (pp > 30 and now - self.chain_since > 300)):
             log.warning("trade feed: PumpPortal trades are flowing — stopping the fallback feeds")
-            for feed in (self.chain, self.alt):
+            for feed in (self.chain, self.alt, *self.extras):
                 feed.stop()
                 if feed.ws is not None:
                     await feed.ws.close()
+            self.extra_tasks = {}
             return "stopped"
+        if running and self.chain.helius_key and self.extra_tasks:      # Helius sees the whole tape: the public extras are redundant
+            for feed in self.extras:
+                feed.stop()
+                if feed.ws is not None:
+                    await feed.ws.close()
+            self.extra_tasks = {}
         return "running" if running else "idle"
 
     def feed_status(self) -> dict[str, Any]:
@@ -642,6 +658,8 @@ class Tracker:
         alt_running = self.alt_task is not None and not self.alt_task.done()
         return {"pumpportal_key": self.pump.has_key, "pumpportal_trades_90s": self.pump.trade_rate(90),
                 "pumpportal_est_cost_sol_today": self.pump.est_cost_sol_today(), "chain_running": running, "chain": self.chain.snapshot(),
+                "extras": [self.extras[i].snapshot() for i, t in self.extra_tasks.items() if not t.done()],
+                "decoded_per_min": self.chain.rate(60, self.chain.recent_dec) + sum(f.rate(60, f.recent_dec) for f in self.extras),
                 "alt_running": alt_running, "alt": {"endpoint": self.alt.url, "connected": self.alt.ws is not None,
                                                     "trades_90s": self.alt.trade_rate(90)}}
 

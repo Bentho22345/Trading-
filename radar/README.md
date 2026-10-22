@@ -255,6 +255,11 @@ coin looks buyer-less and the sniper / Autopilot can't act. Radar handles this t
   (copy-trading), fails over between Helius and the public RPC, and stops itself if PumpPortal trades come back.
   A second PumpPortal-compatible feed (`PUMP_ALT_WS_URL`, default pumpdev.io; empty disables) runs alongside it.
   `CHAIN_TRADES=on|off|auto` overrides. The brain never learns from coins whose trades it can't see.
+- **Public-RPC coverage**: a public node drops much of a busy program's logs, so without Helius extra public websockets
+  run side by side (`CHAIN_WS_EXTRA`, comma-separated, default PublicNode; empty disables) and duplicates are dropped by
+  signature. The brain also knows the feed is partial: buyers it saw are scaled by coverage (the share of the curve's
+  SOL it actually saw), and real SOL in the bonding curve counts as demand even when the trades themselves were missed.
+  The Autopilot diagnostics show `feed_coverage_pct`; a free Helius key gives the whole tape.
 - **PumpPortal key**: Connectors → PumpPortal → paste the key. The Health page and the Autopilot status box show which
   feed is live, trades per minute and PumpPortal's estimated cost today.
 

@@ -302,6 +302,7 @@ def analyze(L: Launch, now: float, ctx: dict[str, Any]) -> dict[str, Any]:
         "progress": 100.0 if L.graduated_at else curve_progress(L.vsol), "graduated_at": L.graduated_at,
         "eta_min": round(eta_min, 1) if eta_min is not None else None, "sol_per_min": round(slope, 2),
         "buys": len(buys), "sells": len(sells), "buyers": len(L.buyers), "net_sol_1m": round(net_flow, 2),
+        "net_in_sol": round(max(0.0, (L.vsol or CURVE_START_SOL) - CURVE_START_SOL) - (L.dev_buy_sol or 0.0), 2),
         "dev_buy_pct": L.dev_buy_pct, "organic": round(organic) if len(buys) >= 5 else None, "bundled": bundled,
         "early_supply_pct": round(early_supply, 1),
         "alpha": L.alpha[:6],
@@ -781,6 +782,9 @@ class Sniper:
             L = Launch(mint=t["address"], created=t["launched_at"] or t["first_seen"], symbol=t["symbol"], name=t["name"],
                        deployer=t["deployer"], dev_buy_pct=t["dev_initial_buy_pct"], vsol=t["curve_sol"], mcap_sol=t["pump_mcap_sol"],
                        graduated_at=t["graduated_at"], until=(t["launched_at"] or t["first_seen"]) + TRACK_S)
+            if t["dev_initial_buy_pct"]:        # the dev's SOL in, from their share of supply on the curve (x·y = k)
+                tok = min(0.9, t["dev_initial_buy_pct"] / 100 * 1e9 / 1.073e9)
+                L.dev_buy_sol = CURVE_START_SOL / (1 - tok) - CURVE_START_SOL
             for r in await self.db.all("SELECT ts, side, sol, tokens, trader, mcap_sol FROM pump_trades WHERE mint=? ORDER BY ts", (L.mint,)):
                 L.trades.append((r["ts"], r["side"], r["sol"] or 0, r["tokens"] or 0, r["trader"], None))
                 L.observed_sol += (r["sol"] or 0) * (1 if r["side"] == "buy" else -1)

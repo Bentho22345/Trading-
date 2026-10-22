@@ -910,7 +910,7 @@ class Brain:
                      "newborn": len(nb), "newborn_traded": sum(1 for L in nb if getattr(L, "trades", None)),
                      "newborn_2buyers": sum(1 for L in nb if len(getattr(L, "buyers", None) or {}) >= 2),
                      "live_tapes": sum(1 for L in allL if getattr(L, "trades", None) and L.trades[-1][0] > now - 30),
-                     "scored": len(scored), "blocked": None}
+                     "scored": len(scored), "blocked": None, "feed_coverage_pct": self.feed_coverage(allL, now)}
         await self.shadow_step(now)
         self.timing_step(now)
         for mint, lesson in self.post_mortem(now):
@@ -1048,8 +1048,8 @@ class Brain:
                     break
                 if self.can_enter(L.mint, mode, "snipe") or (L.deployer and L.deployer in self.bad_devs):
                     continue
-                hard = self.hard_no(L.result)
-                if hard and not (hard == "too few buyers" and (L.result.get("buyers") or 0) >= 2):
+                hard = self.hard_no(L.result, lenient=True)
+                if hard:
                     self.skip(f"hard no: {hard}")
                     continue
                 veto = self.veto(L, now, hit["rug"])
@@ -1495,7 +1495,17 @@ class Brain:
                             "avg_loss": sum(losses) / len(losses) if losses else 0}
 
     @staticmethod
-    def hard_no(r: dict[str, Any]) -> str | None:
+    def demand(r: dict[str, Any]) -> tuple[float, float]:
+        """(estimated buyers, net SOL into the curve beyond the dev's buy). The free feed misses part of the tape, so the
+        buyers it saw are scaled up by how much of the curve's SOL it actually saw (coverage); the curve's own reserves
+        are on-chain truth, so real money flowing in counts as demand even when the individual trades were missed."""
+        mx = r.get("metrics") or {}
+        seen = r.get("buyers") or 0
+        cov = max(0.15, min(1.0, (mx.get("coverage_pct") if mx.get("coverage_pct") is not None else 100) / 100))
+        return seen / cov, r.get("net_in_sol") or 0.0
+
+    @staticmethod
+    def hard_no(r: dict[str, Any], lenient: bool = False) -> str | None:
         mx = r.get("metrics") or {}
         if r.get("tier") == "TRAP":
             return "TRAP"
@@ -1505,7 +1515,8 @@ class Brain:
             return "insiders"
         if (r.get("mcap_usd") or 0) > 250_000:
             return "too big"
-        if (r.get("buyers") or 0) < 5:
+        est, inflow = Brain.demand(r)
+        if est < (2 if lenient else 5) and inflow < (1.0 if lenient else 2.0):
             return "too few buyers"
         if mx.get("dev_hold_pct") and mx["dev_hold_pct"] > 25 and not mx.get("dev_sold"):
             return "dev holds too much"
@@ -2067,6 +2078,21 @@ class Brain:
         return [{k: c.get(k) for k in ("mint", "symbol", "value", "p_rug", "p_up", "p_dn", "scalp", "hard", "why", "mcap_usd", "age_s", "tier", "copy_ranks")}
                 for c in self.candidates]
 
+    @staticmethod
+    def feed_coverage(allL: list[Any], now: float) -> int | None:
+        """Median share of the curve's SOL the trade feed actually saw, over the last 10 minutes of launches with money in."""
+        cov = sorted((L.result.get("metrics") or {}).get("coverage_pct") for L in allL
+                     if now - L.created < 600 and L.result and (L.result.get("net_in_sol") or 0) >= 0.5
+                     and (L.result.get("metrics") or {}).get("coverage_pct") is not None)
+        return int(cov[len(cov) // 2]) if cov else None
+
+    def feed_hint(self, top_skip: str, fs: dict[str, Any]) -> str:
+        cov = self.pipe.get("feed_coverage_pct")
+        if "few buyers" not in (top_skip or "") or cov is None or cov >= 50 or fs.get("pumpportal_key") or (fs.get("chain") or {}).get("endpoint", "").find("helius") >= 0:
+            return ""
+        return (f" The free public trade feed only sees ~{cov}% of each coin's trades, so coins look emptier than they are — connect a free "
+                f"Helius key on Connectors to see the whole tape.")
+
     def verdict(self) -> dict[str, Any]:
         """Plain-English: is it trading, and if not, exactly which stage of the pipeline is empty."""
         ap, p, now = self.ap, self.pipe, time.time()
@@ -2108,9 +2134,9 @@ class Brain:
             return out("trading", f"Trading — last buy {idle:.0f}s ago.")
         if p.get("snipe_candidates") == 0 and not p.get("scalpable"):
             return out("nothing", f"Launches and trades are arriving ({p.get('newborn_traded', 0)} new coins trading), but none pass the "
-                                  f"snipe / scalp read yet. Most common reason: {top_skip or 'n/a'}.")
+                                  f"snipe / scalp read yet. Most common reason: {top_skip or 'n/a'}." + self.feed_hint(top_skip, fs))
         return out("waiting", f"Candidates are there (best snipe {p.get('best_snipe')}, bar {self.bars.get('snipe')}) but every one was "
-                              f"blocked — most common reason: {top_skip or 'n/a'}.")
+                              f"blocked — most common reason: {top_skip or 'n/a'}." + self.feed_hint(top_skip, fs))
 
     async def report(self) -> dict[str, Any]:
         """Its own read of its live results: the last 300 closed trades by strategy, by exit reason and by hold time."""
