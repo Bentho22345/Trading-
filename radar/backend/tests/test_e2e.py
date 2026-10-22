@@ -517,7 +517,7 @@ def test_autopilot_demo_api_and_real_mode_guard(stack):
     """Demo trading through the API (quick buy, live position, manual sell); real mode refuses without a password."""
     from .fixtures import MINT as M
     base = f"http://{stack}/api/autopilot"
-    assert httpx.post(f"{base}/demo/reset").json()["balance"] == 10
+    assert httpx.post(f"{base}/demo/reset").json()["balance"] == 100
     r = httpx.post(f"{base}/mode", json={"mode": "demo"}).json()
     assert r["mode"] == "demo"
     httpx.post(f"{base}/config", json={"triggers": {"snipe": {"on": False}, "tweet_race": {"on": False}, "copy": {"on": False},
@@ -531,7 +531,7 @@ def test_autopilot_demo_api_and_real_mode_guard(stack):
         time.sleep(0.5)
     assert pos and pos["mode"] == "demo" and pos["tokens"] > 0
     ov = httpx.get(base).json()
-    assert any(p["mint"] == M for p in ov["open"]) and ov["demo_balance"] < 10
+    assert any(p["mint"] == M for p in ov["open"]) and ov["demo_balance"] < 100
     out = httpx.post(f"{base}/positions/{pos['id']}/sell", json={"fraction": 1}).json()
     assert not any(p["id"] == pos["id"] for p in out["open"])
     hist = httpx.get(f"{base}/history", params={"mode": "demo"}).json()
@@ -585,7 +585,7 @@ def test_self_driving_mode_watches_values_and_streams(stack):
             break
         time.sleep(0.5)
     assert b["mode"] == "auto" and b["candidates"] and all(0 <= c["value"] <= 100 for c in b["candidates"])
-    assert any(e["kind"] == "mode" for e in b["log"]) and len(b["weights"]) >= 20 and b["balance"] <= 10
+    assert any(e["kind"] == "mode" for e in b["log"]) and len(b["weights"]) >= 20 and b["balance"] <= 100
     bought = False
     for _ in range(60):                                                   # it must actually trade on its own now
         b = httpx.get(f"{base}/brain").json()
@@ -600,7 +600,7 @@ def test_self_driving_mode_watches_values_and_streams(stack):
     if q.status_code == 200:
         assert q.json()["position"]["mode"] == "demo"                    # your quick-buys never land in the brain's pot
     r = httpx.post(f"{base}/brain/reset").json()
-    assert r["trained"] == 0 and r["balance"] == 10
+    assert r["trained"] == 0 and r["balance"] == 100
     assert httpx.post(f"{base}/mode", json={"mode": "off"}).json()["mode"] == "off"
 
 

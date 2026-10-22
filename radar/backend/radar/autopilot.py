@@ -30,6 +30,7 @@ from .solwallet import TradeError
 
 log = logging.getLogger("radar.autopilot")
 SUPPLY = 1e9
+DEMO_START_SOL = 100.0         # virtual SOL each demo pot starts (and refills) with
 
 DEFAULT: dict[str, Any] = {
     "mode": "off",
@@ -47,7 +48,7 @@ DEFAULT: dict[str, Any] = {
     "exits": {"tp": [{"x": 2.0, "sell": 0.5}, {"x": 4.0, "sell": 0.25}, {"x": 10.0, "sell": 1.0}], "stop_loss_pct": 35,
               "trailing_pct": 30, "trail_after_x": 1.5, "time_stop_min": 45, "rug_exit": True},
     "exec": {"slippage_pct": 15, "priority_fee_sol": 0.0005},
-    "demo": {"start_sol": 10.0},
+    "demo": {"start_sol": DEMO_START_SOL},
     "real_engine": "rules",          # what drives REAL money: "rules" (the settings below) or "brain" (self-driving, under the same caps)
 }
 REAL_PHRASE = "I UNDERSTAND THIS USES REAL MONEY"
@@ -105,6 +106,7 @@ class Autopilot:
     # ---------------- config / state ----------------
     async def load(self) -> None:
         self.c = validate(merge(DEFAULT, await self.cfg.kv_get("autopilot:cfg") or {}))
+        await self._demo_topup()
         await self.brain.load()
         await self.brain.refresh_stats()
         for p in await self.db.all("SELECT * FROM auto_positions WHERE status IN ('open','closing')"):
@@ -122,6 +124,19 @@ class Autopilot:
             p["leaders"] = json.loads(p.get("leaders_json") or "[]")
             self.open[p["id"]] = p
             self.entered[p["mint"]] = p["opened"]
+
+    async def _demo_topup(self) -> None:
+        """One-time move from the old 10 SOL demo pots to 100: add the difference to both pots, keeping trade history."""
+        if await self.cfg.kv_get("autopilot:demo_start_100"):
+            return
+        old = float(self.c["demo"]["start_sol"])
+        if old < DEMO_START_SOL:
+            self.c["demo"]["start_sol"] = DEMO_START_SOL
+            await self.cfg.kv_set("autopilot:cfg", self.c)
+        for mode in ("demo", "auto"):
+            if await self.cfg.kv_get(f"autopilot:{mode}"):
+                await self._demo_add(DEMO_START_SOL - min(old, 10.0), mode)
+        await self.cfg.kv_set("autopilot:demo_start_100", True)
 
     async def save(self, patch: dict[str, Any]) -> dict[str, Any]:
         patch = {k: v for k, v in (patch or {}).items() if k != "mode"}       # mode only via set_mode (it has checks)

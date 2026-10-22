@@ -185,7 +185,7 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 
 ### Self-driving brain (v7)
 
-Its own algorithm on its own 10 SOL of demo money (and real money only if you pick it under your hard caps).
+Its own algorithm on its own 100 SOL of demo money (and real money only if you pick it under your hard caps).
 
 - **Two models, always learning**: a WIN model (odds of +60% before the stop) and a RUG model (odds of −60% inside
   20 min), online logistic regressions over ~70 signals with RMSProp step sizes that never decay, so it keeps adapting.
