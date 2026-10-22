@@ -355,7 +355,9 @@ async def session(request: Request) -> dict[str, Any]:
 async def healthz() -> dict[str, Any]:
     """Unauthenticated liveness probe for Render / Docker. Exposes only load / pipeline counters (no coins, keys or data),
     so a slow or empty deployment can be diagnosed from one URL."""
-    out: dict[str, Any] = {"ok": True, "uptime_s": round(time.time() - STARTED), "loop_lag_ms": LAG["ms"], "loop_lag_max_ms": LAG["max_ms"]}
+    from . import VERSION
+    out: dict[str, Any] = {"ok": True, "version": VERSION, "uptime_s": round(time.time() - STARTED), "loop_lag_ms": LAG["ms"],
+                           "loop_lag_max_ms": LAG["max_ms"]}
     from . import guard
     out["rss_mb"] = guard.rss_mb()                       # current memory (was peak), the number that matters for OOM
     out["storage"] = {k: guard.STATE[k] for k in ("disk_free_mb", "disk_total_mb", "db_mb", "wal_mb", "hard_prunes", "cache_trims")}
