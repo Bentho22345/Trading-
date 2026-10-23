@@ -1,5 +1,7 @@
 # PULSE — real-time markets intelligence terminal
 
+> **New:** [Memecoin Radar](radar/README.md), a real-time memecoin narrative, on-chain and safety terminal, lives in [`radar/`](radar/). Run it with `cd radar && docker compose up --build`.
+
 A single-screen news and market-data terminal for FX, crypto and equities & options. It's dense but calm, and built to stay open all day on a second monitor.
 
 ```bash

@@ -1,0 +1,5 @@
+Release 2026.10.22-nebula4-conviction
+- 4-brain Nebula (executor, skeptic, optimist, allocator) with EV gate, circuit breakers and exit auditor
+- conviction sizing (0.5% … 20% of the pot per trade)
+- self-driving demo pot ◎100
+Check the live build at /api/healthz → "version".

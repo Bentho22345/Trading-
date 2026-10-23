@@ -1,0 +1,10 @@
+**/node_modules
+**/.next
+web/out
+backend/.venv
+backend/data
+**/__pycache__
+**/.pytest_cache
+.env
+*.db
+*.log
