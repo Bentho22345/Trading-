@@ -288,6 +288,18 @@ class Council:
                            "meta": d.get("meta"),
                            "st": {n: [False, 1.0, None] for n in ORDER if not (style in FAST and n == "moon")}}
 
+    def refill(self, key: str, entry_mcap: float) -> None:
+        """A demo order landed later than it was placed: replay its playbooks from the price it actually filled at."""
+        t = self.track.get(key)
+        if t is None or not entry_mcap:
+            return
+        t["entry"] = entry_mcap
+        if t.get("cv"):
+            _, s_in, _, basis, k = t["cv"]
+            v0 = curve.vsol_from_mcap(entry_mcap, k)
+            if v0:
+                t["cv"] = (v0, s_in, curve.tokens_for(v0, s_in, k), basis, k)
+
     def ghost(self, mint: str, f: dict[str, float], L: Any, d: dict[str, Any], size: float, rate: float | None = None) -> None:
         """A trade the council turned down — follow it anyway, so it learns whether saying no was right. A rejected top-wallet
         influx is ALWAYS followed (rare, and exactly the call it most needs to get right)."""

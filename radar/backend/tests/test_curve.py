@@ -35,3 +35,26 @@ def test_demo_position_starts_at_fees_not_at_minus_impact(tmp_path):
         assert 0.96 < p["sol_out"] / p["sol_in"] < 0.975                 # round trip: both fees, impact returned
         await db.close()
     asyncio.run(run())
+
+
+def test_a_demo_buy_lands_a_moment_later_at_that_moments_price(tmp_path):
+    import asyncio
+
+    from .test_autopilot import launch, make
+
+    async def run():
+        coin = launch("LATEmint" + "8" * 32, mcap_sol=40.0, upside=60, risk=10, buyers=40)
+        ap, db = await make(tmp_path, [coin])
+        ap.fill_latency = 1.0
+        p = await ap.buy(coin.mint, "brain", "test", coin.result, sol=1.0, mode="auto")
+        t0 = p["tokens"]
+        assert p.get("fill_at")
+        coin.mcap_sol = 46.0                                            # the coin ran while the order was in flight
+        await ap.manage()
+        assert p.get("fill_at") and p["tokens"] == t0                   # not landed yet: no exits, no re-fill
+        p["fill_at"] -= 2
+        await ap.manage()
+        assert "fill_at" not in p and p["tokens"] < t0 * 0.9            # landed at the higher price: fewer tokens for the same SOL
+        assert p["entry_mcap_sol"] == 46.0
+        await db.close()
+    asyncio.run(run())

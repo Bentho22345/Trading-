@@ -158,6 +158,8 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 - **Bet size is earned**: ~2% of the pot max for a fresh brain, growing to 20% after ~200 closed trades; a strategy with
   < 15 trades of its own or a losing record stays ≤ 4%. The EV gate applies from the first trade (thin evidence leans on
   a +12% / −8% prior payoff).
+- **Honest fill timing**: a demo buy lands like a real one — placed now, filled at the market ~1 s later
+  (`DEMO_FILL_LATENCY_S`) — so chasing a move costs what it costs on chain; no exits fire before it lands.
 - **Graduated coins** fill and mark on the PumpSwap pool's constant-product maths too (≈0.8% fees each way).
 - **Replay lab** (Autopilot → ⏪ Replay lab, or `python -m radar.replay --db data/radar.db --hours 6`): a fresh brain
   trades the launches and trades Radar recorded (72 h kept) on a virtual clock — same partial feed, scoring, council,

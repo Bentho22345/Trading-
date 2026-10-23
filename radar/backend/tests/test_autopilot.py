@@ -61,6 +61,7 @@ async def make(tmp_path, launches, strict_tape=False, **cfg):
     await ap.load()
     if not strict_tape:                     # most fixtures are bare coins with no tape; the live-tape gate has its own test
         ap.brain.tape_dead = lambda mint, style: None
+    ap.fill_latency = 0.0                   # instant demo fills in fixtures (the latency fill has its own test)
     if cfg:
         await ap.save(cfg)
     return ap, db

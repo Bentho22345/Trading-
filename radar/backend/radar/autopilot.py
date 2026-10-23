@@ -98,6 +98,9 @@ class Autopilot:
         self.signals: deque[dict[str, Any]] = deque(maxlen=200)       # external triggers (copy / X calls) waiting for the loop
         self.last_buy = 0.0
         self._mlock = asyncio.Lock()
+        # demo buys land like real ones: the order is placed now, the fill happens at the market ~1 s later (a fast
+        # trade lands a block or two after you send it — chasing a move costs exactly that move)
+        self.fill_latency = float(__import__("os").environ.get("DEMO_FILL_LATENCY_S", "1.0") or 0)
         self._fast: dict[str, float] = {}
         self.kick = asyncio.Event()                                      # set on every scoring batch / copy signal: react at once
         self.paused_reason: str | None = None
@@ -404,6 +407,8 @@ class Autopilot:
                  "entry_price_sol": entry_px, "entry_mcap_sol": px * SUPPLY, "sol_in": sol_in, "tokens": tokens, "tokens_left": tokens,
                  "sol_out": 0.0, "peak_price_sol": px, "last_price_sol": px, "tp_done": [], "status": "open", "buy_sig": sig,
                  "curve_s": curve_s}
+            if mode != "real" and curve_s is not None and self.fill_latency > 0:
+                p["fill_at"] = time.time() + self.fill_latency
             self.open[pid] = p
             await self._order(mode, pid, "buy", mint, sym, sol_in, tokens, px, sig, "filled", None, f"{trigger}: {detail}")
             self.stats["buys"] += 1
@@ -428,6 +433,8 @@ class Autopilot:
     async def sell(self, p: dict[str, Any], frac: float, reason: str) -> None:
         if p["mint"] in self.busy or p["tokens_left"] <= 0:
             return
+        if p.get("fill_at"):
+            await self._complete_fill(p)                                 # can't sell what hasn't landed: land it first
         self.busy.add(p["mint"])
         try:
             px, _ = await self.price(p["mint"])
@@ -516,6 +523,28 @@ class Autopilot:
         async with self._mlock:                 # the loop and the instant per-trade path never act on a position at once
             await self._manage(only)
 
+    async def _complete_fill(self, p: dict[str, Any]) -> None:
+        """The demo order lands now: re-fill it on the market as it is at this moment (same SOL in, different tokens)."""
+        p.pop("fill_at", None)
+        px, L = await self.price(p["mint"])
+        if not px or L is None:
+            return
+        pl = curve.pool(px * SUPPLY, bool(getattr(L, "graduated_at", None)))
+        if not pl or p["tokens_left"] != p["tokens"] or not p.get("curve_s"):
+            return
+        k, v, _fee = pl
+        tokens = curve.tokens_for(v, p["curve_s"], k)
+        if tokens <= 0:
+            return
+        p.update(tokens=tokens, tokens_left=tokens, entry_price_sol=p["sol_in"] / tokens, entry_mcap_sol=px * SUPPLY,
+                 peak_price_sol=px, last_price_sol=px)
+        await self.db.exec("UPDATE auto_positions SET tokens=?, tokens_left=?, entry_price_sol=?, entry_mcap_sol=? WHERE id=?",
+                           (tokens, tokens, p["entry_price_sol"], p["entry_mcap_sol"], p["id"]))
+        try:
+            self.brain.council.refill(f"p:{p['id']}", p["entry_mcap_sol"])
+        except AttributeError:
+            pass
+
     def watch_trade(self, mint: str | None) -> None:
         """A trade just hit a coin we hold: re-check its exits now instead of on the next loop tick."""
         if not mint or not any(p["mint"] == mint for p in self.open.values()):
@@ -536,6 +565,10 @@ class Autopilot:
                 continue
             if p["id"] not in self.open:
                 continue
+            if p.get("fill_at"):                                         # the demo order hasn't landed yet
+                if now < p["fill_at"]:
+                    continue
+                await self._complete_fill(p)
             px, L = await self.price(p["mint"])
             if L is not None and hasattr(L, "until") and L.until < now + 3600:
                 L.until = now + 6 * 3600                                  # never let the coin we hold drop out of the live feed

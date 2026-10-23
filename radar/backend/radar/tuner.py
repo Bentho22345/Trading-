@@ -31,6 +31,8 @@ CHANGES: dict[str, dict[str, Any]] = {
     "picky": {"ev_margin": 0.01, "scalp_bar": 0.05, "snipe_bar": 0.05},
     "eager": {"ev_margin": -0.01, "scalp_bar": -0.05, "snipe_bar": -0.05},
     "small bets": {"bet_mult": 0.5},
+    "tight exits": {"stop_scale": 0.75, "tp_scale": 0.75},
+    "room to run": {"stop_scale": 1.3, "tp_scale": 1.4},
 }
 MARGIN = 1.0                     # percentage points of score a challenger must win by, on both windows
 
@@ -46,7 +48,7 @@ def merge(base: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
     for k, v in change.items():
         if k == "off":
             out["off"] = sorted(set(out.get("off") or []) | set(v))
-        elif k in ("tape_mult", "bet_mult"):
+        elif k in ("tape_mult", "bet_mult", "stop_scale", "tp_scale"):
             out[k] = round(float(out.get(k, 1.0)) * float(v), 3)
         else:
             out[k] = round(float(out.get(k, 0.0)) + float(v), 3)

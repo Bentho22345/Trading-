@@ -1799,6 +1799,7 @@ class Brain:
         pb = p.get("exits") if (p.get("exits") or {}).get("preset") else None   # the council's playbook sets the leash for swings
         if pb:
             stop = _clip(float(pb["stop"]) * self.stop_mult, 0.04, 0.6)
+        stop = _clip(stop * float(self.T("stop_scale", 1.0)), 0.03, 0.6)
         if x <= 1 - stop:
             return self._exit(p, 1.0, f"stop −{stop * 100:.0f}%", "stop")
         L = self.ap.sniper.launches.get(p["mint"])
@@ -1880,6 +1881,9 @@ class Brain:
                    x: float, age: float, peak_x: float = 1.0) -> tuple[float, str] | None:
         """In and out: bank the move, cut the miss, never let a scalp turn into a bag. Power trades get room to run."""
         sc = {**(self.scalp_cfg() or AGGRESSION["hyper"]["scalp"]), **(p.get("exits") or {})}
+        ss, ts = float(self.T("stop_scale", 1.0)), float(self.T("tp_scale", 1.0))
+        if ss != 1.0 or ts != 1.0:                                     # the Tuner's exit knobs
+            sc = {**sc, "stop": _clip(sc["stop"] * ss, 0.03, 0.4), "tp": 1 + (sc["tp"] - 1) * ts}
         name = "snipe" if p.get("style") == "snipe" else "scalp" if p.get("style") == "scalp" else (p.get("exits") or {}).get("preset") or "trade"
         if x <= 1 - sc["stop"]:
             return self._exit(p, 1.0, f"{name} stop −{(1 - x) * 100:.0f}%", "scalp")
