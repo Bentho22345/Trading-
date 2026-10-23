@@ -143,6 +143,7 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
     small = sorted(ev_l + grads, key=lambda e: (e[0], e[1]))
     events = heapq.merge(small, ((r[0], 1, r) for r in trades), key=lambda e: (e[0], e[1]))
     trading = False
+    bad, errors = 0, []
     next_tick = CLOCK[0] + step
     n_ticks = 0
     wall0 = _real_time()
@@ -163,22 +164,12 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
             if progress and n_ticks % 2000 == 0 and n_ticks:
                 progress((next_tick - t0) / max(1.0, t1 - t0))
         CLOCK[0] = ts
-        if kind == 0:
-            await sniper.on_launch(_launch_row(r))
-            tracker.born[r["address"]] = ts
-        elif kind == 1:
-            _, mint, side, sol, toks, trader, mc, sig, sol_usd = r
-            if sol_usd:
-                tracker.sol_usd = sol_usd
-            v = curve.vsol_from_mcap(mc) if mc else None
-            t = {"mint": mint, "ts": ts, "side": side, "sol": sol, "tokens": toks, "trader": trader,
-                 "mcap_sol": mc, "signature": sig, "sol_usd": sol_usd, "vsol": v if v and v < curve.CURVE_END else None}
-            await sniper.on_trade(t)
-            await ap.on_trade(t)
-        else:
-            L = sniper.launches.get(r["address"])
-            if L is not None and not L.graduated_at:
-                L.graduated_at = ts
+        try:
+            await _event(kind, r, ts, sniper, ap, tracker, curve)
+        except Exception as e:  # noqa: BLE001 - a malformed recorded row is skipped, like the live hooks do
+            bad += 1
+            if bad <= 3:
+                errors.append(f"{type(e).__name__}: {e}"[:160])
         if i % 500 == 0:
             await asyncio.sleep(0)                     # let spawned tasks (dev lookups, instant exits) run
             if i % 20000 == 0:
@@ -191,11 +182,30 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
         await ap.sell(p, 1.0, "backtest window ended")
     out = await summarize(ap, db, t0, t1, level, len(launches), 0)
     out["tune"] = tune
+    out["skipped_rows"], out["row_errors"] = bad, errors
     out["learned"] = ap.brain.learned()                      # what this brain learned from the tape (the live one can adopt it)
     out["wall_s"] = round(_real_time() - wall0, 1)
     out["ticks"] = n_ticks
     await db.close()
     return out
+
+
+async def _event(kind: int, r: Any, ts: float, sniper: Any, ap: Any, tracker: Any, curve: Any) -> None:
+    """One recorded event, fed exactly the way the live tracker hooks feed it."""
+    if kind == 0:
+        await sniper.on_launch(_launch_row(r))
+        tracker.born[r["address"]] = ts
+    elif kind == 1:
+        _, mint, side, sol, toks, trader, mc, sig, sol_usd = r
+        if sol_usd:
+            tracker.sol_usd = sol_usd
+        v = curve.vsol_from_mcap(mc) if mc else None
+        t = {"mint": mint, "ts": ts, "side": side, "sol": sol, "tokens": toks, "trader": trader,
+             "mcap_sol": mc, "signature": sig, "sol_usd": sol_usd, "vsol": v if v and v < curve.CURVE_END else None}
+        await sniper.on_trade(t)
+        await ap.on_trade(t)
+    else:
+        await sniper.on_graduated({"mint": r["address"], "ts": ts})
 
 
 async def _eval_dirty(sniper: Any, now: float) -> None:
