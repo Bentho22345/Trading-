@@ -247,3 +247,67 @@ async def wallet_forget(b: PwBody, request: Request) -> dict[str, Any]:
         await S.autopilot.set_mode("off")
     await S.wallet.forget()
     return {"ok": True}
+
+
+# ---------------- replay lab: backtest the brain on the tape Radar recorded ----------------
+_BT: dict[str, Any] = {"proc": None, "params": None, "started": None}
+
+
+def _bt_paths() -> tuple[Any, Any]:
+    from .config import settings
+    base = settings.db_path.parent
+    return base / "backtest.json", base / "backtest.json.progress"
+
+
+class BacktestBody(BaseModel):
+    hours: float = 6.0
+    level: str | None = None
+
+
+@router.post("/backtest")
+async def backtest_start(b: BacktestBody) -> dict[str, Any]:
+    """Replay the last N hours of recorded launches + trades through a fresh brain, in a separate low-priority process."""
+    import asyncio
+    import sys
+
+    from .config import settings
+    p = _BT.get("proc")
+    if p is not None and p.returncode is None:
+        raise HTTPException(409, "a backtest is already running")
+    hours = max(0.25, min(48.0, float(b.hours)))
+    level = b.level or S.autopilot.brain.aggression
+    out, prog = _bt_paths()
+    for f in (out, prog):
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            pass
+    cmd = [sys.executable, "-m", "radar.replay", "--db", str(settings.db_path), "--hours", str(hours), "--level", level, "--out", str(out)]
+    try:                                                    # low priority: the live engine always wins the CPU
+        _BT["proc"] = await asyncio.create_subprocess_exec("nice", "-n", "15", *cmd)
+    except FileNotFoundError:
+        _BT["proc"] = await asyncio.create_subprocess_exec(*cmd)
+    _BT.update(params={"hours": hours, "level": level}, started=time.time())
+    return {"started": True, **_BT["params"]}
+
+
+@router.get("/backtest")
+async def backtest_status() -> dict[str, Any]:
+    import json as _json
+    out, prog = _bt_paths()
+    p = _BT.get("proc")
+    running = p is not None and p.returncode is None
+    res = None
+    if out.exists():
+        try:
+            res = _json.loads(out.read_text())
+        except ValueError:
+            res = None
+    progress = None
+    if running and prog.exists():
+        try:
+            progress = _json.loads(prog.read_text()).get("progress")
+        except ValueError:
+            pass
+    return {"running": running, "progress": progress, "params": _BT.get("params"), "started": _BT.get("started"),
+            "elapsed_s": round(time.time() - _BT["started"]) if _BT.get("started") else None, "result": res}

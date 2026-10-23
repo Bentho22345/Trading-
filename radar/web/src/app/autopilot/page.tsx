@@ -481,6 +481,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
       </div>
       {b?.nebula && <NebulaPanel n={b.nebula} now={now} />}
       {(b?.allocator || b?.report) && <WorkingPanel b={b} />}
+      <BacktestPanel level={b?.aggression} />
       {b?.verdict && (
         <div className={`mx-6 mt-3 flex flex-wrap items-center gap-3 rounded-2xl border px-4 py-3 text-[13px] ${b.verdict.state === 'trading' ? 'border-up/30 bg-up/[0.07] text-up' : 'border-warn/40 bg-warn/[0.08] text-warn'}`}>
           <b className="uppercase tracking-wide">{b.verdict.state === 'trading' ? '● Trading' : '● Not trading'}</b>
@@ -737,6 +738,66 @@ function NebulaPanel({ n, now }: { n: Nebula; now: number }) {
           <p className="num mt-2 text-white/50">ghost trades: {st.ghosts_done ?? 0} · saying no saved <b className="text-up">◎{(st.saved_sol ?? 0).toFixed(3)}</b> · missed <b className="text-warn">◎{(st.missed_sol ?? 0).toFixed(3)}</b> · tracking {n.tracking.real} real / {n.tracking.ghosts} ghosts</p>
         </div>
       </div>
+    </div>
+  );
+}
+
+type BtResult = {
+  ok: boolean; error?: string; hours: number; level: string; launches: number; trades_replayed: number; positions: number; wins: number;
+  pnl_sol: number; return_pct: number; max_drawdown_pct: number; by_strategy: RepRow[]; by_exit: RepRow[]; skips: Record<string, number>;
+  referee?: { trained: number; trusted: boolean; brier: number | null; baseline_brier: number | null }; wall_s?: number; last_error?: unknown;
+};
+type BtStatus = { running: boolean; progress: number | null; params: { hours: number; level: string } | null; elapsed_s: number | null; result: BtResult | null };
+
+function BacktestPanel({ level }: { level?: string }) {
+  const [st, setSt] = useState<BtStatus | null>(null);
+  const [hours, setHours] = useState(6);
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(() => api<BtStatus>('/api/autopilot/backtest').then(setSt).catch(() => {}), []);
+  usePoll(load, st?.running ? 3000 : 30000, [st?.running]);
+  const start = () => api('/api/autopilot/backtest', { method: 'POST', body: JSON.stringify({ hours, level }) })
+    .then(() => { setErr(null); load(); }).catch((e) => setErr(String(e?.message || e)));
+  const r = st?.result;
+  return (
+    <div className="mx-6 mt-3 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+      <div className="flex flex-wrap items-center gap-3 border-b border-white/[0.06] px-4 py-2.5">
+        <span className="font-extrabold tracking-wide text-flash">⏪ REPLAY LAB · backtest on the real tape</span>
+        <span className="text-[12px] text-white/55">a fresh brain trades the launches + trades Radar recorded — same feed, scoring, fees and exits</span>
+        <span className="ml-auto flex items-center gap-2">
+          <select value={hours} onChange={(e) => setHours(Number(e.target.value))} className="rounded-lg border border-white/15 bg-black/40 px-2 py-1 text-[12px]">
+            {[1, 3, 6, 12, 24, 48].map((h) => <option key={h} value={h}>last {h}h</option>)}
+          </select>
+          <button disabled={!!st?.running} onClick={start}
+            className="rounded-full border border-flash/50 px-3 py-1 text-[12px] font-bold text-flash disabled:opacity-40">{st?.running ? 'running…' : 'Run backtest'}</button>
+          {r && <button onClick={() => navigator.clipboard?.writeText(JSON.stringify(r, null, 1)).then(() => alert('Backtest copied — paste it to Claude.')).catch(() => {})}
+            className="rounded-full border border-white/20 px-3 py-1 text-[12px] font-bold text-white/80">Copy results</button>}
+        </span>
+      </div>
+      {err && <div className="px-4 py-2 text-[12px] text-down">{err}</div>}
+      {st?.running && (
+        <div className="px-4 py-3 text-[12px] text-white/60">
+          Replaying the last {st.params?.hours}h at level {st.params?.level} · {st.elapsed_s ?? 0}s
+          <div className="mt-1.5 h-1.5 rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-flash" style={{ width: `${Math.round((st.progress || 0) * 100)}%` }} /></div>
+        </div>
+      )}
+      {r && !r.ok && <div className="px-4 py-3 text-[12px] text-down">Backtest failed: {r.error}</div>}
+      {r && r.ok && (
+        <div className="p-4">
+          <div className="num flex flex-wrap gap-x-6 gap-y-1 text-[12.5px]">
+            <span>last <b>{r.hours}h</b> · {r.level}</span>
+            <span>return <b className={r.return_pct >= 0 ? 'text-up' : 'text-down'}>{r.return_pct > 0 ? '+' : ''}{r.return_pct}%</b> (◎{r.pnl_sol >= 0 ? '+' : ''}{r.pnl_sol.toFixed(2)})</span>
+            <span>max drawdown <b className="text-down">{r.max_drawdown_pct}%</b></span>
+            <span>{r.positions} trades · {r.positions ? Math.round((r.wins / r.positions) * 100) : 0}% won</span>
+            <span className="text-white/45">{r.launches} launches · {r.trades_replayed.toLocaleString()} trades replayed{r.wall_s ? ` in ${r.wall_s}s` : ''}</span>
+            {r.referee && <span className="text-white/45">referee {r.referee.trusted ? 'trusted' : 'learning'} ({r.referee.trained} judged)</span>}
+          </div>
+          <div className="mt-3 grid gap-4 lg:grid-cols-2">
+            <RepTable title="By strategy" rows={r.by_strategy || []} />
+            <RepTable title="Exits — worst and best" rows={[...(r.by_exit || []).slice(0, 6), ...(r.by_exit || []).slice(-6)].filter((x, i, a) => a.findIndex((y) => y.key === x.key) === i)} />
+          </div>
+        </div>
+      )}
+      {!r && !st?.running && <div className="px-4 py-3 text-[12px] text-white/45">No backtest yet. Pick a window and run it — it runs in the background at low priority, the live engine keeps trading.</div>}
     </div>
   );
 }

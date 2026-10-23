@@ -159,6 +159,10 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
   < 15 trades of its own or a losing record stays ≤ 4%. The EV gate applies from the first trade (thin evidence leans on
   a +12% / −8% prior payoff).
 - **Graduated coins** fill and mark on the PumpSwap pool's constant-product maths too (≈0.8% fees each way).
+- **Replay lab** (Autopilot → ⏪ Replay lab, or `python -m radar.replay --db data/radar.db --hours 6`): a fresh brain
+  trades the launches and trades Radar recorded (72 h kept) on a virtual clock — same partial feed, scoring, council,
+  fees, curve / PumpSwap fills and exits, no look-ahead (dev history and graduations after the window start are hidden).
+  Runs as a separate low-priority process on a slim snapshot; "Copy results" gives the full report.
 - **Rides** bank 25% into a surge and follow the trailing playbook (swing / runner / moon) that has earned most for
   that style; the early "it's dying" exit is audited against that playbook and muted if it does worse.
 
