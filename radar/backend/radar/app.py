@@ -487,6 +487,7 @@ async def news(limit: int = 80) -> list[dict[str, Any]]:
 # ---------------- token detail ----------------
 @app.get("/api/token/{address}")
 async def token(address: str) -> dict[str, Any]:
+    await S.tracker.flush_trades()
     summary = await S.tracker.token_summary(address)
     if not summary:
         # unknown token: pull it in on demand (counts against the same budget)

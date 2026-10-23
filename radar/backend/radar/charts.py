@@ -118,6 +118,8 @@ class Charts:
             raise
 
     async def live_candles(self, mint: str, tf: str, since: float) -> list[dict[str, float]]:
+        if hasattr(self.tracker, "flush_trades"):
+            await self.tracker.flush_trades()
         rows = await self.db.all("SELECT ts, sol, mcap_sol, sol_usd FROM pump_trades WHERE mint=? AND ts >= ? ORDER BY ts",
                                  (mint, since))
         return bucket_trades(rows, TF_SECONDS.get(tf, 300), self.tracker.sol_usd)

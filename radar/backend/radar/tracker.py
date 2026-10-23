@@ -245,6 +245,11 @@ class Tracker:
         await asyncio.sleep(0.25)
         await self._flush_now()
 
+    async def flush_trades(self) -> None:
+        """Readers that show a coin's tape from the database call this first, so a trade is never 'missing' for 0.25 s."""
+        if self._trade_rows or self._mcap_rows:
+            await self._flush_now()
+
     async def _flush_now(self) -> None:
         rows, ups = self._trade_rows, self._mcap_rows
         self._trade_rows, self._mcap_rows = [], {}
