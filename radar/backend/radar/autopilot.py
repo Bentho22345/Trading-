@@ -24,6 +24,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any
 
+from . import curve
 from . import feed
 from .hub import hub
 from .solwallet import TradeError
@@ -96,6 +97,8 @@ class Autopilot:
         self.copy_buys: dict[str, deque] = defaultdict(lambda: deque(maxlen=50))
         self.signals: deque[dict[str, Any]] = deque(maxlen=200)       # external triggers (copy / X calls) waiting for the loop
         self.last_buy = 0.0
+        self._mlock = asyncio.Lock()
+        self._fast: dict[str, float] = {}
         self.kick = asyncio.Event()                                      # set on every scoring batch / copy signal: react at once
         self.paused_reason: str | None = None
         self._pub_ts, self._pub_pending = 0.0, False
@@ -213,6 +216,7 @@ class Autopilot:
     # ---------------- external triggers ----------------
     async def on_trade(self, t: dict[str, Any]) -> None:
         """Copy-trading input: top-ranked / followed / smart wallets buying (and selling — the brain mirrors exits)."""
+        self.watch_trade(t.get("mint"))
         try:
             await self.brain.on_trade(t)
         except Exception as e:  # noqa: BLE001
@@ -360,6 +364,7 @@ class Autopilot:
                   mode: str | None = None) -> dict[str, Any]:
         mode = mode or (self.c["mode"] if self.c["mode"] != "off" else "demo")
         size = sol or self.c["size"]["buy_sol"]
+        curve_s = None                             # our SOL sitting in the bonding curve (demo fills on the curve)
         if mode != "auto":                         # the hard cap protects REAL money (and your manual demo rules); the
             size = min(size, self.c["size"]["max_buy_sol_hard"])   # self-driving demo pot has its own impact / exposure caps
         px, L = await self.price(mint)
@@ -379,10 +384,14 @@ class Autopilot:
             else:
                 if await self.demo_balance(mode) < size:
                     raise TradeError(f"{mode} balance too low")
-                impact = size / max(30.0, (L.vsol if L and L.vsol else 60.0))
-                fill = px * (1 + impact + 0.005)                         # price impact + PumpPortal fee
+                v = curve.vsol_from_mcap(px * SUPPLY)
+                if L is not None and not getattr(L, "graduated_at", None) and curve.on_curve(v):
+                    curve_s = size * (1 - curve.FEE)                       # exact bonding-curve fill after pump.fun + router fees
+                    tokens = curve.tokens_for(v, curve_s)
+                else:                                                      # graduated (AMM pool): linear impact on its liquidity
+                    impact = size / max(30.0, (L.vsol if L and L.vsol else 60.0))
+                    tokens = size * 0.99 / (px * (1 + impact + 0.005))
                 sol_in = size + self.c["exec"]["priority_fee_sol"]
-                tokens = size * 0.99 / fill                                # pump.fun 1% fee
                 sig = None
                 await self._demo_add(-sol_in, mode)
             entry_px = sol_in / tokens
@@ -392,7 +401,8 @@ class Autopilot:
                 (mode, mint, sym, trigger, detail, time.time(), entry_px, px * SUPPLY, sol_in, tokens, tokens, 0.0, px, px, "[]", "open", sig))
             p = {"id": pid, "mode": mode, "mint": mint, "symbol": sym, "trigger": trigger, "detail": detail, "opened": time.time(),
                  "entry_price_sol": entry_px, "entry_mcap_sol": px * SUPPLY, "sol_in": sol_in, "tokens": tokens, "tokens_left": tokens,
-                 "sol_out": 0.0, "peak_price_sol": px, "last_price_sol": px, "tp_done": [], "status": "open", "buy_sig": sig}
+                 "sol_out": 0.0, "peak_price_sol": px, "last_price_sol": px, "tp_done": [], "status": "open", "buy_sig": sig,
+                 "curve_s": curve_s}
             self.open[pid] = p
             await self._order(mode, pid, "buy", mint, sym, sol_in, tokens, px, sig, "filled", None, f"{trigger}: {detail}")
             self.stats["buys"] += 1
@@ -428,8 +438,15 @@ class Autopilot:
                 got, sold, sig = res["sol"], res["tokens"] or qty, res["sig"]
             else:
                 L = self.sniper.launches.get(p["mint"])
-                impact = qty * px / max(30.0, (L.vsol if L and L.vsol else 60.0))
-                got = max(0.0, qty * px * 0.99 * (1 - impact - 0.005) - self.c["exec"]["priority_fee_sol"])
+                v = curve.vsol_from_mcap(px * SUPPLY)
+                cs = p.get("curve_s")
+                if cs is not None and curve.on_curve(v) and not (L is not None and getattr(L, "graduated_at", None)):
+                    gross = curve.sol_for(max(curve.CURVE0 * 0.5, v + cs), qty)   # our own SOL is still in the curve
+                    p["curve_s"] = cs - gross
+                    got = max(0.0, gross * (1 - curve.FEE) - self.c["exec"]["priority_fee_sol"])
+                else:
+                    impact = qty * px / max(30.0, (L.vsol if L and L.vsol else 60.0))
+                    got = max(0.0, qty * px * 0.99 * (1 - impact - 0.005) - self.c["exec"]["priority_fee_sol"])
                 sold, sig = qty, None
                 await self._demo_add(got, p["mode"])
             p["tokens_left"] = max(0.0, p["tokens_left"] - sold)
@@ -478,10 +495,44 @@ class Autopilot:
                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (time.time(), mode, pid, side, mint, sym, sol, tokens, px, sig, status, error, reason))
 
     # ---------------- exits ----------------
-    async def manage(self) -> None:
+    def mark(self, p: dict[str, Any], px: float, L: Any) -> float:
+        """What the position is really worth per token: on the bonding curve, the SOL you'd get dumping all of it now
+        (our own SOL still in the curve counted, as on chain) — not the last trade's price. Graduated coins: the price."""
+        if L is not None and getattr(L, "graduated_at", None):
+            return px
+        v = curve.vsol_from_mcap(px * SUPPLY)
+        if not curve.on_curve(v) or p["tokens_left"] <= 0:
+            return px
+        if p["mode"] == "real":
+            return curve.liquidation_px(v, 0.0, p["tokens_left"])        # the live curve already holds our buy
+        if p.get("curve_s") is None:                                    # restored after a restart: rebuild our SOL in the curve
+            p["curve_s"] = max(0.0, p["sol_in"] - self.c["exec"]["priority_fee_sol"]) * (1 - curve.FEE) * p["tokens_left"] / max(1e-9, p["tokens"])
+        return curve.liquidation_px(max(curve.CURVE0 * 0.5, v + p["curve_s"]), 0.0, p["tokens_left"])
+
+    async def manage(self, only: str | None = None) -> None:
+        async with self._mlock:                 # the loop and the instant per-trade path never act on a position at once
+            await self._manage(only)
+
+    def watch_trade(self, mint: str | None) -> None:
+        """A trade just hit a coin we hold: re-check its exits now instead of on the next loop tick."""
+        if not mint or not any(p["mint"] == mint for p in self.open.values()):
+            return
+        now = time.time()
+        if now - self._fast.get(mint, 0.0) < 0.1:
+            return
+        self._fast[mint] = now
+        if len(self._fast) > 500:
+            self._fast = {m: t for m, t in self._fast.items() if t > now - 60}
+        asyncio.get_running_loop().create_task(self.manage(only=mint))
+
+    async def _manage(self, only: str | None = None) -> None:
         e = self.c["exits"]
         now = time.time()
         for p in list(self.open.values()):
+            if only is not None and p["mint"] != only:
+                continue
+            if p["id"] not in self.open:
+                continue
             px, L = await self.price(p["mint"])
             if L is not None and hasattr(L, "until") and L.until < now + 3600:
                 L.until = now + 6 * 3600                                  # never let the coin we hold drop out of the live feed
@@ -492,6 +543,7 @@ class Autopilot:
                     await self.sell(p, 1.0, "price feed lost — closed at the last price")
                 continue
             p.pop("_no_px", None)
+            px = self.mark(p, px, L)
             p["last_price_sol"] = px
             p["peak_price_sol"] = max(p["peak_price_sol"], px)
             x = px / p["entry_price_sol"]

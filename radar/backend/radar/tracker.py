@@ -95,6 +95,9 @@ class Tracker:
         self.alt_task: asyncio.Task | None = None
         self.chain_since = 0.0
         self._sigs: set[str] = set()
+        self._trade_rows: list[tuple] = []
+        self._mcap_rows: dict[str, tuple] = {}
+        self._flush_task: asyncio.Task | None = None
         self._sig_q: list[str] = []
         self.coinbase = Coinbase(self.on_tick)
         self.sol_usd: float | None = None
@@ -220,19 +223,40 @@ class Tracker:
         trade = {"mint": mint, "ts": now, "side": m.get("txType"), "sol": m.get("solAmount"),
                  "tokens": m.get("tokenAmount"), "trader": m.get("traderPublicKey"),
                  "mcap_sol": m.get("marketCapSol"), "signature": m.get("signature"), "sol_usd": self.sol_usd}
-        await self.db.exec("INSERT OR IGNORE INTO pump_trades (mint, ts, side, sol, tokens, trader, mcap_sol, signature, sol_usd) "
-                           "VALUES (?,?,?,?,?,?,?,?,?)", list(trade.values()))
+        self._trade_rows.append(tuple(trade.values()))
         trade["vsol"] = m.get("vSolInBondingCurve")
         trade["pool"] = m.get("pool")
         if m.get("marketCapSol") is not None:
-            await self.db.exec("UPDATE tokens SET pump_mcap_sol=?, pump_mcap_as_of=?, curve_sol=COALESCE(?, curve_sol), "
-                               "curve_progress=CASE WHEN graduated_at IS NOT NULL THEN 100 ELSE COALESCE(?, curve_progress) END WHERE address=?",
-                               (m.get("marketCapSol"), now, m.get("vSolInBondingCurve"), curve_progress(m.get("vSolInBondingCurve")), mint))
+            self._mcap_rows[mint] = (m.get("marketCapSol"), now, m.get("vSolInBondingCurve"), curve_progress(m.get("vSolInBondingCurve")), mint)
+        # the sniper, the brain and the autopilot see the trade FIRST; the database write is batched (one transaction every
+        # 0.25 s instead of two commits per trade) so a busy tape never queues up behind disk writes
+        await self._hook("trade", trade)
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.get_running_loop().create_task(self._flush_trades())
+        elif len(self._trade_rows) >= 2000:
+            await self._flush_now()
         mc_usd = self._usd(m.get("marketCapSol"))
         # pump.fun supply is fixed at 1B, so price = market cap / 1e9 (lets open charts update on every trade)
         await hub.publish_viewers("trade", {**trade, "usd": self._usd(m.get("solAmount")), "mcap_usd": mc_usd,
                                             "price_usd": mc_usd / 1e9 if mc_usd else None}, mint)
-        await self._hook("trade", trade)
+
+    async def _flush_trades(self) -> None:
+        await asyncio.sleep(0.25)
+        await self._flush_now()
+
+    async def _flush_now(self) -> None:
+        rows, ups = self._trade_rows, self._mcap_rows
+        self._trade_rows, self._mcap_rows = [], {}
+        try:
+            if rows:
+                await self.db.many("INSERT OR IGNORE INTO pump_trades (mint, ts, side, sol, tokens, trader, mcap_sol, signature, sol_usd) "
+                                   "VALUES (?,?,?,?,?,?,?,?,?)", rows)
+            if ups:
+                await self.db.many("UPDATE tokens SET pump_mcap_sol=?, pump_mcap_as_of=?, curve_sol=COALESCE(?, curve_sol), "
+                                   "curve_progress=CASE WHEN graduated_at IS NOT NULL THEN 100 ELSE COALESCE(?, curve_progress) END "
+                                   "WHERE address=?", list(ups.values()))
+        except Exception as e:  # noqa: BLE001
+            log.warning("trade batch write: %s", e)
 
     async def on_migrate(self, m: dict[str, Any]) -> None:
         mint = m.get("mint")

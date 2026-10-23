@@ -174,6 +174,7 @@ AGGRESSION = {   # top-share of what it sees that it will buy, max positions, st
                 "scalp": {"bar": 0.36, "size": 0.012, "tp": 1.10, "stop": 0.08, "max_s": 90},
                 "snipe": {"bar": 0.40, "size": 0.012, "max_age": 45, "tp": 1.15, "stop": 0.10, "max_s": 75}},
 }
+FAST_LEVELS = ("hyper", "surreal")           # hundreds of trades an hour: losing streaks are noise, not a reason to stop
 POWER = {"size": 2.5, "tp": 1.35, "stop": 0.15, "time": 3.0, "trail": 0.12}   # a coin with everything pouring in: bet more, give it room
 # scale-out ladders: (multiple, share of what's left to sell, marker). Partial sells as a coin moves = buys AND sells all day.
 LADDERS = {"quick": [(1.25, 0.25, 101), (1.6, 0.30, 102), (2.2, 0.35, 103), (4.0, 0.50, 104)],
@@ -457,11 +458,17 @@ class Brain:
             self.dn_margin, self.grad_frac, self.mood, self.streak = 0.12, 0.5, 1.0, 0
             self.replay.clear()
             self.replay_t.clear()
+            from .allocator import Allocator
+            from .council import Council
+            self.council, self.alloc = Council(self), Allocator()
             self.fresh_start = True
             try:
                 await self.ap.db.exec("DELETE FROM brain_examples")
             except Exception:  # noqa: BLE001
                 pass
+            return
+        if ver < 10:
+            await self.recalibrate()
             return
         self.scalps.update(s.get("scalps") or {})
         self.snipes.update(s.get("snipes") or {})
@@ -487,7 +494,7 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "council": self.council.state(), "alloc": self.alloc.state(), "version": 9, "win": self.win.state(), "rug": self.rug.state(),
+            "council": self.council.state(), "alloc": self.alloc.state(), "version": 10, "win": self.win.state(), "rug": self.rug.state(),
             "up": self.up.state(), "dn": self.dn.state(), "dn_margin": round(self.dn_margin, 4), "grad_frac": round(self.grad_frac, 4),
             "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "snipes": self.snipes, "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
@@ -516,7 +523,35 @@ class Brain:
             await self.note("mode", f"🎚 Aggression → {level}: buys the top {AGGRESSION[level]['top'] * 100:.0f}% of what it sees, "
                                     f"up to {AGGRESSION[level]['max_open']} positions, stop −{AGGRESSION[level]['stop'] * 100:.0f}%.")
 
+    async def recalibrate(self) -> None:
+        """v10: demo fills used to charge price impact on the way in AND out and mark positions at the pre-buy price, so
+        every trade looked 5–20% worse than the bonding curve really makes it — and the win model, the council, the
+        allocator and the exit adaptations all learned 'everything loses'. Forget what was learned from trade outcomes;
+        keep what came from price paths (rug + timing models), burnt devs and wallet records."""
+        from .allocator import Allocator
+        from .council import Council
+        self.win = Logit(PRIORS, BIAS0)
+        self.council, self.alloc = Council(self), Allocator()
+        self.tags, self.base = {}, [0.0, 0.0, 0.0]
+        self.scalp_adj = {"bar": 0.0, "tp": 0.0, "stop": 0.0}
+        self.scalps = {"n": 0, "wins": 0, "pnl_sol": 0.0}
+        self.snipes = {"n": 0, "wins": 0, "pnl_sol": 0.0, "power": 0}
+        self.stop_mult = self.trail_mult = self.patience = self.smart_follow = 1.0
+        self.grad_frac, self.mood, self.streak, self.trained = 0.5, 1.0, 0, 0
+        self.exit_stats = {k: 0 for k in self.exit_stats}
+        self.replay.clear()
+        try:
+            await self.ap.db.exec("DELETE FROM brain_examples WHERE src != 'timing'")
+        except Exception:  # noqa: BLE001
+            pass
+        self.pending_notes.append("🧮 Recalibrated: demo trades now fill on the exact pump.fun bonding curve (price impact comes back "
+                                  "when you sell; only fees are lost) and positions are valued at what selling them would really return. "
+                                  "What it learned under the old, too-harsh fill model is reset — rug and timing models kept.")
+
     async def reset(self) -> None:
+        from .allocator import Allocator
+        from .council import Council
+        self.council, self.alloc = Council(self), Allocator()
         self.win, self.rug = Logit(PRIORS, BIAS0), Logit(RUG_PRIORS, RUG_BIAS0)
         self.up, self.dn = Logit(UP_PRIORS, -1.6), Logit(DN_PRIORS, -1.6)
         self.dn_margin, self.grad_frac = 0.12, 0.5
@@ -885,7 +920,8 @@ class Brain:
                 budget -= 1
                 f, v, _, p_rug, _ = self._score(L, now, cn)
                 p_up, p_dn = self.timing(f)
-                self.cache[L.mint] = {"rid": id(r), "cn": cn, "ts": now, "f": f, "v": v, "rug": p_rug, "up": p_up, "dn": p_dn}
+                self.cache[L.mint] = {"rid": id(r), "cn": cn, "ts": now, "f": f, "v": v, "rug": p_rug, "up": p_up, "dn": p_dn,
+                                      "why": self.why(f)}             # explained once per re-score, not on every tick
                 raw = self.charts.get(L.mint)
                 if raw and L.mint in self.sampled and pat.rug_alarm(raw):
                     for key in (L.mint, *(f"{L.mint}#{k}" for k in range(1, 4))):
@@ -899,7 +935,7 @@ class Brain:
             scored.append({"mint": L.mint, "symbol": r.get("symbol"), "value": v, "p_rug": round(p_rug * 100), "hard": self.hard_no(r),
                            "p_up": round(c["up"] * 100), "p_dn": round(c["dn"] * 100),
                            "scalp": self.scalp_score(c["f"], self.charts.get(L.mint)) if self.scalp_cfg() else 0.0,
-                           "why": self.why(f), "f": f, "mcap_usd": r.get("mcap_usd"), "age_s": round(now - L.created), "tier": r.get("tier"),
+                           "why": c.get("why") or "", "f": f, "mcap_usd": r.get("mcap_usd"), "age_s": round(now - L.created), "tier": r.get("tier"),
                            "deployer": L.deployer, "leaders": leaders, "copy_ranks": ranks, "mcap_sol": L.mcap_sol, "r": r})
             self.sample(L, f, v, now)
         self.market_stats(scored)
@@ -1369,6 +1405,9 @@ class Brain:
         ok, amult, why = self.alloc.gate(strat)
         if not ok:
             self.skip(f"allocator: {strat} benched")
+            # still followed on paper (half of them): a benched strategy earns its way back on evidence, not on a timer
+            self.council.ghost(mint, f or {}, L, {"style": style, "strat": strat, "play": "quick" if style in ("snipe", "scalp") else "swing",
+                                                   "votes": None, "go": False, "bench": True}, size, rate=0.5)
             return False
         brk = self.breaker()
         if brk:
@@ -1669,7 +1708,12 @@ class Brain:
             return self._exit(p, 1.0, "rug exit: " + ", ".join(r.get("flags") or ["insiders"]), "rug")
         raw = self.charts.get(p["mint"])
         alarm = pat.rug_alarm(raw) if raw else None
-        if alarm:
+        # the tape-shape alarms (a drain, one big sell, whales unloading) are audited like any discretionary exit: early
+        # pump.fun charts flush constantly, and if bailing on them keeps doing worse than the playbook (which still has its
+        # stop), they get muted. A dev dumping or one hand holding the supply always gets us out.
+        if alarm and (alarm.startswith(("dev dumped", "one hand")) or
+                      self.exit_on(p, "rug:" + ("drain" if alarm.startswith("liquidity") else "big sell" if alarm.startswith("one sell")
+                                                else "whales"))):
             return self._exit(p, 1.0, f"rug pattern: {alarm}", "rug")
         hit = self.cache.get(p["mint"])
         if hit and self.rug.n >= 300 and self.rug_hot(hit["rug"], 0.85, top=True) and x < 2:
@@ -1950,13 +1994,16 @@ class Brain:
                 elif avg > 0.01 and wr >= 0.5:
                     a["bar"] = max(-0.15, a["bar"] - 0.01)
             if self.scalp_streak <= -8 and -self.scalp_streak % 4 == 0:
-                self.cool_until = max(self.cool_until, now + 60)
-                notes.append(f"🥶 {-self.scalp_streak} scalps in a row lost — a 1-minute breather and a higher scalp bar.")
+                if self.aggression not in FAST_LEVELS:
+                    self.cool_until = max(self.cool_until, now + 60)
+                    notes.append(f"🥶 {-self.scalp_streak} scalps in a row lost — a 1-minute breather and a higher scalp bar.")
+                else:                                                     # at this pace a streak is noise: the breakers guard the pot
+                    notes.append(f"🥶 {-self.scalp_streak} scalps in a row lost — scalp bar up, still trading.")
         elif mult < 1:
             self.streak = min(0, self.streak) - 1
         else:
             self.streak = max(0, self.streak) + 1
-        if not scalp and self.streak <= -4 and -self.streak % 3 == 1:   # 4, 7, 10… in a row
+        if not scalp and self.streak <= -4 and -self.streak % 3 == 1 and self.aggression not in FAST_LEVELS:   # 4, 7, 10… in a row
             cool = AGGRESSION[self.aggression]["cool_s"]
             self.cool_until = time.time() + cool
             notes.append(f"😞 {-self.streak} losses in a row — cooling off {cool / 60:.1f} min (only top-10 wallet copies), "

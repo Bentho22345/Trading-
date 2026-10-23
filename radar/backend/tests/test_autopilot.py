@@ -234,7 +234,7 @@ def test_brain_v2_buys_the_best_it_sees_exits_and_learns(tmp_path):
         assert await ap.demo_balance("auto") < 100 and await ap.demo_balance("demo") == 10   # brain: ◎100 pot; your demo rules: ◎10
         p = auto[0]
         assert 0.4 < p["sol_in"] <= 20.5                                # conviction sizing: 0.5% … 20% of the ◎100 pot
-        great.mcap_sol = 40 * 2.6
+        great.mcap_sol = 40 * 3.2                                       # marked at what dumping it all returns (exact curve maths), so
         for _ in range(4):                                              # it scales out rung by rung as the coin climbs
             await ap.manage()
         assert {101, 102, 103} <= set(p["tp_done"]) and p["tokens_left"] < p["tokens"] * 0.4 and p["status"] == "open"
@@ -417,6 +417,7 @@ def test_brain_v4_gets_discouraged_learns_patterns_benches_and_adapts_stops(tmp_
         coin = launch("MOODmint" + "7" * 32, upside=40, risk=20, buyers=30, deployer="DevRug")
         ap, db = await make(tmp_path, [coin])
         b = ap.brain
+        b.aggression = "aggressive"                                     # surreal/hyper never pause on a streak (the breakers guard them)
         f = {"upside": 0.4, "age_0_2m": 1.0, "dev_serial": 1.0, "top10": 0.2}
         mood0, size0 = b.mood_factor(), b.size(10, 0.5, "auto")
         for i in range(6):                                              # six losers in a row, all young serial-dev coins

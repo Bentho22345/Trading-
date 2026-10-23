@@ -29,6 +29,7 @@ from array import array
 from collections import deque
 from typing import Any
 
+from . import curve
 from .brain import DN_PRIORS, KEYS, LABELS, PRIORS, RUG_PRIORS, UP_PRIORS, Logit, _clip
 
 BRAINS = ("executor", "skeptic", "optimist")
@@ -47,7 +48,7 @@ SKEPTIC_PRIORS = {k: round(0.35 * (0.6 * RUG_PRIORS.get(k, 0) + 0.6 * DN_PRIORS.
                   for k in KEYS}
 OPTIMIST_PRIORS = {k: round(0.35 * (0.7 * PRIORS.get(k, 0) + 0.6 * UP_PRIORS.get(k, 0) - 0.3 * RUG_PRIORS.get(k, 0)), 3) for k in KEYS}
 FAST = ("snipe", "scalp", "wave2")                    # fast styles never take the 25-minute moon playbook
-MAX_REAL, MAX_GHOST, GHOST_RATE = 400, 400, 0.15
+MAX_REAL, MAX_GHOST, GHOST_RATE = 400, 900, 0.35      # ghosts are free lessons: follow a third of the trades it turns down
 ETA = 0.4                                    # Hedge learning rate
 LR = 0.05
 
@@ -58,7 +59,8 @@ def _logit(p: float) -> float:
 
 
 def costs(size: float, vsol: float | None, prio: float = 0.0005) -> tuple[float, float]:
-    """Fraction lost on the way in and on the way out: pump.fun 1% + router 0.5% + curve impact + priority fee."""
+    """Graduated (AMM) coins: fraction lost on the way in and out — fees + pool impact + priority fee. On the bonding curve
+    the exact maths in curve.py is used instead (there impact comes back on the way out; only fees are lost)."""
     impact = size / max(30.0, vsol or 60.0)
     fixed = prio / max(0.01, size)
     return 0.015 + impact + fixed, 0.015 + impact + fixed
@@ -95,6 +97,7 @@ class Council:
         self.base_lose, self.base_big = 0.55, 0.10
         self.plays: dict[str, dict[str, list[float]]] = {}       # style -> playbook -> [n, mean, M2] (decayed)
         self.track: dict[str, dict[str, Any]] = {}               # counterfactual trackers: real positions + ghosts
+        self.n_real = 0
         self.debate: deque[dict[str, Any]] = deque(maxlen=60)
         self.audit_notes: deque[str] = deque(maxlen=10)
         self.recent: deque[float] = deque(maxlen=25)              # last real trades' net results
@@ -230,20 +233,27 @@ class Council:
                    d: dict[str, Any], real: bool, sol: float = 0.0) -> None:
         if not entry_mcap or key in self.track:
             return
-        n_real = sum(1 for t in self.track.values() if t["real"])
+        n_real = self.n_real
         if (real and n_real >= MAX_REAL) or (not real and len(self.track) - n_real >= MAX_GHOST):
             return
         cb, cs = costs(size, vsol)
+        v0 = curve.vsol_from_mcap(entry_mcap)
+        cv = None
+        if curve.on_curve(v0) and size > 0:                          # exact curve replay: fees are the only round-trip cost
+            s_in = size * (1 - curve.FEE)
+            cv = (v0, s_in, curve.tokens_for(v0, s_in), size + 0.0005)
+            cs = curve.FEE + 0.0005 / size
         style = d.get("style")
-        self.track[key] = {"mint": mint, "t0": time.time(), "entry": entry_mcap, "cb": cb, "cs": cs, "real": real, "sol": sol,
+        self.n_real += int(real)
+        self.track[key] = {"mint": mint, "t0": time.time(), "entry": entry_mcap, "cb": cb, "cs": cs, "cv": cv, "real": real, "sol": sol,
                            "vec": array("f", ((f or {}).get(k, 0.0) for k in KEYS)), "votes": d.get("votes"), "play": d.get("play"),
-                           "style": d.get("style"), "strat": d.get("strat"), "go": d.get("go"), "veto": d.get("veto"), "last": 1.0,
+                           "style": d.get("style"), "strat": d.get("strat"), "go": d.get("go"), "veto": d.get("veto"), "last": 1.0, "bench": d.get("bench"),
                            "st": {n: [False, 1.0, None] for n in ORDER if not (style in FAST and n == "moon")}}
 
-    def ghost(self, mint: str, f: dict[str, float], L: Any, d: dict[str, Any], size: float) -> None:
+    def ghost(self, mint: str, f: dict[str, float], L: Any, d: dict[str, Any], size: float, rate: float | None = None) -> None:
         """A trade the council turned down — follow it anyway, so it learns whether saying no was right. A rejected top-wallet
         influx is ALWAYS followed (rare, and exactly the call it most needs to get right)."""
-        rate = 1.0 if d.get("style") == "copy" else GHOST_RATE
+        rate = 1.0 if d.get("style") == "copy" else (GHOST_RATE if rate is None else rate)
         if L is None or not getattr(L, "mcap_sol", None) or self.rng.random() > rate:
             return
         self.open_track(f"g:{mint}:{int(time.time())}", mint, f, L.mcap_sol, size, getattr(L, "vsol", None), d, real=False, sol=size)
@@ -258,7 +268,12 @@ class Council:
             L = launches.get(t["mint"])
             age = now - t["t0"]
             if L is not None and L.mcap_sol:
-                t["last"] = (L.mcap_sol / t["entry"]) / (1 + t["cb"])
+                v1 = curve.vsol_from_mcap(L.mcap_sol) if t.get("cv") else None
+                if v1 and curve.on_curve(v1):
+                    _, s_in, q, basis = t["cv"]
+                    t["last"] = curve.sol_for(v1 + s_in, q) / basis    # what dumping it now returns, per SOL put in
+                else:
+                    t["last"] = (L.mcap_sol / t["entry"]) / (1 + t["cb"])
             x = t["last"]
             alive = False
             for name, st in t["st"].items():
@@ -275,7 +290,9 @@ class Council:
             if not alive:
                 done.append(key)
         for key in done:
-            self.finish(self.track.pop(key))
+            t = self.track.pop(key)
+            self.n_real -= int(t["real"])
+            self.finish(t)
 
     def finish(self, t: dict[str, Any]) -> None:
         nets = {n: st[2] for n, st in t["st"].items() if st[2] is not None}
@@ -296,6 +313,10 @@ class Council:
             self.audit(t["rule"], t["real_net"] - nets.get(t["play"] or "quick", best))
         self.optimist.step(f, 1.0 if best >= BIG else 0.0, LR * w)
         self.base_big = 0.98 * self.base_big + 0.02 * (1.0 if best >= BIG else 0.0)
+        if not t["real"] and t.get("bench"):                        # a benched strategy's paper trade: allocator evidence only
+            if t.get("strat"):
+                self.b.alloc.book_ghost(t["strat"], nets.get(t["play"] or "quick", best))
+            return
         if not t["real"]:
             net = nets.get(t["play"] or "quick", best)
             lose = 1.0 if net < 0 else 0.0

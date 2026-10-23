@@ -102,3 +102,14 @@ def test_the_ev_gate_breakers_and_exposure_cap_in_the_executor(tmp_path):
         assert deployed <= 0.6 * 100 + 5                                 # never more than ~60% of the pot at once
         await db.close()
     asyncio.run(run())
+
+
+def test_a_benched_strategy_comes_back_when_its_paper_trades_make_money():
+    a = Allocator()
+    for _ in range(14):
+        a.book("scalp", -0.06, -0.006)
+    assert not a.gate("scalp")[0] or a.gate("scalp")[2] == "probe"
+    for _ in range(9):
+        assert a.book_ghost("scalp", 0.04) is None                    # not enough evidence yet
+    assert "un-benched scalp" in (a.book_ghost("scalp", 0.04) or "")
+    assert a.gate("scalp")[0] and a.gate("scalp")[2] != "probe"

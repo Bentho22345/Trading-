@@ -55,9 +55,24 @@ class Allocator:
         evidence = aw[0] + al[0]
         return (aw[1] if aw[0] >= 2 else 0.12), (al[1] if al[0] >= 2 else 0.08), evidence
 
-    def book_ghost(self, key: str, net: float) -> None:
-        """A trade the bot passed on, followed anyway: it only informs the payoff estimate, never the bench."""
-        self._payoff(self._get(key), net, 0.5)
+    def book_ghost(self, key: str, net: float) -> str | None:
+        """A trade the bot passed on, followed anyway: it informs the payoff estimate — and, for a BENCHED strategy, it is
+        the evidence that lets it back in: if what it would have bought keeps making money, it comes off the bench."""
+        st = self._get(key)
+        self._payoff(st, net, 0.5)
+        if st["bench_until"] <= time.time():
+            st["gl"] = []
+            return None
+        gl = st.setdefault("gl", [])
+        gl.append(net)
+        del gl[:-20]
+        if len(gl) >= 10 and sum(gl) / len(gl) > 0.015:
+            st["bench_until"], st["gl"] = 0.0, []
+            msg = (f"✅ Allocator un-benched {key}: the {len(gl)} trades it would have made while benched averaged "
+                   f"{sum(gl) / len(gl) * 100:+.1f}% after fees.")
+            self.notes.appendleft(msg)
+            return msg
+        return None
 
     def gate(self, key: str) -> tuple[bool, float, str]:
         """(allowed, size multiplier, why) for a proposal from strategy `key`."""
