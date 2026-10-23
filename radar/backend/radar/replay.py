@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import heapq
 import json
 import math
 import os
@@ -95,11 +96,14 @@ async def run(db_path: str, hours: float, level: str, end: float | None = None, 
     launches = [dict(r) for r in src.execute(
         "SELECT address, symbol, name, deployer, launched_at, dev_initial_buy_pct, graduated_at FROM tokens "
         "WHERE source='pumpportal' AND launched_at >= ? AND launched_at < ? AND COALESCE(is_mayhem,0)=0 ORDER BY launched_at", (t0 - 1800, t1))]
-    trades = src.execute("SELECT mint, ts, side, sol, tokens, trader, mcap_sol, signature, sol_usd FROM pump_trades "
-                         "WHERE ts >= ? AND ts < ? ORDER BY ts", (t0 - 1800, t1)).fetchall()
+    n_trades = src.execute("SELECT COUNT(*) FROM pump_trades WHERE ts >= ? AND ts < ?", (t0 - 1800, t1)).fetchone()[0]
     src.close()
-    if not trades:
+    if not n_trades:
         return {"ok": False, "error": "no recorded trades in that window"}
+    # trades are STREAMED from the database in time order (a day of tape never sits in memory at once)
+    feed = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    trades = feed.execute("SELECT ts, mint, side, sol, tokens, trader, mcap_sol, signature, sol_usd FROM pump_trades "
+                          "WHERE ts >= ? AND ts < ? ORDER BY ts", (t0 - 1800, t1))
 
     work = Path(tempfile.mkdtemp(prefix="radar-replay-"))
     snap = str(work / "replay.db")
@@ -107,13 +111,16 @@ async def run(db_path: str, hours: float, level: str, end: float | None = None, 
     time.time = _now                                     # the virtual clock (everything in Radar reads time.time())
     CLOCK[0] = t0 - 1800
     try:
-        return await _replay(snap, work, t0, t1, level, launches, trades, step, progress, tune or {})
+        out = await _replay(snap, work, t0, t1, level, launches, trades, step, progress, tune or {})
+        out["trades_replayed"] = n_trades
+        return out
     finally:
         time.time = _real_time
+        feed.close()
         shutil.rmtree(work, ignore_errors=True)
 
 
-async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launches: list[dict[str, Any]], trades: list[Any],
+async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launches: list[dict[str, Any]], trades: Any,
                   step: float, progress: Any, tune: dict[str, Any]) -> dict[str, Any]:
     from . import curve
     from .autopilot import Autopilot
@@ -132,9 +139,9 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
 
     # warm-up: the 30 minutes before the window build the sniper's picture; trading starts at t0
     ev_l = [(r["launched_at"], 0, r) for r in launches]
-    ev_t = [(r["ts"], 1, r) for r in trades]
     grads = [(r["graduated_at"], 2, r) for r in launches if r.get("graduated_at") and t0 - 1800 <= r["graduated_at"] < t1]
-    events = sorted(ev_l + ev_t + grads, key=lambda e: (e[0], e[1]))
+    small = sorted(ev_l + grads, key=lambda e: (e[0], e[1]))
+    events = heapq.merge(small, ((r[0], 1, r) for r in trades), key=lambda e: (e[0], e[1]))
     trading = False
     next_tick = CLOCK[0] + step
     n_ticks = 0
@@ -160,12 +167,12 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
             await sniper.on_launch(_launch_row(r))
             tracker.born[r["address"]] = ts
         elif kind == 1:
-            if r["sol_usd"]:
-                tracker.sol_usd = r["sol_usd"]
-            mc = r["mcap_sol"]
+            _, mint, side, sol, toks, trader, mc, sig, sol_usd = r
+            if sol_usd:
+                tracker.sol_usd = sol_usd
             v = curve.vsol_from_mcap(mc) if mc else None
-            t = {"mint": r["mint"], "ts": ts, "side": r["side"], "sol": r["sol"], "tokens": r["tokens"], "trader": r["trader"],
-                 "mcap_sol": mc, "signature": r["signature"], "sol_usd": r["sol_usd"], "vsol": v if v and v < curve.CURVE_END else None}
+            t = {"mint": mint, "ts": ts, "side": side, "sol": sol, "tokens": toks, "trader": trader,
+                 "mcap_sol": mc, "signature": sig, "sol_usd": sol_usd, "vsol": v if v and v < curve.CURVE_END else None}
             await sniper.on_trade(t)
             await ap.on_trade(t)
         else:
@@ -174,10 +181,15 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
                 L.graduated_at = ts
         if i % 500 == 0:
             await asyncio.sleep(0)                     # let spawned tasks (dev lookups, instant exits) run
+            if i % 20000 == 0:
+                from .guard import rss_mb
+                r_mb = rss_mb() or 0
+                if r_mb > float(os.environ.get("REPLAY_MAX_MB", "230")):
+                    raise MemoryError(f"replay stopped itself at {r_mb:.0f} MB (REPLAY_MAX_MB) — try a shorter window")
     CLOCK[0] = t1
     for p in list(ap.open.values()):                   # close what's left at the window's end, at the real last price
         await ap.sell(p, 1.0, "backtest window ended")
-    out = await summarize(ap, db, t0, t1, level, len(launches), len(trades))
+    out = await summarize(ap, db, t0, t1, level, len(launches), 0)
     out["tune"] = tune
     out["wall_s"] = round(_real_time() - wall0, 1)
     out["ticks"] = n_ticks

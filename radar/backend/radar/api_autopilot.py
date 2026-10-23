@@ -274,6 +274,10 @@ async def backtest_start(b: BacktestBody) -> dict[str, Any]:
     p = _BT.get("proc")
     if p is not None and p.returncode is None:
         raise HTTPException(409, "a backtest is already running")
+    from .guard import mem_headroom_mb
+    room = mem_headroom_mb()
+    if room is not None and room < float(__import__("os").environ.get("REPLAY_MIN_HEADROOM_MB", "200")):
+        raise HTTPException(503, f"not enough free memory for a replay right now ({room:.0f} MB free) — the live engine comes first")
     hours = max(0.25, min(48.0, float(b.hours)))
     level = b.level or S.autopilot.brain.aggression
     out, prog = _bt_paths()

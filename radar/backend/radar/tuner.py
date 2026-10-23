@@ -73,6 +73,14 @@ class Tuner:
             pass
 
     async def _replay(self, hours: float, end: float, tune: dict[str, Any], level: str) -> dict[str, Any]:
+        from .guard import mem_headroom_mb
+        for _ in range(20):                                         # wait (up to ~10 min) for memory headroom; live first
+            room = mem_headroom_mb()
+            if room is None or room >= float(os.environ.get("REPLAY_MIN_HEADROOM_MB", "200")):
+                break
+            await asyncio.sleep(30)
+        else:
+            return {"ok": False, "error": "not enough free memory for a replay"}
         out = self.db_path.parent / f"tuner-run-{os.getpid()}.json"
         cmd = [sys.executable, "-m", "radar.replay", "--db", str(self.db_path), "--hours", str(hours), "--end", str(end),
                "--level", level, "--tune", json.dumps(tune), "--out", str(out)]

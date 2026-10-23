@@ -28,6 +28,26 @@ def rss_mb() -> float | None:
         return None
 
 
+def mem_headroom_mb() -> float | None:
+    """MB the container can still allocate before its memory limit (cgroup v2 / v1), else the machine's MemAvailable."""
+    def read(path: str) -> str | None:
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return None
+    for lim_p, cur_p in (("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+                         ("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes")):
+        lim, cur = read(lim_p), read(cur_p)
+        if lim and cur and lim != "max" and lim.isdigit() and int(lim) < 1 << 50:
+            return round((int(lim) - int(cur)) / 1e6, 1)
+    info = read("/proc/meminfo") or ""
+    for line in info.splitlines():
+        if line.startswith("MemAvailable:"):
+            return round(int(line.split()[1]) / 1e3, 1)
+    return None
+
+
 def _size(p: str) -> float | None:
     try:
         return round(os.path.getsize(p) / 1e6, 1)
