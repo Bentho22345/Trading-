@@ -1722,22 +1722,30 @@ class Brain:
         f = (hit or {}).get("f") or {}
         # riding a real surge — holders, volume and liquidity all pouring in: hold it until it dies down
         if p.get("ride"):
-            if not hit or age > 1800:                                    # lost its live read, or held 30 min: bank it
-                return self._exit(p, 1.0, f"ride closed at {x:.2f}× ({'no live read' if not hit else '30-min cap'})", "trail")
-            if x <= 0.9:
-                return self._exit(p, 1.0, f"ride failed — back below entry ({x:.2f}×)", "stop")
-            if self.dying(f) or (hit and self.dn_hot(hit["dn"])) or self.smart_selling(p["mint"]) >= 2:
+            # a ride follows the trailing playbook that has done best for this style (swing / runner / moon), so the exit
+            # auditor's counterfactual is exactly what it falls back to if the early "it's dying" exit gets muted
+            pb = p.get("ride_pb") or {"tp": 2.0, "stop": 0.15, "hold": 600, "trail": 0.15, "arm": 1.3, "name": "runner"}
+            if not hit or age > max(1800, pb["hold"] * 2):                # lost its live read, or held long enough: bank it
+                return self._exit(p, 1.0, f"ride closed at {x:.2f}× ({'no live read' if not hit else 'time cap'})", "trail")
+            floor = max(0.9, (p.get("ride_from") or 1.0) * (1 - pb["stop"] / 2))   # never ride a banked gain back to a loss
+            if x <= floor:
+                return self._exit(p, 1.0, f"ride gave back the move — out at {x:.2f}× (rode in at {p.get('ride_from') or 1:.2f}×)", "stop")
+            if x >= pb["tp"] * (p.get("ride_from") or 1.0):
+                return self._exit(p, 1.0, f"ride hit the {pb['name']} target — banked {x:.2f}×", "trail")
+            if (self.dying(f) or (hit and self.dn_hot(hit["dn"])) or self.smart_selling(p["mint"]) >= 2) and self.exit_on(p, "ride:dying"):
                 return self._exit(p, 1.0, f"surge died down — sold the ride at {x:.2f}× (peak {peak_x:.2f}×)", "trail")
-            trail = _clip((0.30 if peak_x < 3 else 0.22) * self.trail_mult, 0.12, 0.45)
+            trail = _clip(pb["trail"] * self.trail_mult, 0.08, 0.40)
             if x <= peak_x * (1 - trail):
-                return self._exit(p, 1.0, f"ride trailing stop ({peak_x:.1f}× peak, {trail * 100:.0f}% trail)", "trail")
+                return self._exit(p, 1.0, f"ride trailing stop ({peak_x:.2f}× peak, {pb['name']} {trail * 100:.0f}% trail)", "trail")
             return None
         cv = self.council.exit_vote(p, f, x, age) if self.exit_on(p, "skeptic", check_only=True) else None
         if cv:                                                       # the skeptic can pull the plug; the optimist can hold
             p["_exit_rule"] = "skeptic"
             return cv
-        if f and x >= 1.10 and self.surging(f):          # bank into a surge only once it covers the fees (+3% was ~break-even)
-            p["ride"] = True
+        timing_says_run = bool(hit and self.up.n >= 200 and hit["up"] >= 0.55 and hit["dn"] < 0.2)
+        if f and x >= 1.10 and (self.surging(f) or timing_says_run):
+            p["ride"], p["ride_from"] = True, x          # bank into a surge only once it covers the fees (+3% was ~break-even)
+            p["ride_pb"] = self.ride_playbook(p.get("style") or "swing")
             return (0.25, f"surge: holders, volume and liquidity pouring in — banked 25% at {x:.2f}×, riding the rest until it dies down")
         if p.get("style") in ("scalp", "snipe"):
             return self.scalp_exit(p, f, raw, hit, x, age, peak_x)
@@ -1811,6 +1819,15 @@ class Brain:
         if age > tmax and x < 1.3:
             return self._exit(p, 1.0, f"{tmax / 60:.0f}-min time stop", "early")
         return None
+
+    def ride_playbook(self, style: str) -> dict[str, Any]:
+        """The trailing playbook that has earned the most for this style on every real and ghost path replayed so far."""
+        from .council import FAST, PLAYBOOKS
+        names = ("swing", "runner") if style in FAST else ("swing", "runner", "moon")
+        stats = self.council.plays.get(style) or {}
+        ranked = sorted(((stats[n][1], n) for n in names if n in stats and stats[n][0] >= 10), reverse=True)
+        name = ranked[0][1] if ranked else "runner"
+        return {**PLAYBOOKS[name], "name": name}
 
     def scalp_exit(self, p: dict[str, Any], f: dict[str, float], raw: dict[str, float] | None, hit: dict[str, Any] | None,
                    x: float, age: float, peak_x: float = 1.0) -> tuple[float, str] | None:

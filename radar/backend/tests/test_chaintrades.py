@@ -170,3 +170,33 @@ def test_buyer_gate_trusts_the_curve_when_the_feed_misses_trades():
     assert Brain.hard_no(money_in) is None
     newborn = {"buyers": 1, "net_in_sol": 1.2, "metrics": {"coverage_pct": 100}}
     assert Brain.hard_no(newborn) == "too few buyers" and Brain.hard_no(newborn, lenient=True) is None
+
+
+def test_pumpportal_daily_budget_pauses_the_paid_stream_and_resumes_next_day():
+    from radar.adapters.pumpportal import PumpPortal
+
+    async def noop(m):
+        return None
+    sent = []
+
+    async def run():
+        pp = PumpPortal(noop, noop, noop)
+        pp.set_key("k" * 40)
+        pp.budget_sol = 0.0002                                         # 0.0002 SOL = 200 streamed trades
+        pp.ws = object()
+
+        async def send(obj):
+            sent.append(obj)
+        pp.send = send
+        await pp.set_token_trades(["A", "B"])
+        for _ in range(200):
+            await pp.on_message({"txType": "buy", "mint": "A", "solAmount": 1})
+        assert pp.saving and any(m["method"] == "unsubscribeTokenTrade" for m in sent)
+        n = len(sent)
+        await pp.set_token_trades(["A", "B", "C"])                      # still tracked for the chain feed, but not paid for
+        assert pp.token_subs == {"A", "B", "C"} and len(sent) == n
+        pp.trades_day = (pp.trades_day[0] - 1, pp.trades_day[1])        # midnight UTC passes
+        await pp.set_token_trades(["A", "B", "C"])
+        assert not pp.saving and sent[-1]["method"] in ("subscribeTokenTrade", "subscribeAccountTrade")
+        assert any(m["method"] == "subscribeTokenTrade" and m["keys"] == ["A", "B", "C"] for m in sent[n:])
+    asyncio.run(run())

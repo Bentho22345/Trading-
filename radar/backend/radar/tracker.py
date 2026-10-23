@@ -201,7 +201,8 @@ class Tracker:
         self.born[mint] = now
         if self.pump.ws is not None and mint not in self.pump.token_subs:
             self.pump.token_subs.add(mint)
-            await self.pump.send({"method": "subscribeTokenTrade", "keys": [mint]})
+            if not self.pump.saving:
+                await self.pump.send({"method": "subscribeTokenTrade", "keys": [mint]})
         await hub.publish("launch", {**row, "initial_buy_sol": m.get("solAmount"), "pool": m.get("pool"),
                                      "mcap_usd": self._usd(m.get("marketCapSol")), "signature": m.get("signature")})
 
@@ -681,7 +682,8 @@ class Tracker:
         running = self.chain_task is not None and not self.chain_task.done()
         alt_running = self.alt_task is not None and not self.alt_task.done()
         return {"pumpportal_key": self.pump.has_key, "pumpportal_trades_90s": self.pump.trade_rate(90),
-                "pumpportal_est_cost_sol_today": self.pump.est_cost_sol_today(), "chain_running": running, "chain": self.chain.snapshot(),
+                "pumpportal_est_cost_sol_today": self.pump.est_cost_sol_today(), "pumpportal_budget_sol": self.pump.budget_sol,
+                "pumpportal_paused_for_budget": self.pump.saving, "chain_running": running, "chain": self.chain.snapshot(),
                 "extras": [self.extras[i].snapshot() for i, t in self.extra_tasks.items() if not t.done()],
                 "decoded_per_min": self.chain.rate(60, self.chain.recent_dec) + sum(f.rate(60, f.recent_dec) for f in self.extras),
                 "alt_running": alt_running, "alt": {"endpoint": self.alt.url, "connected": self.alt.ws is not None,

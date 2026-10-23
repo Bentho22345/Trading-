@@ -143,6 +143,16 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
 
 ### The Nebula: a 4-brain council over every trade
 
+- **Exact fills.** Demo trades, ghost trades and position marks use pump.fun's constant-product bonding curve
+  (`radar/curve.py`): your buy's price impact comes back when you sell, so only fees (≈1.5% each way) are a round-trip
+  cost, and a position is valued at what dumping it now would return. (Before v10 impact was charged on the way in AND
+  out and positions were marked at the pre-buy price — bigger trades started 5–10% down and stopped out at once, and
+  everything learned under that model was reset.)
+- **Speed.** Exits are re-checked the instant a held coin trades; trades reach the sniper and brain before they're
+  written (writes batch every 0.25 s); Surreal / Hyper never pause on a losing streak — the circuit breakers guard the pot.
+- **Rides** bank 25% into a surge and follow the trailing playbook (swing / runner / moon) that has earned most for
+  that style; the early "it's dying" exit is audited against that playbook and muted if it does worse.
+
 - **Executor** (the self-driving brain below) proposes each trade. **Skeptic** — its own model of "this loses after
   fees" — argues for smaller size and tighter exits and can veto. **Optimist** — its own model of "this runs +25%" —
   argues for a bigger bet and room to run, and can hold a surge the skeptic wants to dump.
@@ -262,6 +272,8 @@ coin looks buyer-less and the sniper / Autopilot can't act. Radar handles this t
   The Autopilot diagnostics show `feed_coverage_pct`; a free Helius key gives the whole tape.
 - **PumpPortal key**: Connectors → PumpPortal → paste the key. The Health page and the Autopilot status box show which
   feed is live, trades per minute and PumpPortal's estimated cost today.
+- **PumpPortal budget**: PumpPortal bills 0.01 SOL per 10,000 streamed trades. `PUMPPORTAL_DAILY_SOL` (default 0.5;
+  0 = no cap) caps it: past the cap, trade subscriptions pause until midnight UTC and the free on-chain feed takes over.
 
 ## Free trend sources
 

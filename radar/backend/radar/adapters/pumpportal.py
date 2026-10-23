@@ -41,6 +41,10 @@ class PumpPortal(Stream):
         self.has_key = False
         self.trades_seen: list[float] = []               # recent trade arrivals (is the trade feed actually flowing?)
         self.trades_day = (0, 0)                          # (utc day, trades) — PumpPortal bills 0.01 SOL per 10,000 streamed
+        # daily spend cap on the paid trade stream (0 = no cap). Past it, trade subscriptions pause until midnight UTC and
+        # the free on-chain feed takes over; the subscription list is still kept (the chain feed filters on it)
+        self.budget_sol = float(__import__("os").environ.get("PUMPPORTAL_DAILY_SOL", "0.5") or 0)
+        self.saving = False
 
     def set_key(self, key: str | None) -> None:
         """Since May 2026 trade / account streams need a PumpPortal API key (new launches stay free). The key rides on
@@ -62,9 +66,31 @@ class PumpPortal(Stream):
     def est_cost_sol_today(self) -> float:
         return round(self.trades_day[1] / 10_000 * 0.01, 4)
 
+    @property
+    def over_budget(self) -> bool:
+        return self.has_key and self.budget_sol > 0 and self.est_cost_sol_today() >= self.budget_sol
+
+    async def _pause_trades(self) -> None:
+        self.saving = True
+        log.warning("pumpportal: daily trade-stream budget ◎%.2f reached — pausing trade subscriptions until midnight UTC "
+                    "(the free on-chain feed takes over)", self.budget_sol)
+        if self.token_subs:
+            await self.send({"method": "unsubscribeTokenTrade", "keys": sorted(self.token_subs)})
+        await self._chunked("unsubscribeAccountTrade", self.account_subs)
+
+    async def _resume_trades(self) -> None:
+        self.saving = False
+        log.warning("pumpportal: new day — trade subscriptions resumed")
+        if self.token_subs:
+            await self.send({"method": "subscribeTokenTrade", "keys": sorted(self.token_subs)})
+        await self._chunked("subscribeAccountTrade", self.account_subs)
+
     async def on_open(self) -> None:
         await self.send({"method": "subscribeNewToken"})
         await self.send({"method": "subscribeMigration"})
+        if self.over_budget:
+            self.saving = True
+            return
         if self.token_subs:
             await self.send({"method": "subscribeTokenTrade", "keys": sorted(self.token_subs)})
         await self._chunked("subscribeAccountTrade", self.account_subs)
@@ -80,16 +106,27 @@ class PumpPortal(Stream):
             self.trades_seen.append(now)
             day = int(now // 86400)
             self.trades_day = (day, (self.trades_day[1] if self.trades_day[0] == day else 0) + 1)
+            if self.over_budget and not self.saving:
+                await self._pause_trades()
             await self.on_trade(msg)
         elif kind == "migrate":
             await self.on_migrate(msg)
         elif kind == "control" and msg.get("errors"):
             log.warning("pumpportal: %s", msg)
 
+    async def budget_check(self) -> None:
+        """Called on every subscription refresh: resume the paid stream once a new UTC day starts."""
+        if self.saving and int(__import__("time").time() // 86400) != self.trades_day[0]:
+            self.trades_day = (int(__import__("time").time() // 86400), 0)
+            if self.ws is not None:
+                await self._resume_trades()
+            else:
+                self.saving = False
+
     async def set_account_trades(self, wallets: set[str]) -> None:
         add, drop = wallets - self.account_subs, self.account_subs - wallets
         self.account_subs = set(wallets)
-        if self.ws is None:
+        if self.ws is None or self.saving:
             return
         await self._chunked("unsubscribeAccountTrade", drop)
         await self._chunked("subscribeAccountTrade", add)
@@ -105,7 +142,8 @@ class PumpPortal(Stream):
         mints = set(list(dict.fromkeys(mints))[: settings.max_trade_subscriptions])  # keep caller's priority order
         add, drop = mints - self.token_subs, self.token_subs - mints
         self.token_subs = mints
-        if self.ws is None:
+        await self.budget_check()
+        if self.ws is None or self.saving:
             return
         if drop:
             await self.send({"method": "unsubscribeTokenTrade", "keys": sorted(drop)})
