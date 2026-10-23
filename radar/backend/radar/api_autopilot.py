@@ -311,3 +311,46 @@ async def backtest_status() -> dict[str, Any]:
             pass
     return {"running": running, "progress": progress, "params": _BT.get("params"), "started": _BT.get("started"),
             "elapsed_s": round(time.time() - _BT["started"]) if _BT.get("started") else None, "result": res}
+
+
+class TunerBody(BaseModel):
+    train_h: float = 8.0
+    valid_h: float = 3.0
+
+
+@router.get("/tuner")
+async def tuner_status() -> dict[str, Any]:
+    return S.tuner.snapshot()
+
+
+@router.post("/tuner/run")
+async def tuner_run(b: TunerBody) -> dict[str, Any]:
+    """A walk-forward tournament of brain variants on the recorded tape; the winner is adopted only if it beats the
+    current settings on both the training hours and the fresh hours after them."""
+    if not S.tuner.start(max(1.0, min(24.0, b.train_h)), max(0.5, min(12.0, b.valid_h))):
+        raise HTTPException(409, "a tournament is already running")
+    return S.tuner.snapshot()
+
+
+@router.post("/tuner/reset")
+async def tuner_reset() -> dict[str, Any]:
+    S.autopilot.brain.tune = {}
+    await S.autopilot.brain.save()
+    return S.tuner.snapshot()
+
+
+class AdoptBody(BaseModel):
+    name: str
+
+
+@router.post("/tuner/adopt")
+async def tuner_adopt(b: AdoptBody) -> dict[str, Any]:
+    """Adopt one variant from the last tournament by hand (e.g. while real money is on, where it never auto-adopts)."""
+    last = S.tuner.state.get("last") or {}
+    row = next((r for r in last.get("rows") or [] if r.get("name") == b.name), None)
+    if row is None:
+        raise HTTPException(404, "no such variant in the last tournament")
+    S.autopilot.brain.tune = dict(row.get("tune") or {})
+    await S.autopilot.brain.save()
+    await S.autopilot.brain.note("mode", f"🎛 Tuner settings '{b.name}' adopted by hand.")
+    return S.tuner.snapshot()

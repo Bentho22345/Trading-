@@ -82,7 +82,7 @@ def _launch_row(t: dict[str, Any]) -> dict[str, Any]:
 
 
 async def run(db_path: str, hours: float, level: str, end: float | None = None, step: float = 1.0,
-              progress: Any = None) -> dict[str, Any]:
+              progress: Any = None, tune: dict[str, Any] | None = None) -> dict[str, Any]:
     from . import curve
     from .autopilot import Autopilot
     from .db import DB
@@ -107,14 +107,14 @@ async def run(db_path: str, hours: float, level: str, end: float | None = None, 
     time.time = _now                                     # the virtual clock (everything in Radar reads time.time())
     CLOCK[0] = t0 - 1800
     try:
-        return await _replay(snap, work, t0, t1, level, launches, trades, step, progress)
+        return await _replay(snap, work, t0, t1, level, launches, trades, step, progress, tune or {})
     finally:
         time.time = _real_time
         shutil.rmtree(work, ignore_errors=True)
 
 
 async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launches: list[dict[str, Any]], trades: list[Any],
-                  step: float, progress: Any) -> dict[str, Any]:
+                  step: float, progress: Any, tune: dict[str, Any]) -> dict[str, Any]:
     from . import curve
     from .autopilot import Autopilot
     from .db import DB
@@ -128,6 +128,7 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
     ap = Autopilot(db, KV(), sniper, tracker, traders, None, Alerts(), None)
     await ap.load()
     await ap.brain.set_aggression(level)
+    ap.brain.tune = dict(tune)
 
     # warm-up: the 30 minutes before the window build the sniper's picture; trading starts at t0
     ev_l = [(r["launched_at"], 0, r) for r in launches]
@@ -177,6 +178,7 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
     for p in list(ap.open.values()):                   # close what's left at the window's end, at the real last price
         await ap.sell(p, 1.0, "backtest window ended")
     out = await summarize(ap, db, t0, t1, level, len(launches), len(trades))
+    out["tune"] = tune
     out["wall_s"] = round(_real_time() - wall0, 1)
     out["ticks"] = n_ticks
     await db.close()
@@ -249,6 +251,7 @@ def main() -> None:
     ap.add_argument("--level", default="surreal")
     ap.add_argument("--end", type=float, default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--tune", default="{}", help="brain knobs as JSON, e.g. '{\"tape_mult\": 0.6}'")
     a = ap.parse_args()
     prog_path = (a.out + ".progress") if a.out else None
 
@@ -256,7 +259,7 @@ def main() -> None:
         if prog_path:
             Path(prog_path).write_text(json.dumps({"progress": round(min(1.0, f), 3), "ts": _real_time()}))
     try:
-        res = asyncio.run(run(a.db, a.hours, a.level, a.end, progress=progress))
+        res = asyncio.run(run(a.db, a.hours, a.level, a.end, progress=progress, tune=json.loads(a.tune or "{}")))
     except Exception as e:  # noqa: BLE001
         import traceback
         res = {"ok": False, "error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-1500:]}

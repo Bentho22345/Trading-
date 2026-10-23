@@ -163,6 +163,11 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
   trades the launches and trades Radar recorded (72 h kept) on a virtual clock — same partial feed, scoring, council,
   fees, curve / PumpSwap fills and exits, no look-ahead (dev history and graduations after the window start are hidden).
   Runs as a separate low-priority process on a slim snapshot; "Copy results" gives the full report.
+- **Tuner** (the brain's coach): every 6 h while self-driving (`TUNE_EVERY_H`, 0 = off) it holds a walk-forward
+  tournament on the recorded tape — the current settings vs. one change each (stricter / looser dead-tape filter, no
+  swings, no snipes, pickier / more eager entries, smaller bets) replay the older 8 h, the best two + current replay the
+  fresh 3 h after it, and a challenger is adopted only if it wins BOTH by a margin (score = return − ½ max drawdown).
+  Never auto-adopts while real money is on; Replay lab → Tuner shows every tournament and can adopt or reset by hand.
 - **Rides** bank 25% into a surge and follow the trailing playbook (swing / runner / moon) that has earned most for
   that style; the early "it's dying" exit is audited against that playbook and muted if it does worse.
 

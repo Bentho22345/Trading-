@@ -382,6 +382,7 @@ class Brain:
         self.cool_until = 0.0
         self.peak_equity = float(getattr(ap, "auto_start", 100.0))
         self.pending_notes: list[str] = []                   # notes queued before the first tick (e.g. the pot upgrade)
+        self.tune: dict[str, Any] = {}                        # knobs the Tuner sets from replay tournaments (empty = defaults)
         self.drawdown = 0.0
         self.last_mood_ts = time.time()
         # pattern memory
@@ -444,6 +445,7 @@ class Brain:
         self.dn_margin = float(s.get("dn_margin", 0.12))
         self.council.restore(s.get("council"))
         self.alloc.restore(s.get("alloc"))
+        self.tune = dict(s.get("tune") or {})
         self.scalp_adj.update(s.get("scalp_adj") or {})
         if ver < 8:
             self.scalp_adj["bar"] = 0.0                 # v8: clear the ratcheted-up bar left behind by older versions
@@ -495,7 +497,7 @@ class Brain:
         if len(self.leaders) > 400:
             self.leaders = dict(sorted(self.leaders.items(), key=lambda kv: -kv[1].get("n", 0))[:300])
         await self.ap.cfg.kv_set("brain:state", {
-            "council": self.council.state(), "alloc": self.alloc.state(), "version": 10, "win": self.win.state(), "rug": self.rug.state(),
+            "council": self.council.state(), "alloc": self.alloc.state(), "version": 10, "tune": self.tune, "win": self.win.state(), "rug": self.rug.state(),
             "up": self.up.state(), "dn": self.dn.state(), "dn_margin": round(self.dn_margin, 4), "grad_frac": round(self.grad_frac, 4),
             "scalp_adj": {k: round(v, 4) for k, v in self.scalp_adj.items()}, "scalps": self.scalps, "snipes": self.snipes, "trained": self.trained,
             "shadow_trained": self.shadow_trained, "shadow_hits": self.shadow_hits, "rug_seen": self.rug_seen,
@@ -1073,7 +1075,7 @@ class Brain:
                 if sc_ > 0:
                     fresh.append((sc_, L, hit))
             fresh.sort(key=lambda t: -t[0])
-            bar = self.rel_bar(sn["bar"], [t[0] for t in fresh], 0.5)
+            bar = self.rel_bar(sn["bar"] + float(self.T("snipe_bar", 0.0)), [t[0] for t in fresh], 0.5)
             self.bars["snipe"] = bar
             self.pipe.update(snipe_candidates=len(fresh), best_snipe=round(fresh[0][0], 3) if fresh else None)
             for sc_, L, hit in fresh:
@@ -1158,7 +1160,7 @@ class Brain:
                 self.skip("veto: " + (veto or "top wallets selling").split(" (")[0])
                 continue
             explore = False
-            if c["value"] < max(self.threshold, SWING_FLOOR):    # relative bar, but never below an absolute floor: on a dead
+            if c["value"] < max(self.threshold, float(self.T("swing_floor", SWING_FLOOR))):    # relative bar, but never below an absolute floor: on a dead
                                                                   # market "top 25%" is still dead coins
                 if False:                                    # explore buys removed: ghost trades teach the same thing for free
                     explore = True
@@ -1221,7 +1223,7 @@ class Brain:
         if not sc:
             return None
         a = self.scalp_adj
-        return {**sc, "bar": _clip(sc["bar"] + a["bar"], 0.25, 0.85), "tp": _clip(sc["tp"] + a["tp"], 1.05, 1.3),
+        return {**sc, "bar": _clip(sc["bar"] + a["bar"] + float(self.T("scalp_bar", 0.0)), 0.2, 0.85), "tp": _clip(sc["tp"] + a["tp"], 1.05, 1.3),
                 "stop": _clip(sc["stop"] + a["stop"], 0.04, 0.15)}
 
     def scalp_score(self, f: dict[str, float], raw: dict[str, float] | None) -> float:
@@ -1372,7 +1374,7 @@ class Brain:
         st = self.alloc.s.get(strat) or {}
         if (st.get("trades") or 0) < 15 or (st.get("mean") or 0) < 0:
             cap = min(cap, 0.04)
-        return cap
+        return _clip(cap * float(self.T("bet_mult", 1.0)), 0.003, 0.25)
 
     def conviction(self, d: dict[str, Any], ev: float, evidence: float, amult: float, exits: dict[str, Any] | None) -> float:
         """How much the Nebula believes in this trade, 0…1. Barely-yes ≈ 0 → ~0.5% of the pot; everything lined up → 1 → ~20%."""
@@ -1407,6 +1409,10 @@ class Brain:
         self.breaker_trips += 1
         return self.brk_why
 
+    def T(self, key: str, default: Any) -> Any:
+        v = self.tune.get(key)
+        return default if v is None else v
+
     def tape_dead(self, mint: str, style: str) -> str | None:
         """Never buy a coin nobody is trading: you can't sell into silence (live: buys into 'trading gone quiet' coins
         left via 'volume dried up' at −8…−16%). The limits stretch when the feed only sees part of the tape."""
@@ -1415,7 +1421,7 @@ class Brain:
             return "no live tape" if style != "copy" else None
         cov = _clip((self.pipe.get("feed_coverage_pct") or 100) / 100, 0.3, 1.0)
         quiet = raw.get("quiet_s", 0.0)
-        lim = {"snipe": 20.0, "scalp": 20.0, "wave2": 30.0, "copy": 60.0}.get(style, 40.0) / cov
+        lim = {"snipe": 20.0, "scalp": 20.0, "wave2": 30.0, "copy": 60.0}.get(style, 40.0) / cov * float(self.T("tape_mult", 1.0))
         if quiet > lim:
             return f"no trades for {quiet:.0f}s"
         if style not in ("snipe", "copy") and raw.get("vol_1m", 0.0) < 0.4 * cov:
@@ -1428,6 +1434,11 @@ class Brain:
         """Every buy goes to the Nebula first: the allocator checks the strategy is still earning its keep, then executor,
         skeptic and optimist vote; the council sets size and exit playbook."""
         strat = strat or style
+        if strat in (self.T("off", None) or ()):                          # switched off by the Tuner: followed on paper only
+            self.skip(f"tuner: {strat} off")
+            self.council.ghost(mint, f or {}, L, {"style": style, "strat": strat, "play": "quick" if style in ("snipe", "scalp") else "swing",
+                                                   "votes": None, "go": False, "bench": True}, size, rate=0.5)
+            return False
         dead = self.tape_dead(mint, style)
         if dead:
             self.skip(f"dead tape: {dead}")
@@ -1458,7 +1469,7 @@ class Brain:
             aw, al = (aw * evidence + 0.12 * kp) / (evidence + kp), (al * evidence + 0.08 * kp) / (evidence + kp)
         ev = (1 - p_lose) * aw - p_lose * al
         d["ev"] = round(ev, 4)
-        if ev <= (0.0 if evidence >= 15 else -0.01):
+        if ev <= (0.0 if evidence >= 15 else -0.01) + float(self.T("ev_margin", 0.0)):
             self.skip("negative expected value")
             self.council.ghost(mint, f or {}, L, {**d, "go": False}, size)
             return False

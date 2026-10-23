@@ -798,6 +798,51 @@ function BacktestPanel({ level }: { level?: string }) {
         </div>
       )}
       {!r && !st?.running && <div className="px-4 py-3 text-[12px] text-white/45">No backtest yet. Pick a window and run it — it runs in the background at low priority, the live engine keeps trading.</div>}
+      <TunerSection />
+    </div>
+  );
+}
+
+type TunerRow = { name: string; tune: Record<string, unknown>; train?: { ok: boolean; return_pct?: number; max_drawdown_pct?: number; positions?: number };
+  valid?: { ok: boolean; return_pct?: number; max_drawdown_pct?: number; positions?: number }; train_score?: number; valid_score?: number };
+type TunerState = { running: boolean; phase: string | null; done?: number; total?: number; current_run?: string | null; error?: string;
+  tune: Record<string, unknown>; last: { ts: number; winner: string; adopted: boolean; train_h: number; valid_h: number; rows: TunerRow[] } | null };
+
+function TunerSection() {
+  const [t, setT] = useState<TunerState | null>(null);
+  const load = useCallback(() => api<TunerState>('/api/autopilot/tuner').then(setT).catch(() => {}), []);
+  usePoll(load, t?.running ? 5000 : 60000, [t?.running]);
+  const post = (path: string, body: object = {}) => api<TunerState>(path, { method: 'POST', body: JSON.stringify(body) }).then(setT).catch((e) => alert(String(e?.message || e)));
+  const knobs = Object.entries(t?.tune || {});
+  return (
+    <div className="border-t border-white/[0.06] p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <b className="text-accent">🎛 Tuner</b>
+        <span className="text-[12px] text-white/55">walk-forward tournaments of brain variants on the recorded tape (every 6h while self-driving): a variant
+          is adopted only if it beats the current settings on the training hours AND the fresh hours after them</span>
+        <span className="ml-auto flex gap-2">
+          <button disabled={!!t?.running} onClick={() => post('/api/autopilot/tuner/run', { train_h: 8, valid_h: 3 })}
+            className="rounded-full border border-accent/50 px-3 py-1 text-[12px] font-bold text-accent disabled:opacity-40">{t?.running ? 'tournament running…' : 'Run tournament'}</button>
+          {knobs.length > 0 && <button onClick={() => post('/api/autopilot/tuner/reset')} className="rounded-full border border-white/20 px-3 py-1 text-[12px] text-white/70">Reset to defaults</button>}
+        </span>
+      </div>
+      <div className="num mt-1.5 text-[11.5px] text-white/55">current settings: {knobs.length ? knobs.map(([k, v]) => `${k} ${Array.isArray(v) ? v.join('+') : v}`).join(' · ') : 'defaults'}</div>
+      {t?.running && <div className="num mt-1 text-[11.5px] text-white/60">{t.phase} · {t.current_run} · {t.done ?? 0}/{t.total ?? '?'}</div>}
+      {t?.error && <div className="mt-1 text-[11.5px] text-down">{t.error}</div>}
+      {t?.last && (
+        <table className="num mt-2 w-full text-[11.5px]"><thead><tr className="text-left text-white/40">
+          <th>variant</th><th>train {t.last.train_h}h</th><th>fresh {t.last.valid_h}h</th><th>score</th><th /></tr></thead><tbody>
+          {t.last.rows.map((r) => (
+            <tr key={r.name} className={`border-t border-white/[0.05] ${r.name === t.last!.winner ? 'text-up' : ''}`}>
+              <td className="py-0.5 pr-2">{r.name}{r.name === t.last!.winner && (t.last!.adopted ? ' ✓ adopted' : ' (kept)')}</td>
+              <td>{r.train?.ok ? `${(r.train.return_pct ?? 0) > 0 ? '+' : ''}${r.train.return_pct}% · dd ${r.train.max_drawdown_pct}% · ${r.train.positions}` : '—'}</td>
+              <td>{r.valid?.ok ? `${(r.valid.return_pct ?? 0) > 0 ? '+' : ''}${r.valid.return_pct}% · dd ${r.valid.max_drawdown_pct}%` : '—'}</td>
+              <td>{r.valid_score ?? r.train_score ?? '—'}</td>
+              <td className="text-right">{r.name !== 'current' && <button onClick={() => confirm(`Adopt '${r.name}'?`) && post('/api/autopilot/tuner/adopt', { name: r.name })} className="text-[11px] text-white/50 hover:text-white">adopt</button>}</td>
+            </tr>
+          ))}
+        </tbody></table>
+      )}
     </div>
   );
 }

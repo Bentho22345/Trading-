@@ -69,6 +69,7 @@ class State:
     trends: Any
     mailer: Any
     accounts: Any
+    tuner: Any
 
 
 S = State()
@@ -173,6 +174,8 @@ async def lifespan(app: FastAPI):
     S.wallet = TradingWallet(S.cfg, S.chain)
     S.autopilot = Autopilot(S.db, S.cfg, S.sniper, S.tracker, S.traders, S.smart, S.alerts, S.wallet)
     S.tracker.hooks["trade"].append(S.autopilot.on_trade)
+    from .tuner import Tuner
+    S.tuner = Tuner(S.autopilot, settings.db_path)              # replay tournaments on the recorded tape → better settings
     S.sniper.on_batch = S.autopilot.kick.set
     S.smart.trade_hooks.append(S.autopilot.brain.on_trade)      # copy-trading sees the best wallets' Raydium / Jupiter swaps too
     S.xradar.call_hooks.append(S.autopilot.on_x_call)
@@ -230,7 +233,7 @@ async def lifespan(app: FastAPI):
                 S.story.loop(), S.metas.loop(), periodic(60, S.news.refresh_symbols), S.signals.loop(), S.signals.rug_refresh_loop(),
                 S.insights.brief_scheduler(), S.smart.helius_loop(),
                 S.onchain.run(), S.ytbuzz.loop(), S.narrator.loop(), S.tgbot.run(), S.tgbot.push_loop(), S.traders.dune_loop(),
-                S.xradar.run(), S.xradar.grade_loop(), S.autopilot.run(), S.trends.loop(),       # X Radar replaces the old VIP poller (same budget, far more accounts)
+                S.xradar.run(), S.xradar.grade_loop(), S.autopilot.run(), S.tuner.loop(), S.trends.loop(),       # X Radar replaces the old VIP poller (same budget, far more accounts)
                 soc.RedditAPI(S.social.ingest, lambda: vals("reddit")).run(),
                 soc.NeynarSource(S.social.ingest, lambda: vals("neynar")).run(),
                 soc.YouTubeSource(S.social.ingest, lambda: vals("youtube")).run(),
