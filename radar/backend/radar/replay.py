@@ -191,6 +191,7 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
         await ap.sell(p, 1.0, "backtest window ended")
     out = await summarize(ap, db, t0, t1, level, len(launches), 0)
     out["tune"] = tune
+    out["learned"] = ap.brain.learned()                      # what this brain learned from the tape (the live one can adopt it)
     out["wall_s"] = round(_real_time() - wall0, 1)
     out["ticks"] = n_ticks
     await db.close()

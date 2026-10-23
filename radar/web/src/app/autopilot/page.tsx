@@ -495,7 +495,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
                 skeptic: b.nebula.skeptic, optimist: b.nebula.optimist, referee: b.nebula.referee, exit_audit: b.nebula.exit_audit, audit_notes: b.nebula.audit_notes,
                 debate: (b.nebula.debate || []).slice(0, 25).map((d) => ({ symbol: d.symbol, style: d.style, go: d.go, veto: d.veto, score: d.score, bar: d.bar,
                   votes: d.votes, play: d.play, conviction: d.conviction, pot_pct: d.pot_pct, why: d.why })) }, verdict: b.verdict, skips: b.skips, bars: b.bars, idle_s: b.idle_s, diag: b.diag, mood: b.mood,
-              scalper: b.scalper, snipes: b.snipes, last_error: b.last_error, engine_error: b.engine_error, aggression: b.aggression, mode: b.mode,
+              scalper: b.scalper, snipes: b.snipes, tune: (b as any).tune, max_bet_pct: (b as any).max_bet_pct, last_error: b.last_error, engine_error: b.engine_error, aggression: b.aggression, mode: b.mode,
               timing: b.timing && { up: b.timing.up, down: b.timing.down, market: b.timing.market }, log: (b.log || []).slice(0, 40).map((e) => e.text) }, null, 1);
             navigator.clipboard?.writeText(txt).then(() => alert('Diagnostics copied — paste them to Claude.')).catch(() => prompt('Copy this:', txt)); }}
             className="rounded-full border border-white/20 px-3 py-1 text-[11.5px] font-bold text-white/80 hover:text-white">Copy diagnostics</button>
@@ -746,6 +746,7 @@ type BtResult = {
   ok: boolean; error?: string; hours: number; level: string; launches: number; trades_replayed: number; positions: number; wins: number;
   pnl_sol: number; return_pct: number; max_drawdown_pct: number; by_strategy: RepRow[]; by_exit: RepRow[]; skips: Record<string, number>;
   referee?: { trained: number; trusted: boolean; brier: number | null; baseline_brier: number | null }; wall_s?: number; last_error?: unknown;
+  can_teach?: boolean;
 };
 type BtStatus = { running: boolean; progress: number | null; params: { hours: number; level: string } | null; elapsed_s: number | null; result: BtResult | null };
 
@@ -771,6 +772,9 @@ function BacktestPanel({ level }: { level?: string }) {
             className="rounded-full border border-flash/50 px-3 py-1 text-[12px] font-bold text-flash disabled:opacity-40">{st?.running ? 'running…' : 'Run backtest'}</button>
           {r && <button onClick={() => navigator.clipboard?.writeText(JSON.stringify(r, null, 1)).then(() => alert('Backtest copied — paste it to Claude.')).catch(() => {})}
             className="rounded-full border border-white/20 px-3 py-1 text-[12px] font-bold text-white/80">Copy results</button>}
+          {r?.can_teach && <button onClick={() => api<{ adopted: string[] }>('/api/autopilot/backtest/adopt-learning', { method: 'POST' })
+              .then((x) => alert(x.adopted.length ? `The live brain learned: ${x.adopted.join(', ')}` : 'The live brain already knows more than this replay.')).catch(() => {})}
+            className="rounded-full border border-accent/40 px-3 py-1 text-[12px] font-bold text-accent" title="adopt the replay brain's models where it has seen more tape than the live brain">Teach the live brain</button>}
         </span>
       </div>
       {err && <div className="px-4 py-2 text-[12px] text-down">{err}</div>}

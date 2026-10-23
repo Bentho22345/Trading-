@@ -163,12 +163,35 @@ class Tuner:
         finally:
             self.state.update(running=False, phase=None, current_run=None)
 
+    async def warm_start(self, hours: float = 6.0) -> list[str]:
+        """A brain that has barely traded learns from the recorded tape first: replay the last hours, adopt the models
+        that saw more than it has."""
+        b = self.ap.brain
+        self.state.update(running=True, phase="warm start", current_run=f"learning from the last {hours:.0f}h of tape")
+        try:
+            r = await self._replay(hours, time.time(), dict(b.tune), b.aggression)
+            took = b.adopt_models(r.get("learned")) if r.get("ok") else []
+            if took:
+                await b.save()
+                await b.note("mode", f"📚 Warm start: learned from {r.get('positions', 0)} replayed trades on the last {hours:.0f}h of real "
+                                     f"tape — adopted {', '.join(took)}.")
+            return took
+        finally:
+            self.state.update(running=False, phase=None, current_run=None)
+
     async def loop(self) -> None:
-        """Every TUNE_EVERY_H hours (default 6) while the self-driving demo runs: hold a tournament."""
+        """Every TUNE_EVERY_H hours (default 6) while the self-driving demo runs: hold a tournament. A brain that has
+        barely traded first warm-starts from the recorded tape."""
         every = float(os.environ.get("TUNE_EVERY_H", "6") or 0)
         if every <= 0:
             return
-        await asyncio.sleep(1800)                                   # let a fresh deploy record some tape first
+        await asyncio.sleep(900)                                    # let a fresh deploy settle and record some tape first
+        try:
+            if self.ap.brain.council.skeptic.n < 100 and self.ap.c.get("mode") != "real":
+                await self.warm_start()
+        except Exception as e:  # noqa: BLE001
+            log.warning("tuner warm start: %s", e)
+        await asyncio.sleep(900)
         while True:
             try:
                 if self.ap.c.get("mode") == "auto":

@@ -36,3 +36,22 @@ def test_replay_trades_recorded_tape_and_restores_the_clock(tmp_path):
     assert "by_strategy" in res and "skips" in res and res["last_error"] is None
     assert res["positions"] > 0                                         # it actually trades the replayed tape
     assert replay.KV is not None
+
+
+def test_a_brain_adopts_only_models_that_saw_more_tape(tmp_path):
+    from .test_autopilot import make
+
+    async def run():
+        ap, db = await make(tmp_path, [])
+        a = ap.brain
+        teacher = type(a)(ap)
+        teacher.up.n, teacher.council.referee.n, teacher.rug.n = 900, 400, 0
+        teacher.up.w = {k: v + 0.5 for k, v in teacher.up.w.items()}
+        a.rug.n = 50
+        took = a.adopt_models(teacher.learned())
+        assert any(t.startswith("up") for t in took) and any(t.startswith("referee") for t in took)
+        assert not any(t.startswith("rug") for t in took) and a.rug.n == 50          # it knew more: kept its own
+        assert a.up.n == 900 and abs(sum(a.up.w.values()) - sum(teacher.up.w.values())) < 1e-6
+        assert a.adopt_models(None) == []
+        await db.close()
+    asyncio.run(run())

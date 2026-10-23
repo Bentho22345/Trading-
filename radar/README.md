@@ -170,6 +170,10 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
   swings, no snipes, pickier / more eager entries, smaller bets) replay the older 8 h, the best two + current replay the
   fresh 3 h after it, and a challenger is adopted only if it wins BOTH by a margin (score = return − ½ max drawdown).
   Never auto-adopts while real money is on; Replay lab → Tuner shows every tournament and can adopt or reset by hand.
+- **Learning from history**: a replay brain's tape knowledge (timing, rug, win, skeptic, optimist and referee models,
+  calibration, playbook records) can be adopted by the live brain model by model — only where the replay saw more.
+  Replay lab → "Teach the live brain"; and a brain that has barely traded warm-starts from the last 6 h of recorded tape
+  automatically. Strategy records, tuner settings, mood and money are never copied.
 - **Rides** bank 25% into a surge and follow the trailing playbook (swing / runner / moon) that has earned most for
   that style; the early "it's dying" exit is audited against that playbook and muted if it does worse.
 

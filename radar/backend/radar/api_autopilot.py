@@ -305,6 +305,8 @@ async def backtest_status() -> dict[str, Any]:
     if out.exists():
         try:
             res = _json.loads(out.read_text())
+            if isinstance(res, dict) and res.pop("learned", None) is not None:
+                res["can_teach"] = True                              # the models stay on disk; the page doesn't need them
         except ValueError:
             res = None
     progress = None
@@ -358,3 +360,20 @@ async def tuner_adopt(b: AdoptBody) -> dict[str, Any]:
     await S.autopilot.brain.save()
     await S.autopilot.brain.note("mode", f"🎛 Tuner settings '{b.name}' adopted by hand.")
     return S.tuner.snapshot()
+
+
+
+@router.post("/backtest/adopt-learning")
+async def backtest_adopt_learning() -> dict[str, Any]:
+    """Teach the live brain what the last backtest's brain learned from the tape (model by model, only where it saw more)."""
+    import json as _json
+    out, _ = _bt_paths()
+    try:
+        res = _json.loads(out.read_text())
+    except (OSError, ValueError):
+        raise HTTPException(404, "no backtest result to learn from")
+    took = S.autopilot.brain.adopt_models(res.get("learned"))
+    if took:
+        await S.autopilot.brain.save()
+        await S.autopilot.brain.note("mode", f"📚 Adopted what the replay brain learned: {', '.join(took)}.")
+    return {"adopted": took}

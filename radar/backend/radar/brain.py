@@ -526,6 +526,38 @@ class Brain:
             await self.note("mode", f"🎚 Aggression → {level}: buys the top {AGGRESSION[level]['top'] * 100:.0f}% of what it sees, "
                                     f"up to {AGGRESSION[level]['max_open']} positions, stop −{AGGRESSION[level]['stop'] * 100:.0f}%.")
 
+    def learned(self) -> dict[str, Any]:
+        """What a brain knows about the TAPE (portable to another brain): its models and the council's judgment."""
+        c = self.council
+        return {"rug": self.rug.state(), "up": self.up.state(), "dn": self.dn.state(), "win": self.win.state(),
+                "skeptic": c.skeptic.state(), "optimist": c.optimist.state(), "referee": c.referee.state(),
+                "ref_rate": c.ref_rate, "cal": c.cal.bins, "plays": c.plays, "base": [c.base_lose, c.base_big]}
+
+    def adopt_models(self, L: dict[str, Any] | None) -> list[str]:
+        """Take another brain's tape knowledge model by model — only where it has seen MORE than this one. Strategy
+        records, tuner settings, mood and money stay this brain's own."""
+        if not L:
+            return []
+        c = self.council
+        took = []
+        for name, model in (("rug", self.rug), ("up", self.up), ("dn", self.dn), ("win", self.win), ("skeptic", c.skeptic),
+                            ("optimist", c.optimist), ("referee", c.referee)):
+            st = L.get(name) or {}
+            if int(st.get("n", 0)) > model.n:
+                model.restore(st)
+                took.append(f"{name} ({model.n})")
+        if "referee" in " ".join(took):
+            c.ref_rate = float(L.get("ref_rate", c.ref_rate))
+        if "skeptic" in " ".join(took):
+            c.cal.bins = [list(b) for b in (L.get("cal") or c.cal.bins)]
+            c.base_lose, c.base_big = (L.get("base") or [c.base_lose, c.base_big])[:2]
+        mine = sum(st[0] for plays in c.plays.values() for st in plays.values())
+        theirs = sum(st[0] for plays in (L.get("plays") or {}).values() for st in plays.values())
+        if theirs > mine:
+            c.plays = L.get("plays") or c.plays
+            took.append("playbooks")
+        return took
+
     async def recalibrate(self) -> None:
         """v10: demo fills used to charge price impact on the way in AND out and mark positions at the pre-buy price, so
         every trade looked 5–20% worse than the bonding curve really makes it — and the win model, the council, the
@@ -2348,6 +2380,7 @@ class Brain:
                              "recent_pct": round(sum(self.scalp_hist) / len(self.scalp_hist) * 100, 2) if self.scalp_hist else None}),
                 "verdict": self._safe_verdict(),
                 "nebula": self.council.snapshot(), "allocator": self.alloc.snapshot(), "heat": self.heat_mult(), "report": await self.report(),
+                "tune": self.tune, "max_bet_pct": round(self.max_bet("swing") * 100, 1),
                 "breaker": {"active": time.time() < self.brk_until, "why": self.brk_why if time.time() < self.brk_until else None,
                             "resume_s": max(0, round(self.brk_until - time.time())), "trips": self.breaker_trips},
                 "bars": {k: round(v * 100) for k, v in self.bars.items()}, "idle_s": round(now - self.last_buy_ts) if self.last_buy_ts else None,
