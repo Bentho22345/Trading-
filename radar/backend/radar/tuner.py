@@ -78,7 +78,7 @@ class Tuner:
         from .guard import mem_headroom_mb
         for _ in range(20):                                         # wait (up to ~10 min) for memory headroom; live first
             room = mem_headroom_mb()
-            if room is None or room >= float(os.environ.get("REPLAY_MIN_HEADROOM_MB", "200")):
+            if room is None or room >= float(os.environ.get("REPLAY_MIN_HEADROOM_MB", "160")):
                 break
             await asyncio.sleep(30)
         else:

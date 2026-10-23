@@ -50,7 +50,8 @@ OPTIMIST_PRIORS = {k: round(0.35 * (0.7 * PRIORS.get(k, 0) + 0.6 * UP_PRIORS.get
 # the Referee — a brain over the brains: a stacked model that learns which COMBINATIONS of the executor's, skeptic's and
 # optimist's votes (plus style, regime, market heat, feed coverage and tape freshness) actually ended in profit after fees
 REF_PRIORS = {"exec": 0.4, "skep": 1.0, "opt": 0.6, "p_lose": -1.2, "p_big": 0.8, "s_snipe": 0.0, "s_scalp": 0.0, "s_swing": 0.0,
-              "s_copy": 0.0, "s_wave2": 0.0, "defensive": -0.2, "heat": 0.2, "cov": 0.0, "quiet": -0.5, "vol": 0.3, "early": 0.0}
+              "s_copy": 0.0, "s_wave2": 0.0, "defensive": -0.2, "heat": 0.2, "cov": 0.0, "quiet": -0.5, "vol": 0.3, "early": 0.0,
+              "liq_in": 0.2, "holders_up": 0.2, "apes": 0.1, "pros": 0.1, "influx": 0.1, "mom": 0.1, "near_grad": 0.0}
 REF_TRUST_N = 150
 FAST = ("snipe", "scalp", "wave2")                    # fast styles never take the 25-minute moon playbook
 MAX_REAL, MAX_GHOST, GHOST_RATE = 400, 900, 0.35      # ghosts are free lessons: follow a third of the trades it turns down
@@ -170,7 +171,10 @@ class Council:
                 "defensive": 1.0 if self.regime == "defensive" else 0.0,
                 "heat": _clip((b.heat_mult() if hasattr(b, "heat_mult") else 1.0) - 1.0, -1, 1), "cov": _clip(cov, 0, 1),
                 "quiet": _clip(f.get("quiet", 0.0), 0, 1), "vol": _clip(f.get("vol_accel", 0.0), -1, 1),
-                "early": _clip(f.get("age_0_2m", 0.0), 0, 1)}
+                "early": _clip(f.get("age_0_2m", 0.0), 0, 1), "liq_in": _clip(f.get("liq_influx", 0.0), -1, 1),
+                "holders_up": _clip(f.get("holder_growth", 0.0), -1, 1), "apes": _clip(f.get("ape_wave", 0.0), 0, 1),
+                "pros": _clip(f.get("pro_share", 0.0), 0, 1), "influx": _clip(f.get("influx", 0.0), 0, 1),
+                "mom": _clip(f.get("mom_30s", 0.0), -1, 1), "near_grad": _clip(f.get("near_grad", 0.0), 0, 1)}
 
     def referee_trusted(self) -> bool:
         """Only once it has judged enough outcomes AND beats simply guessing the base rate on them."""

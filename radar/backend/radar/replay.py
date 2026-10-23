@@ -184,7 +184,7 @@ async def _replay(snap: str, work: Path, t0: float, t1: float, level: str, launc
             if i % 20000 == 0:
                 from .guard import rss_mb
                 r_mb = rss_mb() or 0
-                if r_mb > float(os.environ.get("REPLAY_MAX_MB", "230")):
+                if r_mb > float(os.environ.get("REPLAY_MAX_MB", "200")):
                     raise MemoryError(f"replay stopped itself at {r_mb:.0f} MB (REPLAY_MAX_MB) — try a shorter window")
     CLOCK[0] = t1
     for p in list(ap.open.values()):                   # close what's left at the window's end, at the real last price
