@@ -491,9 +491,11 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
               : `PumpPortal${b.verdict.trade_feed.pumpportal_key ? ' (key)' : ''} ${b.verdict.trade_feed.pumpportal_trades_90s ?? 0}/90s`}</>}</span>
           <button onClick={() => { const txt = JSON.stringify({ report: b.report, allocator: b.allocator, heat: b.heat,
               nebula: b.nebula && { cred: b.nebula.cred, bar: b.nebula.bar, regime: b.nebula.regime, stats: b.nebula.stats, playbooks: b.nebula.playbooks,
-                skeptic: b.nebula.skeptic, optimist: b.nebula.optimist }, verdict: b.verdict, skips: b.skips, bars: b.bars, idle_s: b.idle_s, diag: b.diag, mood: b.mood,
+                skeptic: b.nebula.skeptic, optimist: b.nebula.optimist, exit_audit: b.nebula.exit_audit, audit_notes: b.nebula.audit_notes,
+                debate: (b.nebula.debate || []).slice(0, 25).map((d) => ({ symbol: d.symbol, style: d.style, go: d.go, veto: d.veto, score: d.score, bar: d.bar,
+                  votes: d.votes, play: d.play, conviction: d.conviction, pot_pct: d.pot_pct, why: d.why })) }, verdict: b.verdict, skips: b.skips, bars: b.bars, idle_s: b.idle_s, diag: b.diag, mood: b.mood,
               scalper: b.scalper, snipes: b.snipes, last_error: b.last_error, engine_error: b.engine_error, aggression: b.aggression, mode: b.mode,
-              timing: b.timing && { up: b.timing.up, down: b.timing.down, market: b.timing.market }, log: (b.log || []).slice(0, 12).map((e) => e.text) }, null, 1);
+              timing: b.timing && { up: b.timing.up, down: b.timing.down, market: b.timing.market }, log: (b.log || []).slice(0, 40).map((e) => e.text) }, null, 1);
             navigator.clipboard?.writeText(txt).then(() => alert('Diagnostics copied — paste them to Claude.')).catch(() => prompt('Copy this:', txt)); }}
             className="rounded-full border border-white/20 px-3 py-1 text-[11.5px] font-bold text-white/80 hover:text-white">Copy diagnostics</button>
         </div>
