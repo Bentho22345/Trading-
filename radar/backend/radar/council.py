@@ -47,6 +47,11 @@ BIG = 0.25                                   # what the optimist calls a run: +2
 SKEPTIC_PRIORS = {k: round(0.35 * (0.6 * RUG_PRIORS.get(k, 0) + 0.6 * DN_PRIORS.get(k, 0) - 0.4 * UP_PRIORS.get(k, 0) - 0.3 * PRIORS.get(k, 0)), 3)
                   for k in KEYS}
 OPTIMIST_PRIORS = {k: round(0.35 * (0.7 * PRIORS.get(k, 0) + 0.6 * UP_PRIORS.get(k, 0) - 0.3 * RUG_PRIORS.get(k, 0)), 3) for k in KEYS}
+# the Referee — a brain over the brains: a stacked model that learns which COMBINATIONS of the executor's, skeptic's and
+# optimist's votes (plus style, regime, market heat, feed coverage and tape freshness) actually ended in profit after fees
+REF_PRIORS = {"exec": 0.4, "skep": 1.0, "opt": 0.6, "p_lose": -1.2, "p_big": 0.8, "s_snipe": 0.0, "s_scalp": 0.0, "s_swing": 0.0,
+              "s_copy": 0.0, "s_wave2": 0.0, "defensive": -0.2, "heat": 0.2, "cov": 0.0, "quiet": -0.5, "vol": 0.3, "early": 0.0}
+REF_TRUST_N = 150
 FAST = ("snipe", "scalp", "wave2")                    # fast styles never take the 25-minute moon playbook
 MAX_REAL, MAX_GHOST, GHOST_RATE = 400, 900, 0.35      # ghosts are free lessons: follow a third of the trades it turns down
 ETA = 0.4                                    # Hedge learning rate
@@ -92,6 +97,9 @@ class Council:
         self.b = brain
         self.skeptic = Logit(SKEPTIC_PRIORS, _logit(0.55))
         self.optimist = Logit(OPTIMIST_PRIORS, _logit(0.10))
+        self.referee = Logit(REF_PRIORS, _logit(0.15))
+        self.ref_rate = 0.15                                      # running profit rate: the referee's no-information baseline
+        self.ref_base: deque[float] = deque(maxlen=500)           # baseline Brier on the same outcomes the referee is scored on
         self.cred = {k: 1 / 3 for k in BRAINS}
         self.bar = 0.48
         self.base_lose, self.base_big = 0.55, 0.10
@@ -121,13 +129,15 @@ class Council:
                 "base": [round(self.base_lose, 4), round(self.base_big, 4)], "plays": self.plays, "stats": self.stats,
                 "regime": self.regime, "recent": list(self.recent), "win_rate": round(self.win_rate, 4),
                 "plug_margin": round(self.plug_margin, 4), "cal": self.cal.bins,
-                "exit_q": self.exit_q}
+                "exit_q": self.exit_q, "referee": self.referee.state(), "ref_rate": round(self.ref_rate, 4)}
 
     def restore(self, s: dict[str, Any] | None) -> None:
         if not s:
             return
         self.skeptic.restore(s.get("skeptic"))
         self.optimist.restore(s.get("optimist"))
+        self.referee.restore(s.get("referee"))
+        self.ref_rate = float(s.get("ref_rate", self.ref_rate))
         c = s.get("cred") or {}
         if all(k in c for k in BRAINS):
             self.cred = {k: float(c[k]) for k in BRAINS}
@@ -151,6 +161,23 @@ class Council:
         opt = _clip(0.5 + 0.25 * math.log2(max(0.25, p_big / max(0.02, self.base_big))), 0, 1)
         return {"executor": round(exec_conf, 3), "skeptic": round(skep, 3), "optimist": round(opt, 3), "p_lose": round(p_lose, 3),
                 "p_big": round(p_big, 3)}
+
+    def meta(self, style: str, v: dict[str, Any], f: dict[str, float]) -> dict[str, float]:
+        b = self.b
+        cov = ((getattr(b, "pipe", None) or {}).get("feed_coverage_pct") or 100) / 100
+        return {"exec": v["executor"], "skep": v["skeptic"], "opt": v["optimist"], "p_lose": v["p_lose"], "p_big": v["p_big"],
+                **{f"s_{k}": 1.0 if style == k else 0.0 for k in ("snipe", "scalp", "swing", "copy", "wave2")},
+                "defensive": 1.0 if self.regime == "defensive" else 0.0,
+                "heat": _clip((b.heat_mult() if hasattr(b, "heat_mult") else 1.0) - 1.0, -1, 1), "cov": _clip(cov, 0, 1),
+                "quiet": _clip(f.get("quiet", 0.0), 0, 1), "vol": _clip(f.get("vol_accel", 0.0), -1, 1),
+                "early": _clip(f.get("age_0_2m", 0.0), 0, 1)}
+
+    def referee_trusted(self) -> bool:
+        """Only once it has judged enough outcomes AND beats simply guessing the base rate on them."""
+        st = self.referee.stats()
+        if self.referee.n < REF_TRUST_N or st["brier"] is None or len(self.ref_base) < 50:
+            return False
+        return st["brier"] < sum(self.ref_base) / len(self.ref_base) - 0.003
 
     def why(self, model: Logit, f: dict[str, float], n: int = 2) -> str:
         c = sorted(((model.w[k] * f.get(k, 0.0), k) for k in model.w), reverse=True)
@@ -184,6 +211,8 @@ class Council:
         self.stats["proposed"] += 1
         self.last_decision_ts = time.time()
         v = self.votes(f, exec_conf)
+        m = self.meta(style, v, f)
+        v["p_win"] = round(self.referee.p(m), 3)                     # the referee's honest odds this ends in profit after fees
         c = self.cred
         go = sum(c[k] * v[k] for k in BRAINS)
         bar = self.bar + (0.04 if self.regime == "defensive" else -0.03 if self.regime == "aggressive" else 0.0)
@@ -192,13 +221,19 @@ class Council:
         calibrated = self.skeptic.n >= 50 and (st["accuracy"] or 0) >= 58 and (st["brier"] or 1) <= 0.22
         q85 = sorted(self.recent_lose)[int(0.85 * (len(self.recent_lose) - 1))] if len(self.recent_lose) >= 20 else 0.0
         veto = calibrated and c["skeptic"] >= 0.25 and v["p_lose"] >= max(0.8, self.base_lose + 0.2, q85)
-        ok = go >= bar and not veto
+        trusted = self.referee_trusted()
+        # a proven referee can wave through a trade the weighted vote fell short on, when its odds beat the market's
+        # profit rate (the EV gate still has the last word on payoff)
+        ref_ok = trusted and v["p_win"] >= self.ref_rate * 1.15
+        ok = (go >= bar or ref_ok) and not veto
         size_mult = (c["executor"] * 1.0 + c["skeptic"] * _clip(0.4 + v["skeptic"], 0.4, 1.3)
                      + c["optimist"] * _clip(0.6 + 1.2 * v["optimist"], 0.6, 1.8))
         size_mult *= 0.7 if self.regime == "defensive" else 1.2 if self.regime == "aggressive" else 1.0
         play = self.choose_play(style, v)
         pb = PLAYBOOKS[play]
-        out = {"go": ok, "veto": veto, "score": round(go, 3), "bar": round(bar, 3), "votes": v, "cred": {k: round(c[k], 3) for k in BRAINS},
+        if trusted and v["p_win"] < 0.5 * self.ref_rate:              # the referee has earned a veto on clear losers
+            ok, veto = False, True
+        out = {"go": ok, "veto": veto, "score": round(go, 3), "bar": round(bar, 3), "votes": v, "meta": m, "cred": {k: round(c[k], 3) for k in BRAINS},
                "size_mult": round(_clip(size_mult, 0.3, 2.0), 3), "play": play, "style": style,
                "exits": {"tp": pb["tp"], "stop": pb["stop"], "max_s": pb["hold"], "trail": pb["trail"], "arm": pb["arm"], "preset": play,
                          "power": False},
@@ -237,17 +272,20 @@ class Council:
         if (real and n_real >= MAX_REAL) or (not real and len(self.track) - n_real >= MAX_GHOST):
             return
         cb, cs = costs(size, vsol)
-        v0 = curve.vsol_from_mcap(entry_mcap)
+        L = self.b.ap.sniper.launches.get(mint)
+        pl = curve.pool(entry_mcap, bool(getattr(L, "graduated_at", None)))
         cv = None
-        if curve.on_curve(v0) and size > 0:                          # exact curve replay: fees are the only round-trip cost
-            s_in = size * (1 - curve.FEE)
-            cv = (v0, s_in, curve.tokens_for(v0, s_in), size + 0.0005)
-            cs = curve.FEE + 0.0005 / size
+        if pl and size > 0:                                          # exact constant-product replay: fees are the round-trip cost
+            k, v0, fee = pl
+            s_in = size * (1 - fee)
+            cv = (v0, s_in, curve.tokens_for(v0, s_in, k), size + 0.0005, k)
+            cs = fee + 0.0005 / size
         style = d.get("style")
         self.n_real += int(real)
         self.track[key] = {"mint": mint, "t0": time.time(), "entry": entry_mcap, "cb": cb, "cs": cs, "cv": cv, "real": real, "sol": sol,
                            "vec": array("f", ((f or {}).get(k, 0.0) for k in KEYS)), "votes": d.get("votes"), "play": d.get("play"),
                            "style": d.get("style"), "strat": d.get("strat"), "go": d.get("go"), "veto": d.get("veto"), "last": 1.0, "bench": d.get("bench"),
+                           "meta": d.get("meta"),
                            "st": {n: [False, 1.0, None] for n in ORDER if not (style in FAST and n == "moon")}}
 
     def ghost(self, mint: str, f: dict[str, float], L: Any, d: dict[str, Any], size: float, rate: float | None = None) -> None:
@@ -268,10 +306,10 @@ class Council:
             L = launches.get(t["mint"])
             age = now - t["t0"]
             if L is not None and L.mcap_sol:
-                v1 = curve.vsol_from_mcap(L.mcap_sol) if t.get("cv") else None
-                if v1 and curve.on_curve(v1):
-                    _, s_in, q, basis = t["cv"]
-                    t["last"] = curve.sol_for(v1 + s_in, q) / basis    # what dumping it now returns, per SOL put in
+                v1 = curve.vsol_from_mcap(L.mcap_sol, t["cv"][4]) if t.get("cv") else None
+                if v1:
+                    _, s_in, q, basis, k = t["cv"]
+                    t["last"] = curve.sol_for(v1 + s_in, q, k) / basis  # what dumping it now returns, per SOL put in
                 else:
                     t["last"] = (L.mcap_sol / t["entry"]) / (1 + t["cb"])
             x = t["last"]
@@ -309,6 +347,11 @@ class Council:
             s[2] = s[2] * 0.995 + w * d * (net - s[1])
         f = dict(zip(KEYS, t["vec"]))
         best = max(nets.values())
+        if t.get("meta"):                                            # the referee learns from every judged path, real and ghost
+            y = 1.0 if nets.get(t["play"] or "quick", best) > 0 else 0.0
+            self.ref_base.append((self.ref_rate - y) ** 2)
+            self.ref_rate = 0.99 * self.ref_rate + 0.01 * y
+            self.referee.step(t["meta"], y, LR * w)
         if t["real"] and t.get("rule") and t.get("real_net") is not None:
             self.audit(t["rule"], t["real_net"] - nets.get(t["play"] or "quick", best))
         self.optimist.step(f, 1.0 if best >= BIG else 0.0, LR * w)
@@ -425,6 +468,8 @@ class Council:
         return {"cred": {k: round(v * 100, 1) for k, v in self.cred.items()}, "bar": round(self.bar, 3), "regime": self.regime,
                 "base_lose_pct": round(self.base_lose * 100, 1), "base_big_pct": round(self.base_big * 100, 1),
                 "skeptic": self.skeptic.stats(), "optimist": self.optimist.stats(), "playbooks": lb,
+                "referee": {**self.referee.stats(), "trusted": self.referee_trusted(), "profit_rate_pct": round(self.ref_rate * 100, 1),
+                            "baseline_brier": round(sum(self.ref_base) / len(self.ref_base), 3) if self.ref_base else None},
                 "tracking": {"real": sum(1 for t in self.track.values() if t["real"]), "ghosts": sum(1 for t in self.track.values() if not t["real"])},
                 "stats": self.stats, "debate": list(self.debate)[:25], "exploring": self.explore_left,
                 "recent_avg_pct": round(sum(self.recent) / len(self.recent) * 100, 2) if self.recent else None,

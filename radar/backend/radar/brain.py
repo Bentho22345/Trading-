@@ -174,6 +174,7 @@ AGGRESSION = {   # top-share of what it sees that it will buy, max positions, st
                 "scalp": {"bar": 0.36, "size": 0.012, "tp": 1.10, "stop": 0.08, "max_s": 90},
                 "snipe": {"bar": 0.40, "size": 0.012, "max_age": 45, "tp": 1.15, "stop": 0.10, "max_s": 75}},
 }
+SWING_FLOOR = 10.0                           # a swing needs the win model to give it at least ~10% — value 1-4 buys bled the pot
 FAST_LEVELS = ("hyper", "surreal")           # hundreds of trades an hour: losing streaks are noise, not a reason to stop
 POWER = {"size": 2.5, "tp": 1.35, "stop": 0.15, "time": 3.0, "trail": 0.12}   # a coin with everything pouring in: bet more, give it room
 # scale-out ladders: (multiple, share of what's left to sell, marker). Partial sells as a coin moves = buys AND sells all day.
@@ -1157,7 +1158,8 @@ class Brain:
                 self.skip("veto: " + (veto or "top wallets selling").split(" (")[0])
                 continue
             explore = False
-            if c["value"] < self.threshold:
+            if c["value"] < max(self.threshold, SWING_FLOOR):    # relative bar, but never below an absolute floor: on a dead
+                                                                  # market "top 25%" is still dead coins
                 if False:                                    # explore buys removed: ghost trades teach the same thing for free
                     explore = True
                 else:
@@ -1363,6 +1365,15 @@ class Brain:
         return {"start": self.start_sol, "equity": round(eq, 4), "cash": round(cash, 4), "in_trades": round(held, 4),
                 "growth_pct": round((eq / self.start_sol - 1) * 100, 2)}
 
+    def max_bet(self, strat: str) -> float:
+        """The most of the pot one trade may take, earned by experience: ~2% for a fresh brain, growing to 20% after ~200
+        closed trades — and a strategy with fewer than 15 trades of its own, or a losing record, stays at ≤ 4%."""
+        cap = 0.02 + 0.18 * min(1.0, self.trained / 200)
+        st = self.alloc.s.get(strat) or {}
+        if (st.get("trades") or 0) < 15 or (st.get("mean") or 0) < 0:
+            cap = min(cap, 0.04)
+        return cap
+
     def conviction(self, d: dict[str, Any], ev: float, evidence: float, amult: float, exits: dict[str, Any] | None) -> float:
         """How much the Nebula believes in this trade, 0…1. Barely-yes ≈ 0 → ~0.5% of the pot; everything lined up → 1 → ~20%."""
         margin = _clip((d["score"] - d["bar"]) / 0.3, 0, 1)                # how far past its bar the council voted
@@ -1396,12 +1407,31 @@ class Brain:
         self.breaker_trips += 1
         return self.brk_why
 
+    def tape_dead(self, mint: str, style: str) -> str | None:
+        """Never buy a coin nobody is trading: you can't sell into silence (live: buys into 'trading gone quiet' coins
+        left via 'volume dried up' at −8…−16%). The limits stretch when the feed only sees part of the tape."""
+        raw = self.charts.get(mint)
+        if not raw:
+            return "no live tape" if style != "copy" else None
+        cov = _clip((self.pipe.get("feed_coverage_pct") or 100) / 100, 0.3, 1.0)
+        quiet = raw.get("quiet_s", 0.0)
+        lim = {"snipe": 20.0, "scalp": 20.0, "wave2": 30.0, "copy": 60.0}.get(style, 40.0) / cov
+        if quiet > lim:
+            return f"no trades for {quiet:.0f}s"
+        if style not in ("snipe", "copy") and raw.get("vol_1m", 0.0) < 0.4 * cov:
+            return f"only ◎{raw.get('vol_1m', 0.0):.2f} traded in the last minute"
+        return None
+
     async def _council_buy(self, style: str, mint: str, size: float, mode: str, trig: str, detail: str, r: dict[str, Any] | None,
                            f: dict[str, float] | None, value: float | None, leaders: list[str], exec_conf: float, L: Any,
                            exits: dict[str, Any] | None = None, strat: str | None = None) -> bool:
         """Every buy goes to the Nebula first: the allocator checks the strategy is still earning its keep, then executor,
         skeptic and optimist vote; the council sets size and exit playbook."""
         strat = strat or style
+        dead = self.tape_dead(mint, style)
+        if dead:
+            self.skip(f"dead tape: {dead}")
+            return False
         ok, amult, why = self.alloc.gate(strat)
         if not ok:
             self.skip(f"allocator: {strat} benched")
@@ -1420,10 +1450,15 @@ class Brain:
             self.council.ghost(mint, f or {}, L, d, size)
             return False
         # the expected-value gate: honest (calibrated) odds × this strategy's real average win / loss, after fees
-        p_lose = self.council.cal(d["votes"]["p_lose"])
-        ev, evidence = self.alloc.ev(strat, p_lose)
+        # honest odds of losing after fees: the referee's once it has proven itself, else the calibrated skeptic's
+        p_lose = 1 - d["votes"]["p_win"] if self.council.referee_trusted() else self.council.cal(d["votes"]["p_lose"])
+        aw, al, evidence = self.alloc.payoff(strat)
+        if evidence < 15:                                 # thin evidence leans on the prior payoff (+12% / −8%), never ignores the odds
+            kp = 10.0
+            aw, al = (aw * evidence + 0.12 * kp) / (evidence + kp), (al * evidence + 0.08 * kp) / (evidence + kp)
+        ev = (1 - p_lose) * aw - p_lose * al
         d["ev"] = round(ev, 4)
-        if evidence >= 15 and ev <= 0:
+        if ev <= (0.0 if evidence >= 15 else -0.01):
             self.skip("negative expected value")
             self.council.ghost(mint, f or {}, L, {**d, "go": False}, size)
             return False
@@ -1433,6 +1468,7 @@ class Brain:
         # optimist's read, the trade's expected value and the strategy's proven record, rolled into one 0…1 number.
         conv = self.conviction(d, ev, evidence, amult, exits)
         frac = (0.005 + 0.20 * conv * conv) * (0.6 if self.council.regime == "defensive" else 1.0)
+        frac = min(frac, self.max_bet(strat))                             # a brain that hasn't proven itself bets small
         size = max(0.02, bal * frac * self.heat_mult() * (0.3 if why == "probe" else 1.0))
         room = 0.6 * (bal + exposure) - exposure
         if room < 0.02:
@@ -2194,13 +2230,18 @@ class Brain:
             return out("feed", f"{p['newborn']} new launches arrived but none of their trades did ({subs} subscribed). {how}")
         if p.get("blocked"):
             return out("blocked", f"Not buying: {p['blocked']}.")
+        key_note = ""
+        if fs.get("pumpportal_key") and not fs.get("pumpportal_trades_90s") and not fs.get("pumpportal_paused_for_budget"):
+            said = "; ".join(n["text"] for n in (fs.get("pumpportal_says") or [])[:2])
+            key_note = (" ⚠️ A PumpPortal key is set but PumpPortal sends no trades — its linked wallet must hold ≥ 0.02 SOL (it bills "
+                        "0.01 SOL per 10,000 trades); until then the free on-chain feed is used." + (f" PumpPortal says: {said}" if said else ""))
         if idle is not None and idle < 60:
-            return out("trading", f"Trading — last buy {idle:.0f}s ago.")
+            return out("trading", f"Trading — last buy {idle:.0f}s ago." + key_note)
         if p.get("snipe_candidates") == 0 and not p.get("scalpable"):
             return out("nothing", f"Launches and trades are arriving ({p.get('newborn_traded', 0)} new coins trading), but none pass the "
-                                  f"snipe / scalp read yet. Most common reason: {top_skip or 'n/a'}." + self.feed_hint(top_skip, fs))
+                                  f"snipe / scalp read yet. Most common reason: {top_skip or 'n/a'}." + self.feed_hint(top_skip, fs) + key_note)
         return out("waiting", f"Candidates are there (best snipe {p.get('best_snipe')}, bar {self.bars.get('snipe')}) but every one was "
-                              f"blocked — most common reason: {top_skip or 'n/a'}." + self.feed_hint(top_skip, fs))
+                              f"blocked — most common reason: {top_skip or 'n/a'}." + self.feed_hint(top_skip, fs) + key_note)
 
     async def report(self) -> dict[str, Any]:
         """Its own read of its live results: the last 300 closed trades by strategy, by exit reason and by hold time."""

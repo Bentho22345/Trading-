@@ -202,3 +202,25 @@ def test_conviction_sizing_bets_big_when_everything_lines_up(tmp_path):
         assert b.conviction(strong, -0.08, 30, 0.5, None) < cs - 0.3      # a strategy that's losing money talks it down
         await db.close()
     asyncio.run(run())
+
+
+def test_the_referee_learns_which_vote_combinations_make_money(tmp_path):
+    async def run():
+        ap, db = await make(tmp_path, [])
+        c = ap.brain.council
+        assert not c.referee_trusted()                                     # unproven: the calibrated skeptic still sets the odds
+        rng = __import__("random").Random(7)
+        for _ in range(400):                                               # profit only when the optimist is hot AND the tape is live
+            opt, quiet = rng.random(), rng.random()
+            m = c.meta("scalp", {"executor": 0.5, "skeptic": 0.5, "optimist": opt, "p_lose": 0.8, "p_big": 0.1}, {"quiet": quiet})
+            y = 1.0 if opt > 0.6 and quiet < 0.3 else 0.0
+            c.ref_base.append((c.ref_rate - y) ** 2)
+            c.ref_rate = 0.99 * c.ref_rate + 0.01 * y
+            c.referee.step(m, y, 0.05)
+        hot = c.meta("scalp", {"executor": 0.5, "skeptic": 0.5, "optimist": 0.95, "p_lose": 0.8, "p_big": 0.1}, {"quiet": 0.0})
+        dead = c.meta("scalp", {"executor": 0.5, "skeptic": 0.5, "optimist": 0.95, "p_lose": 0.8, "p_big": 0.1}, {"quiet": 0.9})
+        assert c.referee.p(hot) > 2 * c.referee.p(dead) and c.referee_trusted()
+        d = c.decide("scalp", {"quiet": 0.95}, 0.5, "DEAD", "m")
+        assert "p_win" in d["votes"] and d["meta"]["quiet"] == 0.95
+        await db.close()
+    asyncio.run(run())

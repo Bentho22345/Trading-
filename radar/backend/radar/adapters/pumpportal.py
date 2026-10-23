@@ -45,6 +45,7 @@ class PumpPortal(Stream):
         # the free on-chain feed takes over; the subscription list is still kept (the chain feed filters on it)
         self.budget_sol = float(__import__("os").environ.get("PUMPPORTAL_DAILY_SOL", "0.5") or 0)
         self.saving = False
+        self.notices: list[dict[str, Any]] = []          # PumpPortal's own replies (subscription OKs, errors, key problems)
 
     def set_key(self, key: str | None) -> None:
         """Since May 2026 trade / account streams need a PumpPortal API key (new launches stay free). The key rides on
@@ -111,8 +112,13 @@ class PumpPortal(Stream):
             await self.on_trade(msg)
         elif kind == "migrate":
             await self.on_migrate(msg)
-        elif kind == "control" and msg.get("errors"):
-            log.warning("pumpportal: %s", msg)
+        elif kind in ("control", "unknown"):
+            if msg.get("errors"):
+                log.warning("pumpportal: %s", msg)
+            text = str(msg.get("errors") or msg.get("message") or msg)[:240]
+            if not self.notices or self.notices[0]["text"] != text:
+                self.notices.insert(0, {"ts": round(__import__("time").time()), "text": text})
+                del self.notices[8:]
 
     async def budget_check(self) -> None:
         """Called on every subscription refresh: resume the paid stream once a new UTC day starts."""

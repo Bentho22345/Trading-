@@ -384,11 +384,12 @@ class Autopilot:
             else:
                 if await self.demo_balance(mode) < size:
                     raise TradeError(f"{mode} balance too low")
-                v = curve.vsol_from_mcap(px * SUPPLY)
-                if L is not None and not getattr(L, "graduated_at", None) and curve.on_curve(v):
-                    curve_s = size * (1 - curve.FEE)                       # exact bonding-curve fill after pump.fun + router fees
-                    tokens = curve.tokens_for(v, curve_s)
-                else:                                                      # graduated (AMM pool): linear impact on its liquidity
+                pl = curve.pool(px * SUPPLY, bool(getattr(L, "graduated_at", None))) if L is not None else None
+                if pl:                                                     # exact constant-product fill: bonding curve or PumpSwap pool
+                    k, v, fee = pl
+                    curve_s = size * (1 - fee)
+                    tokens = curve.tokens_for(v, curve_s, k)
+                else:                                                      # no live market read: linear impact estimate
                     impact = size / max(30.0, (L.vsol if L and L.vsol else 60.0))
                     tokens = size * 0.99 / (px * (1 + impact + 0.005))
                 sol_in = size + self.c["exec"]["priority_fee_sol"]
@@ -438,12 +439,13 @@ class Autopilot:
                 got, sold, sig = res["sol"], res["tokens"] or qty, res["sig"]
             else:
                 L = self.sniper.launches.get(p["mint"])
-                v = curve.vsol_from_mcap(px * SUPPLY)
                 cs = p.get("curve_s")
-                if cs is not None and curve.on_curve(v) and not (L is not None and getattr(L, "graduated_at", None)):
-                    gross = curve.sol_for(max(curve.CURVE0 * 0.5, v + cs), qty)   # our own SOL is still in the curve
+                pl = curve.pool(px * SUPPLY, bool(getattr(L, "graduated_at", None))) if L is not None else None
+                if cs is not None and pl:
+                    k, v, fee = pl
+                    gross = curve.sol_for(max(v * 0.5, v + cs), qty, k)    # our own SOL is still in the market
                     p["curve_s"] = cs - gross
-                    got = max(0.0, gross * (1 - curve.FEE) - self.c["exec"]["priority_fee_sol"])
+                    got = max(0.0, gross * (1 - fee) - self.c["exec"]["priority_fee_sol"])
                 else:
                     impact = qty * px / max(30.0, (L.vsol if L and L.vsol else 60.0))
                     got = max(0.0, qty * px * 0.99 * (1 - impact - 0.005) - self.c["exec"]["priority_fee_sol"])
@@ -496,18 +498,19 @@ class Autopilot:
 
     # ---------------- exits ----------------
     def mark(self, p: dict[str, Any], px: float, L: Any) -> float:
-        """What the position is really worth per token: on the bonding curve, the SOL you'd get dumping all of it now
-        (our own SOL still in the curve counted, as on chain) — not the last trade's price. Graduated coins: the price."""
-        if L is not None and getattr(L, "graduated_at", None):
+        """What the position is really worth per token: the SOL you'd get dumping all of it now into the bonding curve or
+        the PumpSwap pool (our own SOL still in it counted, as on chain) — not the last trade's price."""
+        if L is None or p["tokens_left"] <= 0:
             return px
-        v = curve.vsol_from_mcap(px * SUPPLY)
-        if not curve.on_curve(v) or p["tokens_left"] <= 0:
+        pl = curve.pool(px * SUPPLY, bool(getattr(L, "graduated_at", None)))
+        if not pl:
             return px
+        k, v, fee = pl
         if p["mode"] == "real":
-            return curve.liquidation_px(v, 0.0, p["tokens_left"])        # the live curve already holds our buy
-        if p.get("curve_s") is None:                                    # restored after a restart: rebuild our SOL in the curve
-            p["curve_s"] = max(0.0, p["sol_in"] - self.c["exec"]["priority_fee_sol"]) * (1 - curve.FEE) * p["tokens_left"] / max(1e-9, p["tokens"])
-        return curve.liquidation_px(max(curve.CURVE0 * 0.5, v + p["curve_s"]), 0.0, p["tokens_left"])
+            return curve.liquidation_px(v, 0.0, p["tokens_left"], k)    # the live market already holds our buy
+        if p.get("curve_s") is None:                                    # restored after a restart: rebuild our SOL in the market
+            p["curve_s"] = max(0.0, p["sol_in"] - self.c["exec"]["priority_fee_sol"]) * (1 - fee) * p["tokens_left"] / max(1e-9, p["tokens"])
+        return curve.liquidation_px(max(v * 0.5, v + p["curve_s"]), 0.0, p["tokens_left"], k)
 
     async def manage(self, only: str | None = None) -> None:
         async with self._mlock:                 # the loop and the instant per-trade path never act on a position at once

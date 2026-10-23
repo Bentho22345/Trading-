@@ -491,7 +491,7 @@ function SelfDriving({ now, on, onMode }: { now: number; on: boolean; onMode: (m
               : `PumpPortal${b.verdict.trade_feed.pumpportal_key ? ' (key)' : ''} ${b.verdict.trade_feed.pumpportal_trades_90s ?? 0}/90s`}</>}</span>
           <button onClick={() => { const txt = JSON.stringify({ report: b.report, allocator: b.allocator, heat: b.heat,
               nebula: b.nebula && { cred: b.nebula.cred, bar: b.nebula.bar, regime: b.nebula.regime, stats: b.nebula.stats, playbooks: b.nebula.playbooks,
-                skeptic: b.nebula.skeptic, optimist: b.nebula.optimist, exit_audit: b.nebula.exit_audit, audit_notes: b.nebula.audit_notes,
+                skeptic: b.nebula.skeptic, optimist: b.nebula.optimist, referee: b.nebula.referee, exit_audit: b.nebula.exit_audit, audit_notes: b.nebula.audit_notes,
                 debate: (b.nebula.debate || []).slice(0, 25).map((d) => ({ symbol: d.symbol, style: d.style, go: d.go, veto: d.veto, score: d.score, bar: d.bar,
                   votes: d.votes, play: d.play, conviction: d.conviction, pot_pct: d.pot_pct, why: d.why })) }, verdict: b.verdict, skips: b.skips, bars: b.bars, idle_s: b.idle_s, diag: b.diag, mood: b.mood,
               scalper: b.scalper, snipes: b.snipes, last_error: b.last_error, engine_error: b.engine_error, aggression: b.aggression, mode: b.mode,
@@ -654,7 +654,8 @@ type Nebula = {
   playbooks: Record<string, { play: string; n: number; avg_pct: number }[]>; tracking: { real: number; ghosts: number };
   stats: Record<string, number>; recent_avg_pct: number | null;
   exit_audit?: { rule: string; n: number; vs_playbook_pct: number; muted: boolean }[]; audit_notes?: string[];
-  debate: { ts: number; symbol: string; mint: string; go: boolean; veto: boolean; score: number; bar: number; votes: Vote; play: string; style: string;
+  referee?: { trained: number; brier: number | null; accuracy: number | null; trusted: boolean; profit_rate_pct: number; baseline_brier: number | null };
+  debate: { ts: number; symbol: string; mint: string; go: boolean; veto: boolean; score: number; bar: number; votes: Vote & { p_win?: number }; play: string; style: string;
     size_mult: number; why: { skeptic: string; optimist: string }; conviction?: number; pot_pct?: number }[];
 };
 const BRAIN_META: Record<string, { icon: string; name: string; tone: string; role: string }> = {
@@ -690,6 +691,14 @@ function NebulaPanel({ n, now }: { n: Nebula; now: number }) {
           </div>
         ))}
       </div>
+      {n.referee && (
+        <div className="num border-b border-white/[0.06] px-4 py-2 text-[11.5px] text-white/55">
+          <b className="text-accent">⚖️ Referee</b> — the brain over the brains: learns which vote combinations actually end in profit after fees ·{' '}
+          {(n.referee.trained || 0).toLocaleString()} judged · profit rate {n.referee.profit_rate_pct}%
+          {n.referee.brier != null && n.referee.baseline_brier != null && <> · error {n.referee.brier} vs {n.referee.baseline_brier} guessing</>} ·{' '}
+          <b className={n.referee.trusted ? 'text-up' : 'text-white/60'}>{n.referee.trusted ? 'TRUSTED — its odds drive the EV gate' : 'still proving itself'}</b>
+        </div>
+      )}
       <div className="grid gap-px bg-white/[0.05] lg:grid-cols-[1.4fr_1fr]">
         <div className="bg-[var(--color-bg)]/70 p-3">
           <div className="eyebrow mb-2">The debate · latest votes</div>
@@ -701,6 +710,7 @@ function NebulaPanel({ n, now }: { n: Nebula; now: number }) {
                 <span className="text-flash">⚙️{d.votes.executor.toFixed(2)}</span>
                 <span className="text-down">🛡{d.votes.skeptic.toFixed(2)}</span>
                 <span className="text-up">🚀{d.votes.optimist.toFixed(2)}</span>
+                {d.votes.p_win != null && <span className="text-accent" title="the referee's odds this ends in profit after fees">⚖️{Math.round(d.votes.p_win * 100)}%</span>}
                 <b className={d.veto ? 'text-down' : d.go ? 'text-up' : 'text-white/45'}>{d.veto ? 'VETO' : d.go ? (d.pot_pct != null ? `GO ${d.pot_pct}% of pot` : 'GO') : 'no'}</b>
                 {d.conviction != null && <span className="text-white/45" title="conviction 0–1: how much the Nebula believes in this trade">conv {d.conviction.toFixed(2)}</span>}
                 <span className="text-white/45">{d.style} · {d.play}</span>

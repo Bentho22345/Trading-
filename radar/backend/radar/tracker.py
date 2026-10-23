@@ -660,11 +660,7 @@ class Tracker:
                 self.alt._stop = False
                 self.alt.token_subs, self.alt.account_subs = set(self.pump.token_subs), set(self.pump.account_subs)
                 self.alt_task = asyncio.get_running_loop().create_task(self.alt.run())
-            if not self.chain.helius_key and not os.environ.get("SOLANA_WS_URL"):
-                for i, feed in enumerate(self.extras):
-                    if i not in self.extra_tasks or self.extra_tasks[i].done():
-                        feed._stop = False
-                        self.extra_tasks[i] = asyncio.get_running_loop().create_task(feed.run())
+            self._start_extras()
             self.chain_since = now
             return "started"
         if running and mode != "on" and (mode == "off" or (pp > 30 and now - self.chain_since > 300)):
@@ -675,20 +671,32 @@ class Tracker:
                     await feed.ws.close()
             self.extra_tasks = {}
             return "stopped"
-        if running and self.chain.helius_key and self.extra_tasks:      # Helius sees the whole tape: the public extras are redundant
+        on_helius = "helius" in self.chain.url and self.chain.ws is not None
+        if running and on_helius and self.extra_tasks:                  # Helius sees the whole tape: the public extras are redundant
             for feed in self.extras:
                 feed.stop()
                 if feed.ws is not None:
                     await feed.ws.close()
             self.extra_tasks = {}
+        elif running and not on_helius:                                 # public RPC (no key, or the Helius key keeps failing)
+            self._start_extras()
         return "running" if running else "idle"
+
+    def _start_extras(self) -> None:
+        import os
+        if os.environ.get("SOLANA_WS_URL"):
+            return
+        for i, feed in enumerate(self.extras):
+            if i not in self.extra_tasks or self.extra_tasks[i].done():
+                feed._stop = False
+                self.extra_tasks[i] = asyncio.get_running_loop().create_task(feed.run())
 
     def feed_status(self) -> dict[str, Any]:
         running = self.chain_task is not None and not self.chain_task.done()
         alt_running = self.alt_task is not None and not self.alt_task.done()
         return {"pumpportal_key": self.pump.has_key, "pumpportal_trades_90s": self.pump.trade_rate(90),
                 "pumpportal_est_cost_sol_today": self.pump.est_cost_sol_today(), "pumpportal_budget_sol": self.pump.budget_sol,
-                "pumpportal_paused_for_budget": self.pump.saving, "chain_running": running, "chain": self.chain.snapshot(),
+                "pumpportal_paused_for_budget": self.pump.saving, "pumpportal_says": self.pump.notices[:4], "chain_running": running, "chain": self.chain.snapshot(),
                 "extras": [self.extras[i].snapshot() for i, t in self.extra_tasks.items() if not t.done()],
                 "decoded_per_min": self.chain.rate(60, self.chain.recent_dec) + sum(f.rate(60, f.recent_dec) for f in self.extras),
                 "alt_running": alt_running, "alt": {"endpoint": self.alt.url, "connected": self.alt.ws is not None,

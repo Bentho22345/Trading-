@@ -52,13 +52,15 @@ class Sniper:
         return L.result if L else None
 
 
-async def make(tmp_path, launches, **cfg):
+async def make(tmp_path, launches, strict_tape=False, **cfg):
     db = DB(tmp_path / "ap.db")
     await db.open()
     kv = KV()
     tracker = SimpleNamespace(sol_usd=150.0, launch_watch={}, token_summary=lambda m: asyncio.sleep(0, None))
     ap = Autopilot(db, kv, Sniper(launches), tracker, SimpleNamespace(ranked={}, followed=set()), None, Alerts(), None)
     await ap.load()
+    if not strict_tape:                     # most fixtures are bare coins with no tape; the live-tape gate has its own test
+        ap.brain.tape_dead = lambda mint, style: None
     if cfg:
         await ap.save(cfg)
     return ap, db
@@ -820,5 +822,28 @@ def test_auto_pot_is_100_and_old_pots_get_topped_up(tmp_path):
         assert p["sol_in"] > 2.9
         q = await ap.buy("BIGGmint" + "1" * 32, "manual", "test", coin.result, sol=3.0, mode="demo")
         assert q["sol_in"] <= 1.01
+        await db.close()
+    asyncio.run(run())
+
+
+def test_it_never_buys_into_a_dead_tape(tmp_path):
+    async def run():
+        ap, db = await make(tmp_path, [], strict_tape=True)
+        b = ap.brain
+        assert b.tape_dead("NOPE", "swing") == "no live tape"
+        b.charts["M"] = {"quiet_s": 300.0, "vol_1m": 0.0}
+        assert "no trades for 300s" in b.tape_dead("M", "swing")
+        b.charts["M"] = {"quiet_s": 5.0, "vol_1m": 0.1}
+        assert "traded in the last minute" in b.tape_dead("M", "swing") and b.tape_dead("M", "snipe") is None
+        b.charts["M"] = {"quiet_s": 5.0, "vol_1m": 3.0}
+        assert b.tape_dead("M", "swing") is None
+        b.pipe["feed_coverage_pct"] = 40                                # a partial feed: silence means less
+        b.charts["M"] = {"quiet_s": 70.0, "vol_1m": 3.0}
+        assert b.tape_dead("M", "swing") is None and b.tape_dead("M", "scalp")
+        assert b.max_bet("swing") <= 0.04                               # a fresh brain bets small
+        b.trained = 400
+        for _ in range(20):
+            b.alloc.book("swing", 0.05, 0.05)
+        assert b.max_bet("swing") == pytest.approx(0.20)
         await db.close()
     asyncio.run(run())

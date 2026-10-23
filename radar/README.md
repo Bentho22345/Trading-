@@ -150,6 +150,15 @@ All six phases are built: the data spine, safety + scoring + alerts, the social 
   everything learned under that model was reset.)
 - **Speed.** Exits are re-checked the instant a held coin trades; trades reach the sniper and brain before they're
   written (writes batch every 0.25 s); Surreal / Hyper never pause on a losing streak — the circuit breakers guard the pot.
+- **Referee** — a brain over the brains: a stacked model that learns which combinations of the three votes (plus style,
+  regime, heat, feed coverage, tape freshness) actually ended in profit after fees, from every real and ghost path. Once
+  it beats guessing the base rate it drives the EV gate's odds, can wave through above-average trades and veto clear losers.
+- **Never into a dead tape**: no buy when the coin hasn't traded for 20–40 s (stretched by feed coverage) or barely traded
+  in the last minute; swings also need an absolute win-model floor (10) — on a dead market "top 25%" is still dead coins.
+- **Bet size is earned**: ~2% of the pot max for a fresh brain, growing to 20% after ~200 closed trades; a strategy with
+  < 15 trades of its own or a losing record stays ≤ 4%. The EV gate applies from the first trade (thin evidence leans on
+  a +12% / −8% prior payoff).
+- **Graduated coins** fill and mark on the PumpSwap pool's constant-product maths too (≈0.8% fees each way).
 - **Rides** bank 25% into a surge and follow the trailing playbook (swing / runner / moon) that has earned most for
   that style; the early "it's dying" exit is audited against that playbook and muted if it does worse.
 

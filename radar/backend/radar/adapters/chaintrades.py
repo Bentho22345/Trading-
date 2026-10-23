@@ -171,5 +171,6 @@ class ChainTrades(Stream):
         return sum(1 for t in (self.recent if q is None else q) if t >= cut)
 
     def snapshot(self) -> dict[str, Any]:
-        return {"connected": self.ws is not None, "endpoint": self.url.split("?")[0], "decoded": self.decoded,
+        return {"connected": self.ws is not None, "endpoint": self.url.split("?")[0], "helius_key_set": bool(self.helius_key),
+                "last_error": __import__("re").sub(r"api-key=[^&\s'\"]+", "api-key=***", getattr(self.health, "last_error_msg", None) or "")[:160] or None, "decoded": self.decoded,
                 "forwarded": self.forwarded, "per_min": self.rate(), "decoded_per_min": self.rate(60, self.recent_dec)}
